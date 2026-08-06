@@ -14,7 +14,9 @@ const stripRegionMarkers = (): Plugin => ({
 const libName = 'StickyScrollTrigger';
 // Never emits any comment other than the license notice (JSDoc, etc.), even in the unminified build
 const nonMinifiedComments = { legal: true, annotation: false, jsdoc: false } as const;
-const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf-8')) as {
+const pkg = JSON.parse(
+  readFileSync(resolve(import.meta.dirname, 'package.json'), 'utf-8'),
+) as {
   name: string;
   version: string;
   author: string;
@@ -59,7 +61,7 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     lib: {
-      entry: resolve(__dirname, 'src/index.ts'),
+      entry: resolve(import.meta.dirname, 'src/index.ts'),
       // The JS output's own file name is decided by the rollupOptions.output array. fileName
       // here is only ever referenced by vite-plugin-dts to name the bundled .d.ts (it's never
       // used for the actual output).

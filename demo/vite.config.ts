@@ -7,14 +7,14 @@ import { defineConfig } from 'vite';
 // So imports from the demo always resolve via an alias pointing directly at src,
 // without waiting on a build output.
 export default defineConfig({
-  root: __dirname,
+  root: import.meta.dirname,
   resolve: {
     alias: {
-      'sticky-scroll-trigger': resolve(__dirname, '../src/index.ts'),
+      'sticky-scroll-trigger': resolve(import.meta.dirname, '../src/index.ts'),
     },
   },
   build: {
-    outDir: resolve(__dirname, 'dist'),
+    outDir: resolve(import.meta.dirname, 'dist'),
     emptyOutDir: true,
   },
 });
