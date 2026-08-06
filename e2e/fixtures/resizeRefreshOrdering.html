@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>resizeRefreshOrdering fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .filler {
+        height: 10px;
+      }
+      .scene {
+        height: 400px;
+      }
+      .tail {
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="filler"></div>
+      <section class="scene"></section>
+    </div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const sticky = new StickyScrollTrigger('.root');
+      const filler = document.querySelector('.filler');
+
+      const sceneVars = sticky.createStickyTrigger({ trigger: '.scene', start: 'top top', end: '+=200' });
+      const trigger = ScrollTrigger.create(sceneVars);
+
+      sticky.refresh();
+
+      window.__sceneStart = () => trigger.start;
+      window.__growFiller = () => {
+        filler.style.height = '500px';
+      };
+    </script>
+  </body>
+</html>

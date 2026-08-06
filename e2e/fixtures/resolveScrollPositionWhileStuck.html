@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>resolveScrollPositionWhileStuck fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .container__inner {
+        position: relative;
+      }
+      .filler {
+        height: 60vh;
+      }
+      /* Sizable dwell so there's a comfortable scroll range where the scene stays stuck. */
+      .scene {
+        height: 50vh;
+      }
+      /* target sits inside the shared container after .scene, so it's both nested inside the
+         scene's sticky wrapper once stuck, and counted in resolveScrollPosition's own dwell gap. */
+      #target {
+        height: 40px;
+      }
+      .tail {
+        height: 150vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="container__inner">
+        <section class="filler"></section>
+        <section class="scene"></section>
+        <div id="target"></div>
+        <section class="filler"></section>
+      </div>
+    </div>
+    <section class="tail"></section>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.container__inner');
+
+      const sceneVars = sticky.createStickyTrigger({ trigger: '.scene', end: '+=800' });
+
+      sticky.refresh();
+
+      // No GSAP registration and no auto-refresh wiring here — the e2e spec drives scroll
+      // position directly and calls resolveScrollPosition itself, so nothing should re-trigger
+      // refresh() behind that control.
+      window.__resolveScrollPosition = (position) =>
+        sticky.resolveScrollPosition('#target', position);
+      // sceneVars.start()/end() expose the scene's own absolute freeze window (the same numbers
+      // this module would hand GSAP), so the spec can pick a scroll position guaranteed to fall
+      // inside it without guessing from rendered layout.
+      window.__sceneFreezeWindow = () => ({ start: sceneVars.start(), end: sceneVars.end() });
+    </script>
+  </body>
+</html>

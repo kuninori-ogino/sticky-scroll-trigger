@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>documentTop fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      /* documentTop walks the offsetParent chain, so this nests "positioned" ancestors with
+         borders. offsetTop is relative to the padding box, so without the clientTop correction,
+         this entire border width (20 + 7 = 27px) would drop out of the measurement. */
+      .Frame {
+        position: relative;
+        border-top: 20px solid #c00;
+        padding-top: 10px;
+      }
+      .Inner {
+        position: relative;
+        border-top: 7px solid #06c;
+        padding-top: 5px;
+      }
+      .Spacer {
+        height: 150px;
+      }
+      .Target {
+        height: 80px;
+        background: #0a0;
+      }
+      .Tail {
+        height: 1500px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="Spacer"></div>
+    <div class="Frame">
+      <div class="Spacer"></div>
+      <div class="Inner">
+        <div class="Spacer"></div>
+        <div id="target" class="Target"></div>
+      </div>
+    </div>
+    <div class="Tail"></div>
+    <script type="module">
+      import { documentTop, measureDocumentMaxScroll, measureViewportHeight } from '../../src/dom.ts';
+      window.__documentTop = documentTop;
+      window.__measureViewportHeight = measureViewportHeight;
+      window.__measureDocumentMaxScroll = measureDocumentMaxScroll;
+    </script>
+  </body>
+</html>

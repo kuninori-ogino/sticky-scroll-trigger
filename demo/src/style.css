@@ -1,0 +1,312 @@
+:root {
+  --headerHeight: 56px;
+  --text: #6b6375;
+  --text-h: #08060d;
+  --bg: #fff;
+  --border: #e5e4e7;
+  --sans: system-ui, "Segoe UI", Roboto, sans-serif;
+
+  font: 18px / 145% var(--sans);
+  color: var(--text);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+h1,
+h2 {
+  font-weight: 500;
+  color: var(--text-h);
+  margin: 0 0 8px;
+}
+
+p {
+  margin: 0;
+}
+
+code {
+  font-family: ui-monospace, Consolas, monospace;
+  padding: 2px 6px;
+  color: var(--text-h);
+  background: var(--border);
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+
+.header {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: var(--headerHeight);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  background: var(--text-h);
+  color: #fff;
+  z-index: 100;
+}
+
+.header__title {
+  font-size: 15px;
+}
+
+.header__toggle {
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.container {
+  padding-top: var(--headerHeight);
+}
+
+.container__inner {
+  position: relative;
+}
+
+.block {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 40px max(20px, calc(50% - 340px));
+}
+
+.block--intro {
+  background: #f4f3ec;
+}
+
+.block--outro {
+  background: #16171d;
+  color: #fff;
+}
+.block--outro h2 {
+  color: #fff;
+}
+
+.filler {
+  height: 60svh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-h);
+  font-size: 14px;
+  background: #aaa;
+}
+
+.scene {
+  --progress: 0;
+  height: 70svh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 40px max(20px, calc(50% - 340px));
+  background: color-mix(
+    in srgb,
+    var(--scene-color) calc(var(--progress) * 60%),
+    #101014
+  );
+  color: #fff;
+}
+.scene h2 {
+  color: #fff;
+}
+.scene p {
+  width: fit-content;
+  max-width: min(480px, 100%);
+}
+
+.scene--1 {
+  --scene-color: #ff6b6b;
+}
+
+.scene--2 {
+  --scene-color: #4ecdc4;
+}
+
+.scene--3 {
+  --scene-color: #a78bfa;
+}
+
+.scene__bar {
+  width: min(600px, 80vw);
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+}
+
+.scene__bar::before {
+  content: "";
+  display: block;
+  height: 100%;
+  width: calc(var(--progress) * 100%);
+  background: #fff;
+}
+
+.overlapScroll__trigger {
+  height: 50svh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 40px max(20px, calc(50% - 340px));
+  background: #2d2b55;
+  color: #fff;
+}
+.overlapScroll__trigger h2 {
+  color: #fff;
+}
+
+.overlapScroll__cover {
+  position: relative;
+  z-index: 1;
+  min-height: 50svh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 40px max(20px, calc(50% - 340px));
+  background: #ffe66d;
+  color: var(--text-h);
+}
+
+.plainSection {
+  min-height: 60svh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 20px;
+  padding: 40px max(20px, calc(50% - 340px));
+  background: #f4f3ec;
+}
+
+.plainSection__box {
+  width: min(320px, 60vw);
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #ffa62b;
+  color: #16171d;
+  font-weight: 500;
+}
+
+.plainSection--partialSticky {
+  align-items: stretch;
+  min-height: 0;
+  /* The inner partialSticky__pinContainer paints beyond its own section's bounds, into the
+     visual area of the following filler/block--outro, so leaving position:static would hide it
+     behind later content in DOM order (paint order normally follows DOM order). This raises it
+     explicitly above via position + z-index. */
+  position: relative;
+  z-index: 2;
+}
+
+.partialSticky {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  container-type: inline-size;
+}
+
+/* createStickyPin() automatically wraps partialSticky__pin in outer{ inner{ pin } }; neither gets
+   a class name (see main.ts's createStickyPin call). outer/inner never specify a width themselves,
+   which leaves partialSticky__pin two auto-sized (shrink-to-fit) ancestors deep,
+   so a plain % width on it can't resolve against .partialSticky's width (the used width of an
+   auto-sized ancestor is indefinite during shrink-to-fit sizing, so % collapses toward 0 there).
+   cqw sidesteps this: it resolves against the nearest container-type ancestor directly regardless
+   of what's in between, so width/font-size track however much room the flex row actually has
+   (which also depends on the section's own padding, not just viewport width) instead of jumping
+   at a fixed px breakpoint. */
+.partialSticky__pin {
+  width: 30cqw;
+  min-width: 88px;
+  padding: 16px;
+  border-radius: 8px;
+  background: #ffa62b;
+  color: #16171d;
+  font-weight: 500;
+  font-size: clamp(14px, 4.5cqw, 18px);
+  text-align: center;
+}
+
+.partialSticky__content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  container-type: inline-size;
+}
+
+/* At the narrow end of partialSticky__pin's own cqw-based shrinking (see its comment above),
+   this column has too little room left for an 18px-wide identifier like createStickyTrigger, so
+   it falls back to overflow-wrap:anywhere's mid-word break. Shrinking code here too (scaled off
+   this column's own, narrower width) keeps most identifiers on one line instead. */
+.partialSticky__content code {
+  font-size: clamp(12px, 6cqw, 18px);
+}
+
+.plainSection--spanScene {
+  align-items: stretch;
+  min-height: 0;
+  /* Same reason as .plainSection--partialSticky (see the comment above): the inner div wrapping
+     spanScenePin__pin paints beyond this section's bounds, into the visual area of scene 3/filler
+     right after it, so leaving position:static would hide it behind later content in DOM order. */
+  position: relative;
+  z-index: 2;
+}
+
+.spanScenePin {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  container-type: inline-size;
+}
+
+/* Same width/font-size approach as .partialSticky__pin above (see its comment): scales off
+   .spanScenePin's own inline size instead of a fixed px breakpoint. */
+.spanScenePin__pin {
+  width: 30cqw;
+  min-width: 88px;
+  padding: 16px;
+  border-radius: 8px;
+  background: #a78bfa;
+  color: #16171d;
+  font-weight: 500;
+  font-size: clamp(14px, 4.5cqw, 18px);
+  text-align: center;
+}
+
+.spanScenePin__content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  container-type: inline-size;
+}
+
+/* Same reasoning as .partialSticky__content code above. */
+.spanScenePin__content code {
+  font-size: clamp(12px, 6cqw, 18px);
+}
+
+.footer {
+  height: 40vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f4f3ec;
+  color: #16171d;
+}

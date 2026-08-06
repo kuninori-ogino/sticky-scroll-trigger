@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StickyScrollTrigger demo</title>
+  </head>
+  <body>
+    <header class="header">
+      <p class="header__title">StickyScrollTrigger demo</p>
+      <label class="header__toggle">
+        <input type="checkbox" id="js-markersToggle" />
+        show markers
+      </label>
+    </header>
+
+    <div class="container">
+      <div class="container__inner">
+        <section class="block block--intro">
+          <h1>Sticky pin behavior check</h1>
+          <p>Scroll down to see each section pin temporarily with native <code>position:sticky</code> instead of GSAP pinning, with effects running only during the pin window.<br>Verify that the displayed position stays stable, no matter how often pinning starts and ends.</p>
+        </section>
+
+        <section class="filler">
+          <p>scroll ↓</p>
+        </section>
+
+        <section class="scene scene--1" data-progress-scene>
+          <div class="scene__bar"></div>
+          <h2>Scene 1</h2>
+          <p>Equivalent to <code>data-gsap-progress</code>. It animates width and color through <code>--progress</code>.</p>
+        </section>
+
+        <section class="filler">
+          <p>scroll ↓</p>
+        </section>
+
+        <section class="overlapScroll__trigger">
+          <h2>Overlap scroll demo</h2>
+          <p>The sticky wrapper around this section and everything above it freezes, while <code>overlapScroll__cover</code> (right after it) scrolls normally and rises to cover it.</p>
+        </section>
+        <section class="overlapScroll__cover">
+          <h2>Overlap scroll cover</h2>
+          <p>This is the element that <code>createOverlapScroll</code> leaves outside the wrapper. The rise comes from the cover's own natural scroll, with no JavaScript animation and no document-height change. Even if this section is shorter than the viewport, following elements continue the covering effect.</p>
+        </section>
+
+        <section class="scene scene--2" data-progress-scene>
+          <div class="scene__bar"></div>
+          <h2>Scene 2</h2>
+          <p>A second sticky-pin effect, independent of Scene 1. It rises to cover <code>overlapScroll__trigger</code> while also being pinned itself.</p>
+        </section>
+
+        <section class="filler">
+          <p>scroll ↓</p>
+        </section>
+
+        <section class="overlapScroll__trigger">
+          <h2>Nested overlap scroll demo</h2>
+          <p>Because this appears after the first overlap-scroll demo, its sticky wrapper nests by wrapping the earlier wrapper as a whole. The mechanism is the same, and each trigger/cover pair still operates independently.</p>
+        </section>
+        <section class="overlapScroll__cover">
+          <h2>Nested overlap scroll cover</h2>
+          <p><code>createOverlapScroll</code> follows the same math regardless of nesting depth. Overlap scroll never changes document height, so it does not interfere with the Scene side's frozen position.</p>
+        </section>
+
+        <section class="filler">
+          <p>scroll ↓</p>
+        </section>
+
+        <!-- Everything from here down is a plain GSAP ScrollTrigger effect that uses neither this library's createStickyTrigger nor createOverlapScroll. -->
+        <section class="plainSection plainSection--fade">
+          <h2>Plain GSAP ScrollTrigger</h2>
+          <p>This section uses only standard <code>gsap.fromTo</code> + <code>scrollTrigger</code> scrub, without <code>createStickyTrigger</code> or <code>createOverlapScroll</code>. Position is corrected via <code>resolveScrollPosition()</code>, so it stays in sync with the actual scroll distance.</p>
+          <div class="plainSection__box">fromTo + scrub</div>
+        </section>
+
+        <section class="filler">
+          <p>scroll ↓</p>
+        </section>
+
+        <section class="plainSection plainSection--partialSticky">
+          <h2>Partially sticky section (createStickyPin)</h2>
+          <p>Pinned with <code>createStickyPin()</code>. The label on the left remains pinned beyond this section's own body, through the next two sections (the filler and then the closing section). Internally this is pure <code>position:sticky</code>, with pinning handled entirely by CSS, not GSAP.</p>
+          <div class="partialSticky">
+            <aside class="partialSticky__pin">
+              <p>Just this part stays<br>pinned until<br>the next section</p>
+            </aside>
+            <div class="partialSticky__content">
+              <p>The release point is defined by <code>endTrigger</code> (the next filler section) and an <code>end</code> clause (GSAP's standard position syntax). It stays pinned until the filler's bottom edge arrives.</p>
+              <p>Notice how it stays pinned well past the label's own section, spanning the next two sections: the filler and the closing section.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="filler partialSticky__endTrigger">
+          <p>scroll ↓</p>
+        </section>
+
+        <!-- A layout with a scene layer placed between createStickyPin's trigger and endTrigger (see StickyScrollTrigger.spec.ts). -->
+        <section class="plainSection plainSection--spanScene">
+          <h2>A pin that spans a scene section (createStickyPin)</h2>
+          <p>
+            The label on the left stays pinned not only through this section's own body, but also
+            across "scene 3" right after it (a layer that stretches the document via
+            <code>createStickyTrigger</code>'s dwell), and releases at the next filler.
+          </p>
+          <div class="spanScenePin">
+            <aside class="spanScenePin__pin">
+              <p>Stays pinned<br>across<br>scene 3</p>
+            </aside>
+            <div class="spanScenePin__content">
+              <p>The "scene 3" section right after this one pins and animates through a regular <code>createStickyTrigger</code>, independent of this pin. The pinned label remains layered above it and moves together while Scene 3 is pinned.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="scene scene--3" data-progress-scene>
+          <div class="scene__bar"></div>
+          <h2>Scene 3</h2>
+          <p>Used to confirm that this dwell is included in <code>spanScenePin__pin</code>'s spacer height.</p>
+        </section>
+
+        <section class="filler spanScenePin__endTrigger">
+          <p>scroll ↓</p>
+        </section>
+
+        <section class="block block--outro">
+          <h2>End of demo</h2>
+          <p>That covers every effect in this demo.</p>
+        </section>
+      </div>
+    </div>
+
+    <footer class="footer">footer</footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>destroyRestoresLayout fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .trigger {
+        height: 50vh;
+      }
+      /* Deliberately no position/z-index here, unlike scenario.html and demo's CSS (both set
+         position:relative;z-index:1 on the cover explicitly). liftAboveStickyWrapper only fills
+         in position/z-index when the computed value is static/auto; scenario.html's explicit
+         values never reach that fallback branch, but leaving both untouched here does. */
+      .cover {
+        min-height: 50vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="trigger"></div>
+      <div class="cover"></div>
+    </div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const root = document.querySelector('.root');
+      const trigger = document.querySelector('.trigger');
+      const cover = document.querySelector('.cover');
+      const sticky = new StickyScrollTrigger(root);
+
+      sticky.createOverlapScroll({ trigger, cover });
+      sticky.refresh();
+
+      window.__coverComputedStyle = () => {
+        const computed = getComputedStyle(cover);
+
+        return { position: computed.position, zIndex: computed.zIndex };
+      };
+      window.__triggerIsDirectRootChild = () => trigger.parentElement === root;
+      window.__destroy = () => sticky.destroy();
+    </script>
+  </body>
+</html>

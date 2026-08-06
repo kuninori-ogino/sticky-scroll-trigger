@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>maxEnd fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .container__inner {
+        position: relative;
+      }
+      .filler {
+        height: 60vh;
+      }
+      .scene {
+        height: 50vh;
+      }
+      .overlapScroll__trigger {
+        height: 50vh;
+      }
+      .overlapScroll__cover {
+        position: relative;
+        z-index: 1;
+        min-height: 50vh;
+      }
+      .tail {
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="container__inner">
+        <section class="filler"></section>
+        <!-- A real Scene layer with dwell padding, so the document's max scroll position only
+             settles once this layer's padding has actually been written to the DOM. This
+             exercises the two-pass documentMaxScroll re-measurement that end: 'max' relies on
+             for cover layers (see refreshScenesAndCovers in src/index.ts). -->
+        <section class="scene"></section>
+        <section class="filler"></section>
+        <section class="overlapScroll__trigger">
+          <h2>trigger</h2>
+        </section>
+        <section class="overlapScroll__cover">
+          <h2>cover</h2>
+        </section>
+      </div>
+    </div>
+    <section class="tail"></section>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const sticky = new StickyScrollTrigger('.container__inner');
+
+      ScrollTrigger.create(sticky.createStickyTrigger({ trigger: '.scene', end: '+=100%' }));
+
+      const overlapVars = sticky.createOverlapScroll({
+        trigger: '.overlapScroll__trigger',
+        cover: '.overlapScroll__cover',
+        start: 'bottom bottom',
+        end: 'max',
+      });
+
+      ScrollTrigger.create(overlapVars);
+
+      sticky.refresh();
+      ScrollTrigger.addEventListener('refreshInit', () => sticky.refresh());
+      ScrollTrigger.refresh();
+
+      // Exposed for the e2e spec: overlapVars.end is the function this module hands to GSAP
+      // (`() => layer.freezeEnd || 0.001`), so calling it reads the cover layer's own resolved
+      // 'max' freezeEnd.
+      window.__coverFreezeEnd = () => overlapVars.end();
+      window.__resolveScrollPosition = (el, position) => sticky.resolveScrollPosition(el, position);
+    </script>
+  </body>
+</html>

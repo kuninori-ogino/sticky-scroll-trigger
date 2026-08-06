@@ -1,0 +1,14 @@
+node_modules
+dist
+.cache
+.DS_Store
+Thumbs.db
+
+# Editor directories and files
+.vscode
+.idea
+*.sw?
+
+# AI local settings and instructions
+CLAUDE.md
+.claude/

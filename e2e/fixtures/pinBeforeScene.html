@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinBeforeScene fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .pin {
+        height: 300px;
+      }
+      .scene {
+        height: 400px;
+      }
+      .tail {
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="pin"></div>
+      <section class="scene"></section>
+    </div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      // Registering (createStickyTrigger/createStickyPin) pushes straight into the module's own
+      // layers/pinLayers arrays without touching GSAP, so skipping ScrollTrigger.create() here
+      // means nothing auto-refreshes on creation. The refresh() call below is therefore
+      // unambiguously the first.
+      //
+      // Regression test for the pin-wrap-ordering bug (see wrapUnwrappedPins's comment in
+      // index.ts for why the order matters): .pin sits right before .scene in DOM order, so
+      // before the fix, .scene's freeze window was computed while .pin still occupied its
+      // natural 300px height on this very first refresh().
+      const sceneVars = sticky.createStickyTrigger({ trigger: '.scene', start: 'top top', end: '+=200' });
+
+      sticky.createStickyPin({ trigger: '.pin', endTrigger: '.tail', end: 'top top' });
+
+      sticky.refresh();
+
+      window.__sceneFreezeWindow = () => ({ start: sceneVars.start(), end: sceneVars.end() });
+      window.__refreshAgain = () => sticky.refresh();
+    </script>
+  </body>
+</html>

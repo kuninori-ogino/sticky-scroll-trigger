@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinRefreshWhileStuck fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .container__inner {
+        position: relative;
+      }
+      .filler {
+        height: 60vh;
+      }
+      /* Sizable dwell so there's a comfortable scroll range where the scene stays stuck. */
+      .scene {
+        height: 50vh;
+      }
+      /* pinTrigger sits inside the shared container, so it's nested inside the scene's sticky
+         wrapper once that scene is registered — pinEndTrigger sits outside the container
+         entirely, so it's never nested inside any scene wrapper. */
+      #pinTrigger {
+        height: 40px;
+      }
+      #pinEndTrigger {
+        height: 40px;
+      }
+      .tail {
+        height: 150vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="container__inner">
+        <section class="filler"></section>
+        <section class="scene"></section>
+        <div id="pinTrigger"></div>
+        <section class="filler"></section>
+      </div>
+    </div>
+    <div id="pinEndTrigger"></div>
+    <section class="tail"></section>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.container__inner');
+
+      const sceneVars = sticky.createStickyTrigger({ trigger: '.scene', end: '+=800' });
+      sticky.createStickyPin({
+        trigger: '#pinTrigger',
+        top: 0,
+        endTrigger: '#pinEndTrigger',
+        end: 'top top',
+      });
+
+      // No GSAP registration and no auto-refresh wiring here — the e2e spec drives refresh()
+      // directly at controlled scroll positions, so nothing should call it behind that control.
+      window.__refresh = () => sticky.refresh();
+      window.__pinSpacerHeight = () =>
+        document.getElementById('pinTrigger').parentElement.offsetHeight;
+      // sceneVars.start()/end() expose the scene's own absolute freeze window (the same numbers
+      // this module would hand GSAP), so the spec can pick a scroll position guaranteed to fall
+      // inside it without guessing from rendered layout.
+      window.__sceneFreezeWindow = () => ({ start: sceneVars.start(), end: sceneVars.end() });
+    </script>
+  </body>
+</html>

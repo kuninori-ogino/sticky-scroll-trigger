@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>absolutePosition fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .container__inner {
+        position: relative;
+      }
+      .filler {
+        height: 60vh;
+      }
+      /* Real dwell padding placed before .absoluteStartScene, so a regression that still adds
+         precedingGaps/its own natural top into an absolute start would be caught. */
+      .gapScene {
+        height: 333px;
+      }
+      .absoluteStartScene {
+        height: 111px;
+      }
+      .absoluteEndScene {
+        height: 77px;
+      }
+      .absoluteEndCover {
+        position: relative;
+        height: 77px;
+      }
+      .pinTrigger {
+        height: 44px;
+      }
+      .pinEndTrigger {
+        height: 222px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="container__inner">
+        <section class="filler"></section>
+        <section class="gapScene"></section>
+        <section class="absoluteStartScene"></section>
+        <section class="absoluteEndScene"></section>
+        <section class="absoluteEndCover"></section>
+        <section class="filler"></section>
+      </div>
+    </div>
+    <section class="pinTrigger"></section>
+    <section class="pinEndTrigger"></section>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const sticky = new StickyScrollTrigger('.container__inner');
+
+      const gapVars = sticky.createStickyTrigger({ trigger: '.gapScene', end: '+=500' });
+
+      // start: '2500' — a bare number, matching GSAP's own absolute-scroll-position notation.
+      // Must resolve to exactly 2500, ignoring both the trigger's own natural top and gapScene's
+      // dwell padding (500px) entirely.
+      const absoluteVars = sticky.createStickyTrigger({
+        trigger: '.absoluteStartScene',
+        start: '2500',
+        end: '+=100',
+      });
+
+      // end: 3000 (a plain number, also absolute) — the spacer height must depend only on
+      // .pinTrigger's own position, never on .pinEndTrigger's.
+      sticky.createStickyPin({
+        trigger: '.pinTrigger',
+        endTrigger: '.pinEndTrigger',
+        end: 3000,
+      });
+
+      // end: '5000' — a bare number, matching GSAP's own absolute-scroll-position notation for
+      // end too (previously treated as an intentional dwell-distance exception; now withdrawn).
+      // Must resolve to exactly 5000, ignoring freezeStart and any preceding dwell entirely.
+      // Uses createOverlapScroll (a cover layer, which creates no dwell padding of its own) so a
+      // large absolute end doesn't shift the rest of the fixture's layout.
+      const absoluteEndVars = sticky.createOverlapScroll({
+        trigger: '.absoluteEndScene',
+        cover: '.absoluteEndCover',
+        end: '5000',
+      });
+
+      sticky.refresh();
+      ScrollTrigger.addEventListener('refreshInit', () => sticky.refresh());
+      ScrollTrigger.refresh();
+
+      window.__gapWindow = () => ({ start: gapVars.start(), end: gapVars.end() });
+      window.__absoluteStartWindow = () => ({ start: absoluteVars.start(), end: absoluteVars.end() });
+      window.__absoluteEndWindow = () => ({ start: absoluteEndVars.start(), end: absoluteEndVars.end() });
+      window.__pinInnerHeight = () =>
+        document.querySelector('.pinTrigger').parentElement.offsetHeight;
+      window.__resolveScrollPosition = (el, position) => sticky.resolveScrollPosition(el, position);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>endFormat fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .container__inner {
+        position: relative;
+      }
+      .filler {
+        height: 60vh;
+      }
+      /* Deliberately not a round number and not equal to the viewport height, so a test can
+         tell "resolved against trigger height" and "resolved against viewport height" apart. */
+      .clauseScene {
+        height: 333px;
+      }
+      .dwellScene {
+        height: 333px;
+      }
+      .defaultScene {
+        height: 333px;
+      }
+      /* Distinct from both .customEndTriggerScene's own height and the viewport height, so a
+         test can tell "resolved against endTrigger's height" apart from either. */
+      .customEndTrigger {
+        height: 555px;
+      }
+      .customEndTriggerScene {
+        height: 111px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="container__inner">
+        <section class="filler"></section>
+        <section class="clauseScene"></section>
+        <section class="dwellScene"></section>
+        <section class="defaultScene"></section>
+        <section class="customEndTriggerScene"></section>
+        <section class="customEndTrigger"></section>
+        <section class="filler"></section>
+      </div>
+    </div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.container__inner');
+
+      // start: 'top top' (rather than the default 'center center') keeps freezeStart at the
+      // trigger's own natural top, so the resulting dwell duration reduces to a plain
+      // "trigger height" or "viewport height" comparison below.
+      // '+100%' (no '=') — GSAP resolves this as a position clause against endTrigger's own
+      // height, not a dwell distance.
+      const clauseVars = sticky.createStickyTrigger({
+        trigger: '.clauseScene',
+        start: 'top top',
+        end: '+100%',
+      });
+      // '+=100%' — still a dwell distance, resolved against the viewport height.
+      const dwellVars = sticky.createStickyTrigger({
+        trigger: '.dwellScene',
+        start: 'top top',
+        end: '+=100%',
+      });
+      // end (and start) omitted entirely — createStickyTrigger's own defaults now match GSAP's
+      // own defaults for an omitted end/start ('100% 0' / '0 0'), so this should behave the same
+      // as clauseVars above (dwell = the trigger's own height), not dwellVars (viewport height).
+      const defaultVars = sticky.createStickyTrigger({
+        trigger: '.defaultScene',
+      });
+      // end omitted, but with an explicit endTrigger different from trigger — the default clause
+      // ('100% 0') must resolve against endTrigger's own height (555px), not triggerScene's own
+      // (111px), matching GSAP's `parsedEndTrigger = vars.endTrigger || trigger`.
+      const customEndTriggerVars = sticky.createStickyTrigger({
+        trigger: '.customEndTriggerScene',
+        start: 'top top',
+        endTrigger: '.customEndTrigger',
+      });
+
+      sticky.refresh();
+
+      window.__clauseWindow = () => ({ start: clauseVars.start(), end: clauseVars.end() });
+      window.__dwellWindow = () => ({ start: dwellVars.start(), end: dwellVars.end() });
+      window.__defaultWindow = () => ({ start: defaultVars.start(), end: defaultVars.end() });
+      window.__customEndTriggerWindow = () =>
+        ({ start: customEndTriggerVars.start(), end: customEndTriggerVars.end() });
+      window.__viewportHeight = () => window.innerHeight;
+    </script>
+  </body>
+</html>

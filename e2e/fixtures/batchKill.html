@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>batchKill fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="host"></div>
+    <div style="height: 2000px"></div>
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const run = async (killAll) => {
+        const host = document.querySelector('.host');
+        const root = document.createElement('div');
+        root.className = 'root';
+        root.innerHTML = `
+          <section class="s1" style="height:400px">S1</section>
+          <section class="s2" style="height:400px">S2</section>
+          <section class="s3" style="height:400px">S3</section>
+        `;
+        host.replaceChildren(root);
+
+        const sticky = new StickyScrollTrigger(root);
+        const vars = ['.s1', '.s2', '.s3'].map((sel) =>
+          sticky.createStickyTrigger({ trigger: root.querySelector(sel), end: '+=200' }),
+        );
+        const triggers = vars.map((v) => ScrollTrigger.create(v));
+        sticky.refresh();
+        ScrollTrigger.refresh();
+
+        // s3's (survives a partial kill) freezeStart/freezeEnd, and GSAP's own cached start/end.
+        // Checks whether GSAP's side tracks the surviving layer's freeze window once a kill changes it.
+        const survivorSnapshot = () => ({
+          module: [vars[2].start(), vars[2].end()],
+          gsap: [triggers[2].start, triggers[2].end],
+        });
+        const survivorBefore = survivorSnapshot();
+
+        // Counts how many times rootElement "moved."
+        // A single move (insertBefore/appendChild) produces two MutationRecords (a remove
+        // from the old parent and an add to the new one), so this only looks at add records
+        // to avoid double-counting.
+        // If batching is working, however many kills happen within the same task,
+        // the move stays a single operation.
+        let rootMoveCount = 0;
+        const observer = new MutationObserver((records) => {
+          for (const record of records) {
+            if (Array.from(record.addedNodes).includes(root)) rootMoveCount += 1;
+          }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        // Simulates something like a matchMedia switch, killing N of them synchronously within the same task.
+        const toKill = killAll ? triggers : triggers.slice(0, 2); // when leaving some alive, s3 is never killed
+        toKill.forEach((t) => t.kill());
+
+        // Waits for the microtask plus the MutationObserver callback to arrive.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        observer.disconnect();
+
+        return {
+          rootMoveCount,
+          killedCount: toKill.length,
+          survivorBefore,
+          // s3 is also killed in the killAll case, so tracking the surviving layer only makes sense for the partial-kill case.
+          survivorAfter: killAll ? null : survivorSnapshot(),
+        };
+      };
+
+      window.__runBatchKillAll = () => run(true);
+      window.__runBatchKillPartial = () => run(false);
+    </script>
+  </body>
+</html>

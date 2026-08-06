@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>scenario fixture</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      .container__inner {
+        position: relative;
+      }
+      .filler {
+        height: 60vh;
+      }
+      .scene {
+        --progress: 0;
+        height: 70vh;
+      }
+      .overlapScroll__trigger {
+        height: 50vh;
+      }
+      .overlapScroll__cover {
+        position: relative;
+        z-index: 1;
+        min-height: 50vh;
+      }
+      .plainSection {
+        min-height: 60vh;
+      }
+      .plainSection__box {
+        width: 100px;
+        height: 80px;
+      }
+      /* The inner div sticky.createStickyPin() wraps paints beyond its own section's bounds,
+         into the visual area of following sections, so leaving position:static would hide it
+         behind later content in DOM order. */
+      .plainSection--partialSticky,
+      .plainSection--spanScene {
+        position: relative;
+        z-index: 2;
+      }
+      .partialSticky,
+      .spanScenePin {
+        display: flex;
+        align-items: flex-start;
+        gap: 24px;
+      }
+      .partialSticky__pin,
+      .spanScenePin__pin {
+        width: 200px;
+        padding: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="container__inner">
+        <section class="filler"></section>
+
+        <section class="scene scene--1" data-progress-scene></section>
+
+        <section class="filler"></section>
+
+        <section class="overlapScroll__trigger">
+          <h2>overlapScroll__trigger</h2>
+        </section>
+        <section class="overlapScroll__cover">
+          <h2>overlapScroll__cover</h2>
+        </section>
+
+        <section class="filler"></section>
+
+        <section class="plainSection plainSection--fade">
+          <div class="plainSection__box"></div>
+        </section>
+
+        <section class="filler"></section>
+
+        <section class="plainSection plainSection--partialSticky">
+          <div class="partialSticky">
+            <aside class="partialSticky__pin">pin</aside>
+            <div class="partialSticky__content">
+              <p>content</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="filler partialSticky__endTrigger"></section>
+
+        <section class="plainSection plainSection--spanScene">
+          <div class="spanScenePin">
+            <aside class="spanScenePin__pin">pin</aside>
+            <div class="spanScenePin__content">
+              <p>content</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="scene scene--3" data-progress-scene></section>
+
+        <section class="filler spanScenePin__endTrigger"></section>
+
+        <!-- Right after the last element, the scrollable distance would run short
+             and window.scrollTo() would clamp at the end, breaking tests that need to detect change
+             after a pin releases, so this reserves ample extra space. -->
+        <section class="filler" style="height: 150vh"></section>
+      </div>
+    </div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const debounce = (func, wait = 100) => {
+        let timer;
+        return (...args) => {
+          clearTimeout(timer);
+          timer = setTimeout(() => func(...args), wait);
+        };
+      };
+
+      const sticky = new StickyScrollTrigger('.container__inner');
+
+      // scene (data-progress-scene): animates --progress from 0 to 1.
+      // Configured the same way as the corresponding part of demo/src/main.ts (no offset here
+      // since there's no header).
+      document.querySelectorAll('[data-progress-scene]').forEach((scene) => {
+        gsap.fromTo(
+          scene,
+          { '--progress': 0 },
+          {
+            '--progress': 1,
+            scrollTrigger: sticky.createStickyTrigger({
+              trigger: scene,
+              start: 'center center',
+              end: '+=100%',
+              scrub: true,
+            }),
+          },
+        );
+      });
+
+      // Overlap scroll.
+      document.querySelectorAll('.overlapScroll__trigger').forEach((trigger) => {
+        const cover = trigger.nextElementSibling;
+        if (!(cover instanceof HTMLElement) || !cover.classList.contains('overlapScroll__cover')) return;
+        ScrollTrigger.create(sticky.createOverlapScroll({ trigger, cover, start: 'bottom bottom' }));
+      });
+
+      // A label that's partially sticky.
+      const partialStickyPin = document.querySelector('.partialSticky__pin');
+      const partialStickyEndTrigger = document.querySelector('.partialSticky__endTrigger');
+      if (partialStickyPin && partialStickyEndTrigger) {
+        ScrollTrigger.create(
+          sticky.createStickyPin({
+            trigger: partialStickyPin,
+            top: () => 20,
+            endTrigger: partialStickyEndTrigger,
+            end: () => `bottom top+=${20 + partialStickyPin.offsetHeight + 40}`,
+          }),
+        );
+      }
+
+      // A pin that spans across a scene section.
+      const spanScenePin = document.querySelector('.spanScenePin__pin');
+      const spanScenePinEndTrigger = document.querySelector('.spanScenePin__endTrigger');
+      if (spanScenePin && spanScenePinEndTrigger) {
+        ScrollTrigger.create(
+          sticky.createStickyPin({
+            trigger: spanScenePin,
+            top: () => 20,
+            endTrigger: spanScenePinEndTrigger,
+            end: () => `bottom top+=${20 + spanScenePin.offsetHeight + 40}`,
+          }),
+        );
+      }
+
+      sticky.refresh();
+
+      // A plain ScrollTrigger effect placed inside the sticky nesting.
+      // Uses start/end corrected for the dwell lag via resolveScrollPosition()
+      // (same as the corresponding part of demo/src/main.ts).
+      const plainFadeBox = document.querySelector('.plainSection--fade .plainSection__box');
+      if (plainFadeBox) {
+        gsap.fromTo(
+          plainFadeBox,
+          { autoAlpha: 0, x: -80 },
+          {
+            autoAlpha: 1,
+            x: 0,
+            scrollTrigger: sticky.createResolvedTrigger({
+              trigger: plainFadeBox,
+              start: 'top 80%',
+              end: 'top 30%',
+              scrub: true,
+            }),
+          },
+        );
+      }
+
+      // No manual ScrollTrigger.addEventListener('refreshInit', () => sticky.refresh()) here: every
+      // createStickyTrigger/createOverlapScroll/createStickyPin call above already wires this
+      // same binding via its own onRefreshInit (see index.ts's createAutoRefreshHandler), as
+      // long as at least one of them is registered. Binding it again here would hide a
+      // regression in that wiring.
+      const sortRefresh = debounce(() => {
+        ScrollTrigger.sort();
+        ScrollTrigger.refresh();
+      }, 100);
+
+      if (document.scrollingElement) {
+        new ResizeObserver(() => sortRefresh()).observe(document.scrollingElement);
+      }
+      window.addEventListener('load', () => sortRefresh(), { once: true });
+
+      sortRefresh();
+    </script>
+  </body>
+</html>
