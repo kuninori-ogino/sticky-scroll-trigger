@@ -2,7 +2,7 @@
 
 A ScrollTrigger helper that uses native `position:sticky` instead of GSAP pinning.
 
-> ScrollTrigger® is part of GSAP, a Webflow product. This project is an independent, unofficial helper and is not affiliated with or endorsed by Webflow.
+> ScrollTrigger is part of GSAP®, a Webflow product. This project is an independent, unofficial helper and is not affiliated with or endorsed by Webflow.
 
 The only dependency is GSAP's ScrollTrigger types. The implementation is 6 files in `src/`. This package is not published to npm; copy `src/` into your project.
 
@@ -10,39 +10,7 @@ The only dependency is GSAP's ScrollTrigger types. The implementation is 6 files
 - Pinning is handled 100% by the browser's `position:sticky`; GSAP only tweens the effect's own properties while the freeze window is active
 - The "section below rises up and covers the section above" effect (overlap scroll) is achieved without changing document height
 
-Run `npm run dev` to see the demo ([demo/index.html](demo/index.html) + [demo/src/main.ts](demo/src/main.ts)). See [ARCHITECTURE.md](ARCHITECTURE.md) for why nested sticky was chosen over `pin`, and how it works internally.
-
-## Development
-
-Node.js `24.18.1` (see [.nvmrc](.nvmrc)).
-
-```bash
-npm ci
-npm run dev
-```
-
-| script                            | description                                                                                                  |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `npm run dev`                     | Starts the Vite dev server for `demo/`                                                                       |
-| `npm run build`                   | Production build of `demo/`                                                                                  |
-| `npm run build:lib`               | Builds the library into `dist/` (4 JavaScript files: ESM/IIFE, unminified + minified, plus a single `.d.ts`) |
-| `npm run preview`                 | Previews the `demo/` build output                                                                            |
-| `npm run typecheck`               | Runs `tsc --noEmit` for the library, the demo, and the e2e tests                                             |
-| `npm run lint`                    | Lints JavaScript/TypeScript (`src/`, `demo/src/`, config files, etc.) with ESLint (@stylistic)               |
-| `npm run format` / `format:check` | Formats/checks with ESLint (JavaScript/TypeScript) + Prettier (Markdown/JSON/CSS)                            |
-| `npm test` / `test:watch`         | Runs Vitest unit tests                                                                                       |
-| `npm run playwright:install`      | Downloads Chromium and WebKit for Playwright into the shared cache (first run only)                          |
-| `npm run test:e2e`                | Runs Playwright e2e tests                                                                                    |
-
-### File layout
-
-| path                                                                                                                 | description                                                     |
-| -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| [src/](src/)                                                                                                         | The library itself. Can be used by copying this directory as-is |
-| [src/*.test.ts](src/)                                                                                                | Unit tests (Vitest)                                             |
-| [e2e/StickyScrollTrigger.spec.ts](e2e/StickyScrollTrigger.spec.ts)                                                   | Real-browser behavior tests (Playwright)                        |
-| [demo/src/main.ts](demo/src/main.ts) / [demo/index.html](demo/index.html) / [demo/src/style.css](demo/src/style.css) | Visual-only demo (not covered by automated tests)               |
-| [ARCHITECTURE.md](ARCHITECTURE.md)                                                                                   | Internal structure and the reasoning behind design decisions    |
+See the repository's `demo/index.html` + `demo/src/main.ts` for a live example, and `ARCHITECTURE.md` for why nested sticky was chosen over `pin`, and how it works internally.
 
 ## Requirements
 
@@ -235,7 +203,7 @@ sticky.refresh();
 
 Internally, the element wrapping `trigger` renders beyond its own section's bounds, into the visual area of following elements. Make sure the ancestor section containing `trigger` isn't hidden behind a later section in DOM order (e.g. via `position: relative; z-index: ...`).
 
-See [ARCHITECTURE.md](ARCHITECTURE.md#why-createstickypin-is-unaffected-by-nested-sticky-lag) for why `createStickyPin` is completely unaffected by nested-sticky lag, and why `trigger` needs to be wrapped in two nested divs.
+See the repository's `ARCHITECTURE.md` ("Why `createStickyPin` is unaffected by nested-sticky lag") for why `createStickyPin` is completely unaffected by nested-sticky lag, and why `trigger` needs to be wrapped in two nested divs.
 
 ### `createResolvedTrigger(options)`
 
@@ -287,7 +255,7 @@ Call this after `refresh()`. If passed as a function to `start`/`end`, it is re-
 
 `position` also accepts GSAP's [`'max'` keyword](#end-syntax) (e.g. `resolveScrollPosition(".plainBox", "max")`), which ignores `element` entirely and returns the scroller's max scroll position.
 
-Using it with `pin: true` is discouraged because the element can jump when pinning starts. If you only need pinning, use [`createStickyPin`](#createstickypinoptions). See [ARCHITECTURE.md](ARCHITECTURE.md#why-resolvescrollposition-corrects-for-lag) for details.
+Using it with `pin: true` is discouraged because the element can jump when pinning starts. If you only need pinning, use [`createStickyPin`](#createstickypinoptions). See the repository's `ARCHITECTURE.md` ("Why `resolveScrollPosition` corrects for lag") for details.
 
 Only the dwell of Scene layers registered via `createStickyTrigger` is accumulated here (`createOverlapScroll` never changes the document height, so it doesn't contribute to the lag).
 
@@ -364,7 +332,7 @@ If the entire value is just a number (a plain JS number, or a string that's noth
 
 `'500 top'` (two tokens) and `'500px'` (a suffix) don't qualify for this; they resolve via the bare-number _offset_ row in the table above instead, same as GSAP.
 
-> [`createOverlapScroll`](#createoverlapscrolloptions)'s `start` doesn't support absolute scroll positions: a cover layer's sticky position is always computed relative to its own wrapper (see [ARCHITECTURE.md](ARCHITECTURE.md)), which has no equivalent for one. It throws instead; use a position clause.
+> [`createOverlapScroll`](#createoverlapscrolloptions)'s `start` doesn't support absolute scroll positions: a cover layer's sticky position is always computed relative to its own wrapper (see the repository's `ARCHITECTURE.md`), which has no equivalent for one. It throws instead; use a position clause.
 
 ## End syntax
 
@@ -425,7 +393,7 @@ sticky.createOverlapScroll({
 - `end: 'max'` throws on `createStickyTrigger` and `createStickyPin` for the same reason (their own padding/spacer would depend on itself); use `createOverlapScroll` instead
 - Using the same element as the `trigger` of two different `createStickyTrigger`/`createOverlapScroll`/`createStickyPin` calls throws
 - You must call `refresh()` once manually after registration. Window resize/load recomputation is automatically wired to GSAP's own `refreshInit`, but for layout changes that don't involve those (e.g. content height changes), call `ScrollTrigger.refresh()` yourself (see [Calling refresh](#calling-refresh))
-- Resizes from mobile browsers showing/hiding their address bar are absorbed automatically (see [ARCHITECTURE.md](ARCHITECTURE.md#two-pass-position-measurement)), but other causes like `visualViewport` zoom are not handled
+- Resizes from mobile browsers showing/hiding their address bar are absorbed automatically (see the repository's `ARCHITECTURE.md`, "Two-pass position measurement"), but other causes like `visualViewport` zoom are not handled
 - Don't nest one `StickyScrollTrigger` instance's shared container inside another's: once a target sits inside more than one, [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances)'s ownership check picks whichever instance is listed first, and neither instance's own dwell alone is actually correct for it
 
 ## License

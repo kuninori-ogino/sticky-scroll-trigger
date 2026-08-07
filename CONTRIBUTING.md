@@ -2,7 +2,7 @@
 
 ## Setup
 
-Node.js `24.18.1` (see [.nvmrc](.nvmrc)).
+Node.js `24.18.1` (see `.nvmrc`).
 
 ```bash
 npm ci
@@ -14,17 +14,30 @@ npm run dev
 | command                                    | description                                                                      |
 | ------------------------------------------ | -------------------------------------------------------------------------------- |
 | `npm run dev`                              | Starts the Vite dev server for `demo/`                                           |
-| `npm run typecheck`                        | Runs `tsc --noEmit` for both the library and the demo                            |
+| `npm run build`                            | Production build of `demo/`                                                      |
+| `npm run build:lib`                        | Builds the library into `dist/` (ESM/IIFE, unminified + minified, plus `.d.ts`)  |
+| `npm run preview`                          | Previews the `demo/` build output                                                |
+| `npm run typecheck`                        | Runs `tsc --noEmit` for the library, the demo, and the e2e tests                 |
 | `npm run lint` / `format` / `format:check` | Lints/formats with ESLint + Prettier                                             |
 | `npm test` / `test:watch`                  | Vitest unit tests                                                                |
 | `npm run playwright:install`               | First run only: fetches Chromium and WebKit for Playwright into the shared cache |
 | `npm run test:e2e`                         | Playwright e2e tests                                                             |
 
+## File layout
+
+| path                                                          | description                                                     |
+| ------------------------------------------------------------- | --------------------------------------------------------------- |
+| `src/`                                                        | The library itself. Can be used by copying this directory as-is |
+| `src/*.test.ts`                                               | Unit tests (Vitest)                                             |
+| `e2e/StickyScrollTrigger.spec.ts`                             | Real-browser behavior tests (Playwright)                        |
+| `demo/src/main.ts` / `demo/index.html` / `demo/src/style.css` | Visual-only demo (not covered by automated tests)               |
+| `ARCHITECTURE.md`                                             | Internal structure and the reasoning behind design decisions    |
+
 Before opening a PR, run the following command sequence:
 
 `npm run format:check && npm run typecheck && npm test && npm run build:lib && npm run build && npm run test:e2e`
 
-CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs the same command sequence.
+CI (`.github/workflows/ci.yml`) runs the same command sequence.
 
 Husky hooks are set up automatically by the `prepare` script during `npm ci`: `pre-commit` runs `lint-staged` (ESLint + Prettier on staged files), and `pre-push` runs `typecheck` and `test`.
 
@@ -32,7 +45,7 @@ Test split:
 
 - Node (Vitest): `position.test.ts`, `freezeWindow.test.ts`
 - jsdom (Vitest): `dom.test.ts`, `structure.test.ts`, `index.test.ts`
-- Real browser (Playwright): [e2e/StickyScrollTrigger.spec.ts](e2e/StickyScrollTrigger.spec.ts)
+- Real browser (Playwright): `e2e/StickyScrollTrigger.spec.ts`
 
 Rule of thumb: layout-dependent behavior (for example `documentTop`) belongs in e2e.
 
