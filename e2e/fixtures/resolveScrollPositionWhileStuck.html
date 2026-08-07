@@ -47,7 +47,7 @@
 
       sticky.refresh();
 
-      // No GSAP registration and no auto-refresh wiring here — the e2e spec drives scroll
+      // No GSAP registration and no auto-refresh wiring here: the e2e spec drives scroll
       // position directly and calls resolveScrollPosition itself, so nothing should re-trigger
       // refresh() behind that control.
       window.__resolveScrollPosition = (position) =>

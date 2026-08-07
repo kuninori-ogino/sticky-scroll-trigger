@@ -18,7 +18,7 @@
         height: 50vh;
       }
       /* pinTrigger sits inside the shared container, so it's nested inside the scene's sticky
-         wrapper once that scene is registered — pinEndTrigger sits outside the container
+         wrapper once that scene is registered. pinEndTrigger sits outside the container
          entirely, so it's never nested inside any scene wrapper. */
       #pinTrigger {
         height: 40px;
@@ -56,7 +56,7 @@
         end: 'top top',
       });
 
-      // No GSAP registration and no auto-refresh wiring here — the e2e spec drives refresh()
+      // No GSAP registration and no auto-refresh wiring here: the e2e spec drives refresh()
       // directly at controlled scroll positions, so nothing should call it behind that control.
       window.__refresh = () => sticky.refresh();
       window.__pinSpacerHeight = () =>

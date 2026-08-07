@@ -61,7 +61,7 @@
 
       const gapVars = sticky.createStickyTrigger({ trigger: '.gapScene', end: '+=500' });
 
-      // start: '2500' — a bare number, matching GSAP's own absolute-scroll-position notation.
+      // start: '2500': a bare number, matching GSAP's own absolute-scroll-position notation.
       // Must resolve to exactly 2500, ignoring both the trigger's own natural top and gapScene's
       // dwell padding (500px) entirely.
       const absoluteVars = sticky.createStickyTrigger({
@@ -70,7 +70,7 @@
         end: '+=100',
       });
 
-      // end: 3000 (a plain number, also absolute) — the spacer height must depend only on
+      // end: 3000 (a plain number, also absolute): the spacer height must depend only on
       // .pinTrigger's own position, never on .pinEndTrigger's.
       sticky.createStickyPin({
         trigger: '.pinTrigger',
@@ -78,7 +78,7 @@
         end: 3000,
       });
 
-      // end: '5000' — a bare number, matching GSAP's own absolute-scroll-position notation for
+      // end: '5000': a bare number, matching GSAP's own absolute-scroll-position notation for
       // end too (previously treated as an intentional dwell-distance exception; now withdrawn).
       // Must resolve to exactly 5000, ignoring freezeStart and any preceding dwell entirely.
       // Uses createOverlapScroll (a cover layer, which creates no dwell padding of its own) so a
