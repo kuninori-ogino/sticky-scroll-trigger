@@ -67,6 +67,12 @@ GSAP string `start`/`end` values (for example `'top 80%'`) do not account for th
 
 Its target element isn't guaranteed to share stuck ancestors with anything else, for the same reason [`createStickyPin`](#why-createstickypin-is-unaffected-by-nested-sticky-lag)'s trigger/endTrigger need the same protection. Once `refresh()` has applied a Scene/Cover wrapper's `position:sticky` CSS, the browser keeps engaging and disengaging it natively as scroll changes, with no further `refresh()` call involved. So `resolveScrollPosition` hits an actively-stuck ancestor whenever it's called while scroll sits inside an earlier Scene layer's freeze window, including its documented usage as a function-valued `start`/`end`, which GSAP re-evaluates during its own refresh. `resolveScrollPosition` resets every Scene/Cover wrapper's sticky state before measuring `documentTop`, then restores it, the same way `#refreshPins` does.
 
+### Why `getScrollTop` is a static method
+
+A target element for a same-page anchor link isn't guaranteed to belong to the particular `StickyScrollTrigger` instance a piece of code happens to have on hand; a page can have more than one instance, one per shared container. Applying the wrong instance's dwell to a target it never delayed corrupts the result the same way `resolveScrollPosition` above needs correcting for in the first place. `getScrollTop` sidesteps needing the caller to already know which instance owns the target by taking every candidate instance and checking each one's shared container itself.
+
+Being `static` (called on the class, not an instance) is what makes that check possible at all: private fields are scoped to the class body, not to a particular `this`, so a static method can read `#rootElement` off any instance passed in as an argument, not just its own.
+
 ### Why pin: true is discouraged alongside this
 
 With default `pinType: 'fixed'`, GSAP extrapolates pin position from scroll state at refresh time (internally: `top: bounds.top + (scroll - start)`). Right after page load (`scroll≈0`), extrapolation toward `start` can be offset by dwell-induced lag between those points. In nested sticky, this can make the element jump when pinning starts, even if `start`/`end` are corrected.

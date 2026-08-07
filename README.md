@@ -163,7 +163,7 @@ Avoid debounce logic that assumes it runs before GSAP's 200ms delay. Use `refres
 
 ### `new StickyScrollTrigger(root)`
 
-Creates an instance that treats `root` (a selector string or `HTMLElement`) as the shared container, exposing `createStickyTrigger`, `createOverlapScroll`, `createStickyPin`, `createResolvedTrigger`, `resolveScrollPosition`, `refresh`, and `destroy` as methods. Throws if the shared container can't be found.
+Creates an instance that treats `root` (a selector string or `HTMLElement`) as the shared container, exposing `createStickyTrigger`, `createOverlapScroll`, `createStickyPin`, `createResolvedTrigger`, `resolveScrollPosition`, `refresh`, and `destroy` as instance methods. Throws if the shared container can't be found. The class itself also exposes a static [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances) method, for resolving a position across more than one instance.
 
 These are ordinary instance methods, not standalone functions, so always call them on the instance (`sticky.createStickyTrigger(...)`) rather than destructuring them out; a destructured method loses its `this` binding when called.
 
@@ -291,6 +291,35 @@ Using it with `pin: true` is discouraged because the element can jump when pinni
 
 Only the dwell of Scene layers registered via `createStickyTrigger` is accumulated here (`createOverlapScroll` never changes the document height, so it doesn't contribute to the lag).
 
+For a target that might belong to a _different_ instance than the one at hand (e.g. a same-page anchor link, where you don't know in advance which instance's shared container it lives in), use the static [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances) below instead.
+
+### `StickyScrollTrigger.getScrollTop(element, instances)`
+
+A static method, call it on the class itself (`StickyScrollTrigger.getScrollTop(...)`), not on an instance. Returns the absolute scroll position (px) at which `element`'s own top edge reaches the viewport's top edge (`'top top'`), picking whichever of the given `instances` actually has `element` inside its shared container. Applying the wrong instance's dwell to a target it never delayed would corrupt the result, the same way plain [`resolveScrollPosition`](#resolvescrollpositionelement-position) warns against.
+
+```ts
+import StickyScrollTrigger from "sticky-scroll-trigger";
+
+const stickyA = new StickyScrollTrigger(".sectionA");
+const stickyB = new StickyScrollTrigger(".sectionB");
+
+document.querySelectorAll('a[href^="#"]').forEach((anchor) => {
+  anchor.addEventListener("click", (event) => {
+    const target = document.getElementById(anchor.hash.slice(1));
+
+    if (!target) return;
+
+    event.preventDefault();
+    window.scrollTo({
+      top: StickyScrollTrigger.getScrollTop(target, [stickyA, stickyB]),
+      behavior: "smooth",
+    });
+  });
+});
+```
+
+An `element` outside every given instance's shared container is measured directly (no dwell to correct for), so passing every `StickyScrollTrigger` instance on the page is always safe, whether or not the target actually belongs to any of them.
+
 ### `refresh()`
 
 Recomputes each layer's sticky `top`, dwell spacer height, and freeze window (`start`/`end`). It also rebuilds nested DOM when triggers are added, removed, or reordered. If nothing has changed, it does not rebuild.
@@ -397,6 +426,7 @@ sticky.createOverlapScroll({
 - Using the same element as the `trigger` of two different `createStickyTrigger`/`createOverlapScroll`/`createStickyPin` calls throws
 - You must call `refresh()` once manually after registration. Window resize/load recomputation is automatically wired to GSAP's own `refreshInit`, but for layout changes that don't involve those (e.g. content height changes), call `ScrollTrigger.refresh()` yourself (see [Calling refresh](#calling-refresh))
 - Resizes from mobile browsers showing/hiding their address bar are absorbed automatically (see [ARCHITECTURE.md](ARCHITECTURE.md#two-pass-position-measurement)), but other causes like `visualViewport` zoom are not handled
+- Don't nest one `StickyScrollTrigger` instance's shared container inside another's: once a target sits inside more than one, [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances)'s ownership check picks whichever instance is listed first, and neither instance's own dwell alone is actually correct for it
 
 ## License
 

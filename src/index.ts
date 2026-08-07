@@ -880,6 +880,28 @@ export default class StickyScrollTrigger {
     return result;
   }
 
+  // Returns the absolute scroll position (px) at which element's own top edge reaches the
+  // viewport's top edge ('top top'), for an element that might belong to any one of several
+  // StickyScrollTrigger instances on the same page (e.g. a same-page anchor link, where the
+  // caller doesn't know in advance which instance's shared container the target lives in). Finds
+  // whichever instance's shared container actually contains element and delegates to that
+  // instance's own resolveScrollPosition; picking the wrong one would apply its dwell to a target
+  // it never delayed, corrupting the result the same way resolveScrollPosition's own docs warn
+  // against. This reaches into #rootElement on any instance passed in, not just its own, since
+  // private fields are scoped to the class body, not to `this`. An element outside every given
+  // instance's container is measured directly, with no dwell to correct for.
+  static getScrollTop(
+    elementInput: string | HTMLElement,
+    instances: readonly StickyScrollTrigger[],
+  ): number {
+    const element = resolveElement(elementInput, 'StickyScrollTrigger.getScrollTop');
+    const owner = instances.find((instance) => instance.#rootElement.contains(element));
+
+    if (owner) return owner.resolveScrollPosition(element, 'top top');
+
+    return documentTop(element);
+  }
+
   // A thin wrapper that calls resolveScrollPosition for trigger/start and endTrigger/end
   // together, building Vars for plain GSAP ScrollTrigger. Doesn't register into the layers array
   // (it has no freeze window and is outside refresh()'s scope).

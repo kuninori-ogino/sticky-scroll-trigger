@@ -15,6 +15,15 @@
   box-sizing: border-box;
 }
 
+/* Anchor-scroll offset for in-page links (see anchorScroll.ts's getScrollOffsetTop), set directly
+   on each target rather than on html: scroll-margin-top applies to the target itself, so unlike
+   scroll-padding-top (a scroller-only property), it can vary per target without any inheritance
+   trick. Combining this with scroll-padding-top on html would double the offset (the two add),
+   so html deliberately doesn't also set scroll-padding-top. */
+#link {
+  scroll-margin-top: var(--headerHeight);
+}
+
 body {
   margin: 0;
 }

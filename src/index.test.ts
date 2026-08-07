@@ -793,6 +793,92 @@ describe('resolveScrollPosition()', () => {
   });
 });
 
+describe('static getScrollTop()', () => {
+  it('accepts element as a selector string', () => {
+    const { query, controller } = setup();
+
+    expect(StickyScrollTrigger.getScrollTop('.inside', [controller])).toBe(
+      StickyScrollTrigger.getScrollTop(query('.inside'), [controller]),
+    );
+  });
+
+  it('with an empty instances array, measures the element directly without throwing', () => {
+    const { query } = setup();
+
+    expect(Number.isNaN(StickyScrollTrigger.getScrollTop(query('.outside'), []))).toBe(false);
+  });
+
+  it('matches the owning instance\'s own resolveScrollPosition(element, \'top top\')', () => {
+    const { query, controller } = setup();
+    const target = query('.inside');
+
+    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=500' });
+    controller.refresh();
+
+    expect(StickyScrollTrigger.getScrollTop(target, [controller])).toBe(
+      controller.resolveScrollPosition(target, 'top top'),
+    );
+  });
+
+  // A dwell distance ('+=500') is layout-independent (see the '\'excludes cover layers...\'' test
+  // above), so mismatched instances give reliably different totals if the wrong one is used.
+  it(
+    'uses the instance whose container actually contains the target, not another instance passed '
+    + 'alongside it',
+    () => {
+      document.body.innerHTML = `
+        <div class="root-a">
+          <section class="scene-a"></section>
+          <section class="target-a"></section>
+        </div>
+        <div class="root-b">
+          <section class="scene-b"></section>
+        </div>
+      `;
+
+      const controllerA = new StickyScrollTrigger(query('.root-a'));
+      const controllerB = new StickyScrollTrigger(query('.root-b'));
+      const target = query('.target-a');
+
+      controllerA.createStickyTrigger({ trigger: query('.scene-a'), end: '+=500' });
+      controllerA.refresh();
+      controllerB.createStickyTrigger({ trigger: query('.scene-b'), end: '+=700' });
+      controllerB.refresh();
+
+      const viaOwner = controllerA.resolveScrollPosition(target, 'top top');
+      // controllerB, the wrong instance, is listed first: registration order must not matter,
+      // only actual containment.
+      const viaStatic = StickyScrollTrigger.getScrollTop(target, [controllerB, controllerA]);
+
+      expect(viaStatic).toBe(viaOwner);
+    },
+  );
+
+  it(
+    'measures an element outside every given instance\'s container directly, applying none of '
+    + 'their dwell',
+    () => {
+      document.body.innerHTML = `
+        <div class="root-a">
+          <section class="scene-a"></section>
+        </div>
+        <section class="outside"></section>
+      `;
+
+      const controllerA = new StickyScrollTrigger(query('.root-a'));
+      const outside = query('.outside');
+      const before = StickyScrollTrigger.getScrollTop(outside, [controllerA]);
+
+      controllerA.createStickyTrigger({ trigger: query('.scene-a'), end: '+=500' });
+      controllerA.refresh();
+
+      const after = StickyScrollTrigger.getScrollTop(outside, [controllerA]);
+
+      expect(after).toBe(before);
+    },
+  );
+});
+
 // createResolvedTrigger is just a thin wrapper that calls resolveScrollPosition once
 // for trigger/start and once for endTrigger/end (it never registers into layers, so it's
 // outside refresh()'s scope). This only checks that the built result (ScrollTrigger.Vars)

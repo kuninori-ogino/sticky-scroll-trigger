@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-07
+
+- `StickyScrollTrigger.getScrollTop` (static): resolves an element's scroll-top position across multiple instances, picking whichever one's shared container actually contains it
+
 ## [0.1.0] - 2026-08-06
 
 - `new StickyScrollTrigger(root)`: create one instance per container, then call the methods below on it

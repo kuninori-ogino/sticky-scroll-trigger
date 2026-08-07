@@ -19,6 +19,7 @@
         <section class="block block--intro">
           <h1>Sticky pin behavior check</h1>
           <p>Scroll down to see each section pin temporarily with native <code>position:sticky</code> instead of GSAP pinning, with effects running only during the pin window.<br>Verify that the displayed position stays stable, no matter how often pinning starts and ends.</p>
+          <p>This sticky-based pinning limits plain in-page anchor links: a native fragment jump doesn't account for the Scene layers' dwell, so <code>resolveScrollPosition()</code> controls where it lands instead. <a href="#link">Jump to the "Plain GSAP ScrollTrigger" section</a> (<code>anchorScroll.ts</code>).</p>
         </section>
 
         <section class="filler">
@@ -68,7 +69,7 @@
         </section>
 
         <!-- Everything from here down is a plain GSAP ScrollTrigger effect that uses neither this library's createStickyTrigger nor createOverlapScroll. -->
-        <section class="plainSection plainSection--fade">
+        <section id="link" class="plainSection plainSection--fade">
           <h2>Plain GSAP ScrollTrigger</h2>
           <p>This section uses only standard <code>gsap.fromTo</code> + <code>scrollTrigger</code> scrub, without <code>createStickyTrigger</code> or <code>createOverlapScroll</code>. Position is corrected via <code>resolveScrollPosition()</code>, so it stays in sync with the actual scroll distance.</p>
           <div class="plainSection__box">fromTo + scrub</div>
