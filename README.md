@@ -4,7 +4,7 @@ A ScrollTrigger helper that uses native `position:sticky` instead of GSAP pinnin
 
 > ScrollTrigger is part of GSAP®, a Webflow product. This project is an independent, unofficial helper and is not affiliated with or endorsed by Webflow.
 
-The only dependency is GSAP's ScrollTrigger types. The implementation is 6 files in `src/`. This package is not published to npm; copy `src/` into your project.
+The only dependency is GSAP's ScrollTrigger types.
 
 - Pin multiple scenes in sequence, sharing a single container (no gap opens up from adjacent elements scrolling away while one is pinned)
 - Pinning is handled 100% by the browser's `position:sticky`; GSAP only tweens the effect's own properties while the freeze window is active
@@ -14,26 +14,29 @@ See the repository's `demo/index.html` + `demo/src/main.ts` for a live example, 
 
 ## Requirements
 
-| requirement      | description                                                                                                                                    |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| GSAP             | 3.x, with the `ScrollTrigger` plugin already registered via `gsap.registerPlugin`                                                              |
-| TypeScript       | Type definitions use GSAP's global types (`ScrollTrigger.Vars`). For plain JavaScript, drop the type annotations and rename the files to `.js` |
-| Browser          | Must support `position:sticky` (no `overflow:hidden`/`clip` on any ancestor of a pinned element)                                               |
-| Scroll direction | Vertical scrolling only (`horizontal` is not supported)                                                                                        |
+| requirement      | description                                                                                                                                                 |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GSAP             | 3.x, with the `ScrollTrigger` plugin already registered via `gsap.registerPlugin`                                                                           |
+| TypeScript       | Optional. The published `.d.ts` uses GSAP's global types (`ScrollTrigger.Vars`); plain JavaScript projects can `import` the same `dist/` build without them |
+| Browser          | Must support `position:sticky` (no `overflow:hidden`/`clip` on any ancestor of a pinned element)                                                            |
+| Scroll direction | Vertical scrolling only (`horizontal` is not supported)                                                                                                     |
+| Module system    | ESM only (`import`) or a `<script>` tag via the global build; CommonJS (`require`) is not supported                                                         |
 
 ## Installation
 
-To use this in another project, copy the entire [src/](src/) directory (you can omit `*.test.ts` if you don't need it).
+```bash
+npm install gsap sticky-scroll-trigger
+```
 
-If you'd rather not ship the TypeScript source as-is, `npm run build:lib` produces:
+`gsap` (with its `ScrollTrigger` plugin) is a peer dependency; register the plugin yourself (see [Usage](#usage) below).
 
-- `dist/StickyScrollTrigger.js`: ESM build, plus a minified `dist/StickyScrollTrigger.min.js`
-- `dist/StickyScrollTrigger.d.ts`: single bundled type definition
-- `dist/StickyScrollTrigger.global.js`: IIFE build exposing `window.StickyScrollTrigger` for `<script>` tags, plus a minified `dist/StickyScrollTrigger.global.min.js`
+For plain `<script>` usage without a bundler, an IIFE build is also published, exposing `window.StickyScrollTrigger`:
 
-Since this isn't published as an npm package, copy the contents of `dist/` into your own project or reference it via a local path.
+```html
+<script src="https://cdn.jsdelivr.net/npm/sticky-scroll-trigger/dist/StickyScrollTrigger.global.min.js"></script>
+```
 
-Consumers should only rely on the exports of `src/index.ts` (or the build output in `dist/`). The other files under `src/` are internal modules and should not be treated as public API.
+Consumers should only rely on the exports of `sticky-scroll-trigger` (or `window.StickyScrollTrigger` for the global build). The internal modules under `src/` are not part of the public API.
 
 ## Usage
 
