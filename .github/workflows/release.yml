@@ -7,6 +7,9 @@ on:
 
 permissions:
   contents: write
+  # Lets `npm publish` authenticate via OIDC instead of a stored token, once this repo and
+  # workflow file are registered as the package's trusted publisher on npmjs.com.
+  id-token: write
 
 jobs:
   release:
@@ -35,6 +38,15 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build:lib
+
+      # Trusted publishing requires npm 11.5.1+; the version bundled with .nvmrc's Node isn't
+      # guaranteed to be new enough, so this updates npm itself before publishing.
+      - run: npm install -g npm@latest
+
+      # No token needed: with `id-token: write` above and this repo/workflow registered as the
+      # package's trusted publisher on npmjs.com, npm authenticates via OIDC automatically.
+      - name: Publish to npm
+        run: npm publish
 
       # If the zip's timestamp were the CI run time, a rebuild would produce a diff, so this
       # matches it to the tag's commit date instead. Keeping the UTC extended timestamp (the UT
