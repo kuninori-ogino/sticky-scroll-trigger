@@ -27,6 +27,10 @@ export default defineConfig({
       name: 'webkit',
       use: { ...devices['Desktop Safari'] },
     },
+    {
+      name: 'firefox',
+      use: { ...devices['Desktop Firefox'] },
+    },
   ],
   webServer: {
     // The root ("/") has no index.html and 404s, so startup completion is judged

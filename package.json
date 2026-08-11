@@ -43,7 +43,7 @@
     "format:check": "eslint . && prettier --check \"**/*.md\" \"**/*.{json,css}\"",
     "test": "vitest run",
     "test:watch": "vitest",
-    "playwright:install": "playwright install chromium webkit",
+    "playwright:install": "playwright install chromium webkit firefox",
     "test:e2e": "playwright test --config e2e/playwright.config.ts",
     "prepare": "husky",
     "prepublishOnly": "npm run build:lib"
