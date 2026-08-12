@@ -20,6 +20,7 @@ import {
   unwrapPin,
   wrapPin,
 } from './dom';
+import { createScrollMarginSync } from './scrollMargin';
 import { buildStructure, isDomOrderStale, unbuildStructure } from './structure';
 import { planLayers } from './freezeWindow';
 import type { EndSpec, LayerMeasurement, StartSpec } from './freezeWindow';
@@ -42,6 +43,8 @@ import type {
   CreateStickyTriggerOptions,
   Layer,
   PinLayer,
+  SceneLayer,
+  StickyScrollTriggerOptions,
 } from './types';
 
 export type {
@@ -49,6 +52,7 @@ export type {
   CreateResolvedTriggerOptions,
   CreateStickyPinOptions,
   CreateStickyTriggerOptions,
+  StickyScrollTriggerOptions,
 } from './types';
 export type { EndInput, EndValue, PositionInput } from './position';
 
@@ -248,9 +252,17 @@ export default class StickyScrollTrigger {
   // Pin layers: a mechanism independent of Scene/Cover layers, implemented entirely with
   // plain position:sticky.
   #pinLayers: PinLayer[] = [];
+  // Keeps scroll-margin-top on same-page-link targets in step with the current freeze windows,
+  // so the browser's own scroll-into-view accounts for Scene layer dwell (see scrollMargin.ts).
+  #scrollMarginSync: ReturnType<typeof createScrollMarginSync>;
+  #scrollMarginTargets: string | null;
 
-  constructor(root: string | HTMLElement) {
+  constructor(root: string | HTMLElement, options: StickyScrollTriggerOptions = {}) {
     this.#rootElement = resolveRoot(root);
+    this.#scrollMarginSync = createScrollMarginSync(this.#rootElement);
+    this.#scrollMarginTargets = options.scrollMarginTargets === undefined
+      ? '[id]'
+      : options.scrollMarginTargets;
   }
 
   #unbuild() {
@@ -558,6 +570,23 @@ export default class StickyScrollTrigger {
     // A pin layer's spacer height spans the Scene layer dwell padding between trigger
     // and endTrigger, so it's measured only after #refreshScenesAndCovers has finalized padding.
     this.#refreshPins(viewportHeight);
+    // Last: the values written here are derived from the freeze windows the passes above settle,
+    // and nothing measures layout afterwards, so writing style here can't disturb anything.
+    this.#syncScrollMargins();
+  }
+
+  // Hands the current Scene layer freeze windows to the scroll-margin bookkeeping, along with the
+  // outermost container as the host for the scroll-driven ramps. That container is built by this
+  // module and is an ancestor of every target, which is what lets the ramps reach them by
+  // inheritance without ever styling an element the caller owns.
+  #syncScrollMargins(): void {
+    this.#scrollMarginSync.sync(
+      this.#layers
+        .filter((layer): layer is SceneLayer => layer.kind === 'scene')
+        .map(({ trigger, freezeStart, freezeEnd }) => ({ trigger, freezeStart, freezeEnd })),
+      this.#outermostContainer,
+      this.#scrollMarginTargets,
+    );
   }
 
   // Throws `message` if any entry in `list` already uses `trigger`. Shared by #registerLayer and
@@ -931,6 +960,8 @@ export default class StickyScrollTrigger {
     if (this.#destroyed) return;
 
     this.#destroyed = true;
+    // Before #unbuild removes the outermost container, which hosts the scroll-driven ramps.
+    this.#scrollMarginSync.restore();
     this.#layers.forEach((layer) => {
       if (layer.kind === 'cover') this.#coverRestoreByLayer.get(layer)?.();
     });

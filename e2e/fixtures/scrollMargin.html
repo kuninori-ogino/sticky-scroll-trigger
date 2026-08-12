@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>scrollMargin fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      /* Deliberately shorter than the viewport, so both scenes really do freeze the whole shared
+         container and the dwell lag this fixture exists to correct is genuinely there. */
+      .scene {
+        height: 50vh;
+        background: #cde;
+      }
+      .block {
+        height: 400px;
+      }
+      .lead {
+        height: 400px;
+      }
+      .tail {
+        height: 1200px;
+      }
+      /* An author's own scroll-margin-top, the usual fixed-header offset. The correction has to
+         be added to this, not written over it, and re-read on every refresh() (not just the
+         first) so a later change to --headerHeight (a responsive breakpoint, or JS updating it)
+         keeps applying instead of leaving the correction stuck on whatever the value was when
+         this module first saw the element. */
+      :root {
+        --headerHeight: 40px;
+      }
+      #withAuthorMargin {
+        scroll-margin-top: var(--headerHeight);
+      }
+      /* Fixed so a link is clickable at any scroll position, and out of the flow so it never
+         shifts anything the spec measures. */
+      nav {
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: 9;
+      }
+    </style>
+  </head>
+  <body>
+    <nav>
+      <a id="link-beforeScene1" href="#beforeScene1">0</a>
+      <a id="link-afterScene1" href="#afterScene1">1</a>
+      <a id="link-afterScene2" href="#afterScene2">2</a>
+      <a id="link-withAuthorMargin" href="#withAuthorMargin">3</a>
+    </nav>
+    <div class="lead"></div>
+    <div class="container__inner">
+      <div id="beforeScene1" class="block"></div>
+      <section id="scene1" class="scene"></section>
+      <div id="afterScene1" class="block"></div>
+      <section id="scene2" class="scene"></section>
+      <div id="afterScene2" class="block"></div>
+      <div id="withAuthorMargin" class="block"></div>
+    </div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const params = new URLSearchParams(location.search);
+      // ?scrollMarginTargets=none opts out entirely, which is what the "leaves scroll-margin-top
+      // alone" case checks against.
+      const scrollMarginTargets = params.get('scrollMarginTargets') === 'none' ? null : undefined;
+      const sticky = new StickyScrollTrigger('.container__inner', { scrollMarginTargets });
+
+      sticky.createStickyTrigger({ trigger: '#scene1', start: 'top top', end: '+=800' });
+      sticky.createStickyTrigger({ trigger: '#scene2', start: 'top top', end: '+=800' });
+
+      sticky.refresh();
+
+      // No GSAP registration here: the spec drives scroll position itself, so nothing should
+      // re-trigger refresh() behind that control.
+      window.__inlineScrollMarginTop = (id) => document.getElementById(id).style.scrollMarginTop;
+      window.__computedScrollMarginTop = (id) =>
+        getComputedStyle(document.getElementById(id)).scrollMarginTop;
+      window.__scrollDrivenAnimationsSupported = () =>
+        CSS.supports('animation-timeline', 'scroll()');
+      window.__destroy = () => sticky.destroy();
+      // Simulates a responsive header height change (or JS updating the same variable), then
+      // re-syncs. sticky.refresh() (not just a re-read) is what's under test: the correction has
+      // to notice the author's value changed, not just report whatever it saw once.
+      window.__setHeaderHeightAndRefresh = (px) => {
+        document.documentElement.style.setProperty('--headerHeight', `${px}px`);
+        sticky.refresh();
+      };
+    </script>
+  </body>
+</html>

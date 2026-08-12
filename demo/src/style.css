@@ -11,17 +11,25 @@
   background: var(--bg);
 }
 
-* {
-  box-sizing: border-box;
+/* Native fragment navigation (no JS) still runs through this: it's the browser's own scrolling,
+   just aimed via scroll-margin-top below rather than by a click handler. Deliberately not
+   scroll-behavior: smooth: see src/scrollMargin.ts's "Known limitation: Chromium + native
+   smooth scrolling" for why that combination can't be made reliably correct there when the jump
+   starts mid-dwell. */
+html {
+  /* The fixed header's own height. CSSOM says scroll-padding-top (scroller) and scroll-margin-top
+     (target) add together, which in theory would let this live on the scroller independently of
+     refresh()'s own dwell correction, but real Firefox (verified via Playwright, not inferred
+     from spec text) drops scroll-padding-top entirely on a fragment jump once any position:sticky
+     element on the page has been engaged, landing 56px (exactly the header height) short every
+     time. Folding it into --sst-scroll-margin-top-offset instead keeps only scroll-margin-top in
+     play, sidestepping the bug, and still inherits like any custom property, so setting it once
+     here covers every target. */
+  --sst-scroll-margin-top-offset: var(--headerHeight);
 }
 
-/* Anchor-scroll offset for in-page links (see anchorScroll.ts's getScrollOffsetTop), set directly
-   on each target rather than on html: scroll-margin-top applies to the target itself, so unlike
-   scroll-padding-top (a scroller-only property), it can vary per target without any inheritance
-   trick. Combining this with scroll-padding-top on html would double the offset (the two add),
-   so html deliberately doesn't also set scroll-padding-top. */
-#link {
-  scroll-margin-top: var(--headerHeight);
+* {
+  box-sizing: border-box;
 }
 
 body {

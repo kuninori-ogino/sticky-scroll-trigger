@@ -839,3 +839,367 @@ test('destroy() restores the cover\'s lifted position/z-index and unwinds the DO
   expect(styleAfterDestroy.zIndex).toBe('auto');
   expect(await triggerIsDirectRootChild()).toBe(true);
 });
+
+// scroll-margin-top synchronisation (see src/scrollMargin.ts). Nested sticky decouples an
+// element's document position from the scroll position at which it reaches the viewport top, so
+// the browser's own one-shot scroll-into-view calculation lands short. refresh() declares that
+// difference through scroll-margin-top instead of asking the caller to intercept anything. None
+// of this can be checked without layout, so it lives here rather than in index.test.ts.
+
+// Scans for the scroll position at which an element's top edge first reaches the viewport top.
+// Sticky makes the painted position a non-linear function of scroll, so this is walked rather
+// than derived.
+const findArrivalScroll = (page: import('@playwright/test').Page, id: string) =>
+  page.evaluate((elementId) => {
+    const el = document.getElementById(elementId) as HTMLElement;
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+
+    for (let scroll = 0; scroll <= max; scroll += 1) {
+      window.scrollTo(0, scroll);
+
+      if (el.getBoundingClientRect().top <= 0) return scroll;
+    }
+
+    return null;
+  }, id);
+
+// Performs one native jump and reports where it landed. `how` covers both routes into the same
+// CSSOM View algorithm: a real fragment navigation, and a direct scrollIntoView call.
+// The scroll-driven ramps that carry the scroll-dependent half of the correction are advanced by
+// the browser, not by this module, so a frame has to pass after moving the scroll position before
+// the jump reads them; otherwise it would aim using the previous position's value.
+const jumpTo = async (
+  page: import('@playwright/test').Page,
+  id: string,
+  from: number,
+  how: 'anchorClick' | 'scrollIntoView',
+) => {
+  const nextFrame = () =>
+    page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+
+  await page.evaluate(() => {
+    history.replaceState(null, '', location.pathname + location.search);
+  });
+  await page.evaluate((scroll) => window.scrollTo(0, scroll), from);
+  await nextFrame();
+
+  if (how === 'anchorClick') await page.click(`#link-${id}`);
+  else await page.evaluate((elementId) => document.getElementById(elementId)?.scrollIntoView(), id);
+
+  await nextFrame();
+
+  return page.evaluate((elementId) => ({
+    scroll: Math.round(window.scrollY),
+    rectTop: Math.round(
+      (document.getElementById(elementId) as HTMLElement).getBoundingClientRect().top,
+    ),
+  }), id);
+};
+
+test('a native same-page anchor lands exactly on target, from any starting scroll position', async ({
+  page,
+}) => {
+  // Runs on every engine unconditionally: the scroll-dependent half of the correction rides a CSS
+  // scroll-driven animation where supported, and an equivalent `scroll` listener where it isn't
+  // (Firefox, as of this writing); see scrollMargin.ts's module doc comment. Both are expected
+  // to be exact from any starting position, not just from above the freeze windows.
+  await page.goto('/fixtures/scrollMargin.html');
+
+  for (const id of ['beforeScene1', 'afterScene1', 'afterScene2']) {
+    const arrival = await findArrivalScroll(page, id);
+
+    for (const how of ['anchorClick', 'scrollIntoView'] as const) {
+      for (const from of [0, 700, 1400, 2600, 3500]) {
+        const landed = await jumpTo(page, id, from, how);
+
+        expect(
+          landed,
+          `#${id} via ${how} from ${from}`,
+        ).toEqual({ scroll: arrival, rectTop: 0 });
+      }
+    }
+  }
+});
+
+// Without the correction the same jumps land short by every preceding layer's dwell, which is
+// what makes the numbers above meaningful rather than trivially true.
+test('the same anchors land short of their target when the correction is opted out of', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/scrollMargin.html?scrollMarginTargets=none');
+
+  expect(
+    await page.evaluate(() =>
+      (window as never as { __inlineScrollMarginTop: (id: string) => string })
+        .__inlineScrollMarginTop('afterScene1'),
+    ),
+  ).toBe('');
+
+  const arrival = await findArrivalScroll(page, 'afterScene1');
+  const landed = await jumpTo(page, 'afterScene1', 0, 'anchorClick');
+
+  // Exactly one preceding layer's dwell short, leaving the target still below the viewport top.
+  expect(landed.scroll).toBe((arrival ?? 0) - 800);
+  expect(landed.rectTop).toBeGreaterThan(0);
+});
+
+// An author's own scroll-margin-top (a fixed-header offset, typically) has to keep applying: the
+// correction is added to it, not written over it.
+test('an author\'s own scroll-margin-top still applies on top of the correction', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/scrollMargin.html');
+
+  const arrival = await findArrivalScroll(page, 'withAuthorMargin');
+  const landed = await jumpTo(page, 'withAuthorMargin', 0, 'anchorClick');
+
+  // 40px of author margin means stopping 40px earlier, leaving the element 40px below the top.
+  expect(landed.scroll).toBe((arrival ?? 0) - 40);
+  expect(landed.rectTop).toBe(40);
+});
+
+test('destroy() hands scroll-margin-top back and removes the injected stylesheet', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/scrollMargin.html');
+
+  expect(
+    await page.evaluate(() =>
+      (window as never as { __inlineScrollMarginTop: (id: string) => string })
+        .__inlineScrollMarginTop('afterScene1'),
+    ),
+  ).not.toBe('');
+
+  const styleCountBefore = await page.evaluate(() => document.head.querySelectorAll('style').length);
+
+  await page.evaluate(() => (window as never as { __destroy: () => void }).__destroy());
+
+  expect(
+    await page.evaluate(() =>
+      (window as never as { __inlineScrollMarginTop: (id: string) => string })
+        .__inlineScrollMarginTop('afterScene1'),
+    ),
+  ).toBe('');
+  // The author's own value survives the round trip untouched.
+  expect(
+    await page.evaluate(() =>
+      (window as never as { __computedScrollMarginTop: (id: string) => string })
+        .__computedScrollMarginTop('withAuthorMargin'),
+    ),
+  ).toBe('40px');
+  expect(await page.evaluate(() => document.head.querySelectorAll('style').length)).toBe(
+    styleCountBefore - 1,
+  );
+});
+
+// Regression test for a real bug: on a browser that doesn't support
+// `animation-timeline: scroll(...)` (Firefox, as of this writing), that whole declaration is
+// dropped as invalid, leaving `animation-timeline` at its initial value `auto`. Under `auto`,
+// the `animation` shorthand this module also writes is an ordinary time-based animation with no
+// explicit duration, i.e. 0s, and a 0-duration animation with fill-mode `both` still runs,
+// instantly: every custom property jumped straight to its keyframe's `to` value (the layer's
+// full dwell) the moment the page loaded, rather than staying at 0px the way an unset var()
+// should. scrollMargin.ts now gates the whole animation rule behind
+// `@supports (animation-timeline: scroll())`, so an unsupporting browser never runs it at all:
+// every var() genuinely falls back to 0px, and a `scroll` listener (verified elsewhere by the
+// "lands exactly" test above, which now runs unconditionally) supplies the same values instead.
+// This only reproduces on an engine that lacks the feature, so it's meaningless to run on
+// Chromium/WebKit (where it would pass either way).
+test('an engine without animation-timeline: scroll() never runs the animation shorthand at all', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== 'firefox', 'only meaningful without animation-timeline: scroll() support');
+
+  await page.goto('/fixtures/scrollMargin.html');
+
+  expect(
+    await page.evaluate(() =>
+      (window as never as { __scrollDrivenAnimationsSupported: () => boolean })
+        .__scrollDrivenAnimationsSupported(),
+    ),
+  ).toBe(false);
+
+  // At load, before any 'scroll' event has fired, every consumed-dwell custom property must
+  // already read back as 0px (the correct value at scroll 0, and also the regression guard: the
+  // bug this test is named for produced the layer's full dwell here instead).
+  const ramps = await page.evaluate(() => {
+    const cs = getComputedStyle(document.getElementById('afterScene1') as HTMLElement);
+
+    return [0, 1].map((i) => cs.getPropertyValue(`--sst0-c${i}`).trim());
+  });
+
+  expect(ramps.every((value) => value === '' || value === '0px')).toBe(true);
+});
+
+// Firefox never runs the CSS animation (see the test above), so the only thing keeping its
+// consumed-dwell custom properties current is the `scroll` listener scrollMarginTop.ts installs
+// in that case. This checks that listener actually tracks a scroll position mid-freeze-window,
+// not just the load-time (scroll 0) case every test above happens to also cover.
+test('the scroll listener fallback tracks a mid-freeze-window scroll position, not just scroll 0', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== 'firefox', 'only meaningful without animation-timeline: scroll() support');
+
+  await page.goto('/fixtures/scrollMargin.html');
+
+  // scrollMargin.ts writes its animation-range (real, absolute scroll positions) into the
+  // injected stylesheet regardless of engine support, and reading it back is the same reliable way
+  // the scratch investigation used, rather than guessing a scroll position from the fixture's own
+  // layout (lead/block/scene heights) and risking landing outside scene1's actual freeze window.
+  const scene1 = await page.evaluate(() => {
+    const styleEl = Array.from(document.head.querySelectorAll('style'))
+      .find((s) => s.textContent?.includes('--sst0-c0'));
+    const match = styleEl?.textContent?.match(/animation-range:([\d.]+)px ([\d.]+)px/);
+
+    if (!match) return null;
+
+    return { start: parseFloat(match[1]), end: parseFloat(match[2]) };
+  });
+
+  if (scene1 === null) throw new Error('could not read scene1\'s animation-range');
+
+  const dwell = scene1.end - scene1.start;
+  const midDwell = Math.round((scene1.start + scene1.end) / 2);
+
+  await page.evaluate((scroll) => window.scrollTo(0, scroll), midDwell);
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+
+  const consumed = await page.evaluate(() => parseFloat(
+    getComputedStyle(document.getElementById('afterScene1') as HTMLElement)
+      .getPropertyValue('--sst0-c0'),
+  ));
+
+  expect(consumed).toBeGreaterThan(0);
+  expect(consumed).toBeLessThan(dwell);
+});
+
+// Regression test for a real bug: the author's scroll-margin-top used to be read only once, the
+// first time this module saw a target, and then never again: reading it back on a later sync
+// would have returned this module's own calc(), not the author's value, so re-reading on every
+// pass was skipped rather than distinguishing the two. That meant a responsive header height (or
+// any other author change to the same property) got silently stuck at whatever value was in
+// effect the moment the target was first synced. scrollMargin.ts's sync() now resets each target
+// to its pre-module inline value before re-reading, mirroring the reset-then-measure two-pass
+// pattern refreshScenesAndCovers already uses for the same reason.
+test('a change to the author\'s scroll-margin-top is picked up on a later refresh()', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/scrollMargin.html');
+
+  const before = await jumpTo(page, 'withAuthorMargin', 0, 'anchorClick');
+
+  expect(before.rectTop).toBe(40); // sanity check: the original 40px author margin is in effect
+
+  await page.evaluate(() =>
+    (window as never as { __setHeaderHeightAndRefresh: (px: number) => void })
+      .__setHeaderHeightAndRefresh(120));
+
+  const arrival = await findArrivalScroll(page, 'withAuthorMargin');
+  const after = await jumpTo(page, 'withAuthorMargin', 0, 'anchorClick');
+
+  expect(after.scroll).toBe((arrival ?? 0) - 120);
+  expect(after.rectTop).toBe(120);
+
+  // And a later refresh() with no further change is stable, rather than drifting from
+  // repeatedly folding the same author value back in.
+  await page.evaluate(() =>
+    (window as never as { __setHeaderHeightAndRefresh: (px: number) => void })
+      .__setHeaderHeightAndRefresh(120));
+
+  const stable = await jumpTo(page, 'withAuthorMargin', 0, 'anchorClick');
+
+  expect(stable).toEqual(after);
+});
+
+// --sst-scroll-margin-top-offset (see scrollMargin.ts's own "Nudging the landing spot on
+// purpose" comment): a reserved custom property for deliberately landing short of or past a
+// target, independent of both the dwell correction and the author's own scroll-margin-top.
+// Being an ordinary var(), the browser reads it live at scroll-into-view time, so unlike the
+// author-value correction this needs no refresh() call to take effect.
+test('--sst-scroll-margin-top-offset nudges the landing spot without a refresh() call, in either direction', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/scrollMargin.html');
+
+  const arrival = await findArrivalScroll(page, 'afterScene1');
+
+  const jump = async (offsetPx: number | null) => {
+    await page.evaluate((px) => {
+      const el = document.getElementById('afterScene1') as HTMLElement;
+
+      if (px === null) el.style.removeProperty('--sst-scroll-margin-top-offset');
+      else el.style.setProperty('--sst-scroll-margin-top-offset', `${px}px`);
+      // Deliberately no refresh() call here: the whole point is that this applies live.
+    }, offsetPx);
+
+    return jumpTo(page, 'afterScene1', 0, 'anchorClick');
+  };
+
+  expect(await jump(null)).toEqual({ scroll: arrival, rectTop: 0 });
+  // Positive: lands short, leaving the target further down the viewport.
+  expect(await jump(30)).toEqual({ scroll: (arrival ?? 0) - 30, rectTop: 30 });
+  // Negative: overshoots, leaving the target above the viewport top.
+  expect(await jump(-30)).toEqual({ scroll: (arrival ?? 0) + 30, rectTop: -30 });
+});
+
+// --sst-scroll-margin-top-offset inherits like any other custom property, so setting it once on
+// the shared container applies it to every target inside, without repeating it per element.
+test('--sst-scroll-margin-top-offset applies to every target when set once on an ancestor', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/scrollMargin.html');
+
+  await page.evaluate(() => {
+    document.querySelector('.container__inner')?.setAttribute(
+      'style',
+      '--sst-scroll-margin-top-offset: 20px',
+    );
+  });
+
+  for (const id of ['beforeScene1', 'afterScene1', 'afterScene2']) {
+    const arrival = await findArrivalScroll(page, id);
+    const landed = await jumpTo(page, id, 0, 'anchorClick');
+
+    expect(landed, `#${id}`).toEqual({ scroll: (arrival ?? 0) - 20, rectTop: 20 });
+  }
+});
+
+// Regression coverage for the pattern demo/src/style.css actually uses for its fixed header: a
+// site-wide offset folded into --sst-scroll-margin-top-offset has to keep working from a jump
+// started mid-dwell, not just from page top (the two tests above only jump from 0). This is also
+// what sidesteps a real native Firefox bug (verified via Playwright, reproduced even with a
+// completely static scroll-margin-top with this module's own code destroyed, so it's not
+// something this library's correction causes or can fix directly) where scroll-padding-top on
+// the scroller gets silently dropped from a fragment jump once any position:sticky element on
+// the page has been engaged, landing short by exactly the scroll-padding-top amount. Folding the
+// same offset into --sst-scroll-margin-top-offset instead means only scroll-margin-top is ever in
+// play, which this test confirms lands correctly even from mid-dwell.
+test('--sst-scroll-margin-top-offset combines correctly with the dwell correction on a jump started mid-dwell', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/scrollMargin.html');
+
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty('--sst-scroll-margin-top-offset', '20px');
+  });
+
+  const scene1 = await page.evaluate(() => {
+    const styleEl = Array.from(document.head.querySelectorAll('style'))
+      .find((s) => s.textContent?.includes('--sst0-c0'));
+    const match = styleEl?.textContent?.match(/animation-range:([\d.]+)px ([\d.]+)px/);
+
+    if (!match) return null;
+
+    return { start: parseFloat(match[1]), end: parseFloat(match[2]) };
+  });
+
+  if (scene1 === null) throw new Error('could not read scene1\'s animation-range');
+
+  const midDwell = Math.round((scene1.start + scene1.end) / 2);
+  const arrival = await findArrivalScroll(page, 'afterScene1');
+  const landed = await jumpTo(page, 'afterScene1', midDwell, 'anchorClick');
+
+  expect(landed).toEqual({ scroll: (arrival ?? 0) - 20, rectTop: 20 });
+});

@@ -27,6 +27,14 @@ export type PassThroughVars = Omit<
   | 'containerAnimation'
 >;
 
+export interface StickyScrollTriggerOptions {
+  // Which elements inside the shared container get their scroll-margin-top kept in sync, so the
+  // browser's own scroll-into-view accounts for Scene layer dwell (see scrollMargin.ts).
+  // Defaults to '[id]', the set that same-page fragment links and ':target' can actually reach.
+  // Pass null to leave scroll-margin-top alone entirely.
+  scrollMarginTargets?: string | null;
+}
+
 // trigger/endTrigger/cover also accept a CSS selector string, resolved via document.querySelector
 // (same as GSAP ScrollTrigger's own trigger/endTrigger).
 export interface CreateStickyTriggerOptions extends PassThroughVars {

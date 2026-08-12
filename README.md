@@ -9,6 +9,7 @@ The only dependency is GSAP's ScrollTrigger types.
 - Pin multiple scenes in sequence, sharing a single container (no gap opens up from adjacent elements scrolling away while one is pinned)
 - Pinning is handled 100% by the browser's `position:sticky`; GSAP only tweens the effect's own properties while the freeze window is active
 - The "section below rises up and covers the section above" effect (overlap scroll) is achieved without changing document height
+- Same-page anchor links, `scrollIntoView` and `:target` land where they should, with no code on your side (see [Same-page links](#same-page-links))
 
 See the repository's `demo/index.html` + `demo/src/main.ts` for a live example, and `ARCHITECTURE.md` for why nested sticky was chosen over `pin`, and how it works internally.
 
@@ -132,9 +133,13 @@ Avoid debounce logic that assumes it runs before GSAP's 200ms delay. Use `refres
 
 ## API
 
-### `new StickyScrollTrigger(root)`
+### `new StickyScrollTrigger(root, options?)`
 
 Creates an instance that treats `root` (a selector string or `HTMLElement`) as the shared container, exposing `createStickyTrigger`, `createOverlapScroll`, `createStickyPin`, `createResolvedTrigger`, `resolveScrollPosition`, `refresh`, and `destroy` as instance methods. Throws if the shared container can't be found. The class itself also exposes a static [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances) method, for resolving a position across more than one instance.
+
+| option                | default  | description                                                                                                                                                  |
+| --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scrollMarginTargets` | `'[id]'` | Which elements inside the shared container get their `scroll-margin-top` kept in sync (see [Same-page links](#same-page-links)). `null` disables it entirely |
 
 These are ordinary instance methods, not standalone functions, so always call them on the instance (`sticky.createStickyTrigger(...)`) rather than destructuring them out; a destructured method loses its `this` binding when called.
 
@@ -262,17 +267,23 @@ Using it with `pin: true` is discouraged because the element can jump when pinni
 
 Only the dwell of Scene layers registered via `createStickyTrigger` is accumulated here (`createOverlapScroll` never changes the document height, so it doesn't contribute to the lag).
 
-For a target that might belong to a _different_ instance than the one at hand (e.g. a same-page anchor link, where you don't know in advance which instance's shared container it lives in), use the static [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances) below instead.
+For a target that might belong to a _different_ instance than the one at hand, use the static [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances) below instead.
 
 ### `StickyScrollTrigger.getScrollTop(element, instances)`
 
 A static method, call it on the class itself (`StickyScrollTrigger.getScrollTop(...)`), not on an instance. Returns the absolute scroll position (px) at which `element`'s own top edge reaches the viewport's top edge (`'top top'`), picking whichever of the given `instances` actually has `element` inside its shared container. Applying the wrong instance's dwell to a target it never delayed would corrupt the result, the same way plain [`resolveScrollPosition`](#resolvescrollpositionelement-position) warns against.
 
+Same-page links don't need this: [`scrollMarginTargets`](#same-page-links) already makes them land correctly on their own. Reach for it when you want to drive the scroll yourself (custom easing, a scroll library, a target that isn't a fragment link). If you do, pass `scrollMarginTargets: null` so the correction isn't applied twice.
+
 ```ts
 import StickyScrollTrigger from "sticky-scroll-trigger";
 
-const stickyA = new StickyScrollTrigger(".sectionA");
-const stickyB = new StickyScrollTrigger(".sectionB");
+const stickyA = new StickyScrollTrigger(".sectionA", {
+  scrollMarginTargets: null,
+});
+const stickyB = new StickyScrollTrigger(".sectionB", {
+  scrollMarginTargets: null,
+});
 
 document.querySelectorAll('a[href^="#"]').forEach((anchor) => {
   anchor.addEventListener("click", (event) => {
@@ -304,6 +315,33 @@ If surviving layers' freeze windows change after kill, GSAP's cached `start`/`en
 Tears down the controller, restores the original DOM layout, and reverts z-order changes from `createOverlapScroll`. This is also the only entry point that can clean up cover layers that were never passed to `ScrollTrigger.create()`.
 
 It only cleans up DOM/styles managed by this module. You still need to kill active ScrollTrigger instances yourself. After `destroy()`, `createStickyTrigger`/`createOverlapScroll` throw and `refresh()` is a no-op. Calling `destroy()` twice is safe.
+
+## Same-page links
+
+Pinning decouples an element's position in the document from the scroll position at which it actually reaches the top of the viewport. The browser's own "scroll an element into view" is a single calculation made from the current layout, so on its own it lands short by every preceding scene's dwell. This is true of any pinning technique, GSAP's own `pin` included.
+
+`refresh()` declares that difference to the browser by keeping `scroll-margin-top` in sync on every element inside the shared container that matches `scrollMarginTargets` (`'[id]'` by default). Nothing else is needed: plain `<a href="#target">` links, `scrollIntoView()`, `:target` and a `#hash` on load all land correctly as written.
+
+```html
+<!-- Just works. No click handler, no scroll maths. -->
+<a href="#chapter3">Chapter 3</a>
+```
+
+- Your own `scroll-margin-top` still applies. The correction is added to whatever value the element already computes to, never written over it, re-read on every `refresh()` (so a later change, e.g. a responsive breakpoint, is picked up too), and `destroy()` puts the original inline value back
+- A fixed header's own offset is a different case: it applies to every scroll, not just ones inside the shared container. CSSOM View says `scroll-padding-top` (on the scroller) and `scroll-margin-top` (on the target) add together, so in principle the header offset could live on `scroll-padding-top` independently of this module's own correction. In practice, don't: real Firefox drops `scroll-padding-top` from a fragment jump once any `position:sticky` element on the page has engaged, landing short by exactly the header height (see ARCHITECTURE.md's "Firefox drops scroll-padding-top" for how this was verified). Fold the header offset into `--sst-scroll-margin-top-offset` instead (below), which sidesteps the combination entirely. See the repository's demo (`style.css`'s `html` rule)
+- To land deliberately short of or past a target, set the `--sst-scroll-margin-top-offset` custom property (a length) on it, or on any ancestor to cover several targets at once (it inherits like any other custom property). A positive value lands short, settling below the viewport's top edge instead of flush with it; negative overshoots. Being a plain `var()`, the browser reads it live at scroll-into-view time, so unlike the author-`scroll-margin-top` case above, no `refresh()` call is needed for a change to take effect
+
+  ```css
+  /* A fixed header's height, folded in here rather than into scroll-padding-top (see above). */
+  html {
+    --sst-scroll-margin-top-offset: 56px;
+  }
+  ```
+
+- The part of the correction that depends on where the jump was started from rides a CSS scroll-driven animation where [supported](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_scroll-driven_animations), so nothing runs on scroll there. Where it isn't (Firefox, as of this writing), a `scroll` listener supplies the same value instead, so the correction is exact from any starting position on every engine either way
+- Known limitation: Chromium's own `scroll-behavior: smooth` doesn't run a native fragment jump as one continuous animation, and can under- or overshoot if `scroll-margin-top` changes at any point before it settles (which a jump started mid-dwell does, on purpose). This isn't specific to how the value is driven (CSS or JS) and has no known workaround; if you need animated same-page scrolling in Chromium, drive it yourself with [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances) and `scrollTo({ top, behavior: 'smooth' })` to a precomputed target instead
+- The default `'[id]'` covers everything a fragment link or `:target` can reach. Find-in-page and keyboard focus can scroll to arbitrary elements, which this doesn't cover; widen the selector if that matters to you
+- To take this over yourself, pass `scrollMarginTargets: null` and compute positions with [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances) instead. Don't do both: a handler that reads `scroll-margin-top` and also applies `getScrollTop` would count the correction twice
 
 ## Position syntax
 
@@ -397,6 +435,7 @@ sticky.createOverlapScroll({
 - Using the same element as the `trigger` of two different `createStickyTrigger`/`createOverlapScroll`/`createStickyPin` calls throws
 - You must call `refresh()` once manually after registration. Window resize/load recomputation is automatically wired to GSAP's own `refreshInit`, but for layout changes that don't involve those (e.g. content height changes), call `ScrollTrigger.refresh()` yourself (see [Calling refresh](#calling-refresh))
 - Resizes from mobile browsers showing/hiding their address bar are absorbed automatically (see the repository's `ARCHITECTURE.md`, "Two-pass position measurement"), but other causes like `visualViewport` zoom are not handled
+- `refresh()` writes an inline `scroll-margin-top` on every element matching `scrollMarginTargets` inside the shared container, and appends one `<style>` element to `<head>` per instance. Both are undone by `destroy()`. Pass `scrollMarginTargets: null` to opt out (see [Same-page links](#same-page-links))
 - Don't nest one `StickyScrollTrigger` instance's shared container inside another's: once a target sits inside more than one, [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances)'s ownership check picks whichever instance is listed first, and neither instance's own dwell alone is actually correct for it
 
 ## License

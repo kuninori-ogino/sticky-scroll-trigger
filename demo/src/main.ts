@@ -2,7 +2,6 @@ import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import './style.css';
 import StickyScrollTrigger from 'sticky-scroll-trigger';
-import { bindAnchorScroll } from './anchorScroll';
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -104,8 +103,6 @@ if (spanScenePin) {
 }
 
 sticky.refresh();
-
-bindAnchorScroll([sticky]);
 
 // ---- Everything from here down is a plain GSAP ScrollTrigger effect that uses neither
 // this library's createStickyTrigger nor createOverlapScroll (it sits inside .container__inner,
