@@ -403,6 +403,19 @@ export default class StickyScrollTrigger {
     // sticky/spacer state.
     const restoreSceneCoverStickyState = this.#resetSceneCoverStickyState();
 
+    // Pass 2 throws on a rejected option value (a 'max' end) from inside the window where that
+    // reset has stripped every Scene/Cover layer's sticky CSS. Without the `finally` it would stay
+    // stripped until a later refresh() succeeded, and the bad value doesn't have to be there from
+    // the start: a function-valued option can begin returning one long after setup, on a refresh
+    // GSAP itself triggers.
+    try {
+      this.#refreshPinLayers(viewportHeight);
+    } finally {
+      restoreSceneCoverStickyState();
+    }
+  }
+
+  #refreshPinLayers(viewportHeight: number) {
     // Pass 1: reset everything first so the previous sticky/spacer height doesn't affect
     // the reading, then measure the natural position.
     this.#pinLayers.forEach((layer) => {
@@ -447,8 +460,6 @@ export default class StickyScrollTrigger {
       applyStickyPosition(layer.trigger, topPx);
       layer.inner.style.height = `${Math.max(0, height)}px`;
     });
-
-    restoreSceneCoverStickyState();
   }
 
   // Recomputes each layer's sticky top, padding height, and start/end. This disables sticky

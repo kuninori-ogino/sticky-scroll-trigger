@@ -1255,6 +1255,27 @@ describe('\'max\' end keyword', () => {
     );
   });
 
+  // refreshPins measures with every Scene/Cover layer's sticky state temporarily reset, and the
+  // rejection above throws from inside that window. Restoring on the way out keeps one bad option
+  // value from stripping the sticky CSS off every layer on the page and leaving it that way.
+  it('leaves Scene layer sticky state intact when a pin option throws mid-refresh', () => {
+    const { query, controller } = setup();
+    const stuckWrappers = () =>
+      [...document.querySelectorAll<HTMLElement>('div')]
+        .filter((el) => el.style.position === 'sticky').length;
+
+    controller.createStickyTrigger({ trigger: query('.scene'), start: 'top top', end: '+=500' });
+    controller.refresh();
+
+    const before = stuckWrappers();
+
+    controller.createStickyPin({ trigger: query('.inside'), endTrigger: query('.scene'), end: 'max' });
+
+    expect(() => controller.refresh()).toThrow(/'max' keyword/);
+    expect(before).toBeGreaterThan(0);
+    expect(stuckWrappers()).toBe(before);
+  });
+
   it('resolveScrollPosition resolves \'max\' without throwing, ignoring element entirely', () => {
     const { query, controller } = setup();
 

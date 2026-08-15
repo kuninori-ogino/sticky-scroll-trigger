@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A `'max'` end on `createStickyPin` no longer leaves every Scene/Cover layer's sticky CSS stripped until the next successful `refresh()`. The error it throws is unchanged
+
 ## [0.3.0] - 2026-08-12
 
 - Added automatic `scroll-margin-top` correction, so same-page links land correctly without any code on the caller's side; opt elements in or out via `new StickyScrollTrigger(root, { scrollMarginTargets })`, and fine-tune the landing position with the `--sst-scroll-margin-top-offset` custom property (see [Same-page links](README.md#same-page-links))
