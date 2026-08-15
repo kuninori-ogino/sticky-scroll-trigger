@@ -1006,6 +1006,162 @@ describe('createStickyPin()', () => {
     expect(trigger.style.top).toBe('39px');
   });
 
+  // A start clause resolves to a plain CSS top too, so it's verifiable here for the same reason.
+  // With every element height 0, only the viewport side of the clause remains (window.innerHeight,
+  // via measureViewportHeight's fallback).
+  it('resolves a start clause into trigger.style.top', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+
+    controller.createStickyPin({ trigger, endTrigger: query('.scene'), start: 'top 20%' });
+    controller.refresh();
+
+    expect(trigger.style.top).toBe(`${window.innerHeight * 0.2}px`);
+  });
+
+  it('supports a start clause whose element side is not \'top\' (e.g. \'bottom bottom\')', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+
+    controller.createStickyPin({ trigger, endTrigger: query('.scene'), start: 'bottom bottom' });
+    controller.refresh();
+
+    // In a real browser this would be viewportHeight - trigger.offsetHeight (see e2e).
+    expect(trigger.style.top).toBe(`${window.innerHeight}px`);
+  });
+
+  it('re-evaluates a function-valued start on every refresh()', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+    let offset = 10;
+
+    controller.createStickyPin({
+      trigger,
+      endTrigger: query('.scene'),
+      start: () => `top ${offset}px`,
+    });
+    controller.refresh();
+
+    expect(trigger.style.top).toBe('10px');
+
+    offset = 25;
+    controller.refresh();
+
+    expect(trigger.style.top).toBe('25px');
+  });
+
+  it('treats top: 39 and start: \'top 39px\' as the same pinned position', () => {
+    const { query, controller } = setup();
+
+    controller.createStickyPin({ trigger: query('.inside'), endTrigger: query('.scene'), top: 39 });
+    controller.createStickyPin({
+      trigger: query('.outside'),
+      endTrigger: query('.scene'),
+      start: 'top 39px',
+    });
+    controller.refresh();
+
+    expect(query('.inside').style.top).toBe('39px');
+    expect(query('.outside').style.top).toBe('39px');
+  });
+
+  it('throws when both start and top are given', () => {
+    const { query, controller } = setup();
+
+    expect(() =>
+      controller.createStickyPin({
+        trigger: query('.inside'),
+        endTrigger: query('.scene'),
+        start: 'top top',
+        top: 20,
+      }),
+    ).toThrow(/accepts either start or top, not both/);
+  });
+
+  // Reserving the bare-number slot for GSAP's meaning is what leaves a pin no way to spell a px
+  // distance in `start`, so the error points at the option that covers it.
+  it('throws on an absolute start (a bare number), pointing at top', () => {
+    const { query, controller } = setup();
+
+    controller.createStickyPin({ trigger: query('.inside'), endTrigger: query('.scene'), start: 20 });
+
+    expect(() => controller.refresh())
+      .toThrow(/start "20" is an absolute scroll position[\s\S]*top: 20/);
+  });
+
+  it('throws on an absolute start given as a numeric string', () => {
+    const { query, controller } = setup();
+
+    controller.createStickyPin({
+      trigger: query('.inside'),
+      endTrigger: query('.scene'),
+      start: '20',
+    });
+
+    expect(() => controller.refresh()).toThrow(/start "20" is an absolute scroll position/);
+  });
+
+  // Only a value that is nothing but a number is absolute; every clause spelling resolves exactly
+  // as GSAP resolves it, including the one-token forms that name the element's own side. Locking
+  // the boundary down here keeps a later change from moving a spelling across it unnoticed.
+  it('resolves every clause spelling the way GSAP does', () => {
+    const { query, controller } = setup();
+    const tops: Record<string, string> = {};
+
+    ([['a', 'top 20'], ['b', 'top 20px'], ['c', '20px'], ['d', '20 top']] as const)
+      .forEach(([key, start]) => {
+        document.body.insertAdjacentHTML('beforeend', `<div class="pin-${key}"></div>`);
+
+        const trigger = query(`.pin-${key}`);
+
+        controller.createStickyPin({ trigger, endTrigger: query('.scene'), start });
+        controller.refresh();
+
+        tops[key] = trigger.style.top;
+      });
+
+    expect(tops).toEqual({
+      a: '20px', // viewport side, px suffix omitted
+      b: '20px', // viewport side, explicit (and ignored) px suffix
+      c: '-20px', // one token with a unit: the element's own side, viewport side defaulting to top
+      d: '-20px', // two tokens: element side 20, viewport side top
+    });
+  });
+
+  it('accepts a negative top, pinning above the viewport\'s top edge', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+
+    controller.createStickyPin({ trigger, endTrigger: query('.scene'), top: -30 });
+    controller.refresh();
+
+    expect(trigger.style.top).toBe('-30px');
+  });
+
+  it('throws on a non-finite top', () => {
+    const { query, controller } = setup();
+
+    expect(() =>
+      controller.createStickyPin({
+        trigger: query('.inside'),
+        endTrigger: query('.scene'),
+        top: Number.NaN,
+      }),
+    ).toThrow(/top must be a finite number/);
+  });
+
+  it('throws on a function-valued top that returns a non-finite number', () => {
+    const { query, controller } = setup();
+
+    controller.createStickyPin({
+      trigger: query('.inside'),
+      endTrigger: query('.scene'),
+      top: () => Number.POSITIVE_INFINITY,
+    });
+
+    expect(() => controller.refresh()).toThrow(/top must be a finite number/);
+  });
+
   it('never restructures the DOM before refresh() (registration alone does nothing)', () => {
     const { query, controller } = setup();
     const trigger = query('.inside');

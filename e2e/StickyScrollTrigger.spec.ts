@@ -444,6 +444,56 @@ test('createStickyPin\'s absolute end (a plain number) sizes the spacer from the
   expect(result.pinInnerHeight).toBeCloseTo(expectedHeight, 0);
 });
 
+// The element side of createStickyPin's start clause resolves against trigger's own height:
+// 'bottom bottom' has to become a sticky top of viewportHeight - 60, a number the clause never
+// states. jsdom reports every height as 0, so that term only shows up in a real browser.
+test('createStickyPin\'s start clause pins trigger by its own bottom edge, and releases at endTrigger', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/pinStartClause.html');
+
+  const layout = await page.evaluate(() => {
+    const win = window as unknown as {
+      __pinInnerHeight: () => number;
+      __pinNaturalTop: () => number;
+      __endTriggerTop: () => number;
+    };
+
+    return {
+      innerHeight: win.__pinInnerHeight(),
+      naturalTop: win.__pinNaturalTop(),
+      releaseTop: win.__endTriggerTop(),
+      viewportHeight: window.innerHeight,
+      pinHeight: document.querySelector('.pin')!.getBoundingClientRect().height,
+    };
+  });
+
+  // height = releaseTop - triggerTop + top + triggerHeight, with top = viewportHeight - 60.
+  expect(layout.pinHeight).toBeCloseTo(60, 0);
+  expect(layout.innerHeight).toBeCloseTo(
+    layout.releaseTop - layout.naturalTop + layout.viewportHeight,
+    0,
+  );
+
+  const heldBottom = await page.evaluate((y) => {
+    window.scrollTo(0, y);
+
+    return document.querySelector('.pin')!.getBoundingClientRect().bottom;
+  }, layout.releaseTop - 300);
+
+  // Pinned by its bottom edge: it rests against the viewport's bottom, not its top.
+  expect(heldBottom).toBeCloseTo(layout.viewportHeight, 0);
+
+  const releasedBottom = await page.evaluate((y) => {
+    window.scrollTo(0, y);
+
+    return document.querySelector('.pin')!.getBoundingClientRect().bottom;
+  }, layout.releaseTop + 200);
+
+  // Past the release point it scrolls away with the page, 1:1 with the extra 200px.
+  expect(releasedBottom).toBeCloseTo(layout.viewportHeight - 200, 0);
+});
+
 test('resolveScrollPosition returns an absolute value (string or number) as-is, regardless of element', async ({ page }) => {
   await page.goto('/fixtures/absolutePosition.html');
 

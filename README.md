@@ -202,12 +202,19 @@ ScrollTrigger.create(
 sticky.refresh();
 ```
 
-| option       | default     | description                                                                                       |
-| ------------ | ----------- | ------------------------------------------------------------------------------------------------- |
-| `trigger`    | (required)  | The element to pin and show                                                                       |
-| `top`        | `0`         | Distance from the top of the viewport while pinned (this is literally sticky's `top`)             |
-| `endTrigger` | (required)  | Reference element for releasing the pin                                                           |
-| `end`        | `'top top'` | Which clause of `endTrigger` releases the pin (standard GSAP [position syntax](#position-syntax)) |
+| option       | default     | description                                                                                                                                                                                      |
+| ------------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `trigger`    | (required)  | The element to pin and show                                                                                                                                                                      |
+| `start`      | `'top top'` | Where `trigger` lands in the viewport while pinned, in [position syntax](#position-syntax), so the element's own side counts too (`'bottom bottom'` rests it against the viewport's bottom edge) |
+| `top`        | `0`         | A px distance from the viewport's top edge, as a plain number. `top: 20` is `start: 'top 20px'`                                                                                                  |
+| `endTrigger` | (required)  | Reference element for releasing the pin                                                                                                                                                          |
+| `end`        | `'top top'` | Which clause of `endTrigger` releases the pin (standard GSAP [position syntax](#position-syntax))                                                                                                |
+
+Here `start` means only "where it sits while pinned", not "when pinning begins" as it does for the other methods. Pinning begins the moment `trigger` reaches that position naturally, which is CSS's decision rather than a separate number to set, so a pin's position and the scroll position it engages at are the same setting.
+
+That's why `start` throws on an [absolute scroll position](#absolute-scroll-position) (`start: 20`, which GSAP reads as scroll position 20) instead of quietly treating it as a px distance. It's also why `top` is its own option: with `start`'s bare-number slot reserved for GSAP's meaning, a pin would otherwise have no way to say "20px below the top of the viewport" short of the string `'top 20px'`. `end` does take an absolute scroll position (`end: 3000` releases at scroll 3000), since a release point on the scroll axis is a real thing to ask for.
+
+Every clause spelling resolves exactly as it does elsewhere, including the one-token forms that name the element's own side: `'top 20px'` sits 20px _below_ the viewport's top edge, while `'20px'` sits 20px _above_ it.
 
 Internally, the element wrapping `trigger` renders beyond its own section's bounds, into the visual area of following elements. Make sure the ancestor section containing `trigger` isn't hidden behind a later section in DOM order (e.g. via `position: relative; z-index: ...`).
 
@@ -374,6 +381,8 @@ If the entire value is just a number (a plain JS number, or a string that's noth
 `'500 top'` (two tokens) and `'500px'` (a suffix) don't qualify for this; they resolve via the bare-number _offset_ row in the table above instead, same as GSAP.
 
 > [`createOverlapScroll`](#createoverlapscrolloptions)'s `start` doesn't support absolute scroll positions: a cover layer's sticky position is always computed relative to its own wrapper (see the repository's `ARCHITECTURE.md`), which has no equivalent for one. It throws instead; use a position clause.
+
+> [`createStickyPin`](#createstickypinoptions)'s `start` throws on one too, for a different reason than the cover layer above: the scroll position a pin engages at follows from where it sits, so an absolute value could only be honored by inverting it back into a viewport position the caller never chose (a trigger 2000px down the document asked to engage at scroll 500 would sit 1500px below the viewport's top edge, off-screen). Its `end` does take one.
 
 ## End syntax
 

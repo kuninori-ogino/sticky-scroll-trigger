@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinStartClause fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .lead {
+        height: 100vh;
+      }
+      .pin {
+        height: 60px;
+        background: #c33;
+      }
+      .middle {
+        height: 150vh;
+      }
+      .endTrigger {
+        height: 10px;
+      }
+      /* Tall enough that the release point stays reachable by scrolling. */
+      .tail {
+        height: 150vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="lead"></div>
+      <div class="pin"></div>
+      <div class="middle"></div>
+      <div class="endTrigger"></div>
+      <div class="tail"></div>
+    </div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      // No Scene layer is registered, so document height is untouched and every position the
+      // spec expects is plain arithmetic on the natural layout.
+      sticky.createStickyPin({
+        trigger: '.pin',
+        start: 'bottom bottom',
+        endTrigger: '.endTrigger',
+        end: 'top top',
+      });
+
+      sticky.refresh();
+
+      // These read the layout after refresh(), where wrapping has taken .pin out of flow (outer
+      // is height 0), so everything below it sits 60px higher than the plain CSS above suggests.
+      window.__pinInnerHeight = () =>
+        document.querySelector('.pin').parentElement.getBoundingClientRect().height;
+      window.__pinNaturalTop = () =>
+        document.querySelector('.pin').parentElement.parentElement.getBoundingClientRect().top
+        + window.scrollY;
+      window.__endTriggerTop = () =>
+        document.querySelector('.endTrigger').getBoundingClientRect().top + window.scrollY;
+    </script>
+  </body>
+</html>

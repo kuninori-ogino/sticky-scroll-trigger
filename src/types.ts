@@ -90,7 +90,15 @@ export type Layer = SceneLayer | CoverLayer;
 
 export interface CreateStickyPinOptions extends PassThroughVars {
   trigger: string | HTMLElement;
-  // Distance (px) from the viewport's top edge to pin at, while pinned. Defaults to 0.
+  // Where trigger lands in the viewport while pinned, in the same position syntax as the other
+  // methods' start (e.g. 'top top', 'bottom bottom', 'top 20%'). Defaults to 'top top'.
+  // A bare number means GSAP's absolute scroll position here, and passing one throws: a pin
+  // engages when position:sticky engages, so it has nothing to set on the scroll axis. Use `top`
+  // for a px distance instead.
+  start?: PositionInput;
+  // A px distance from the viewport's top edge, i.e. sticky's own CSS `top`, as a plain number:
+  // the one thing the syntax above can't spell. top: 20 is start: 'top 20px'. Defaults to 0.
+  // Passing both start and top is an error.
   top?: number | (() => number);
   endTrigger: string | HTMLElement;
   end?: PositionInput; // Which position of endTrigger releases the pin. Defaults to 'top top'.
@@ -101,7 +109,9 @@ export interface PinLayer {
   // Nesting assigned during build() (outer: height 0, inner: actual height).
   outer: HTMLDivElement | null;
   inner: HTMLDivElement | null;
-  top: number | (() => number);
+  // Always a position clause: createStickyPin normalizes a `top` option into one at registration
+  // (see its topToStartClause).
+  start: PositionInput;
   endTrigger: HTMLElement;
   end: PositionInput;
 }

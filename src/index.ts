@@ -222,6 +222,22 @@ const measureLayer = (
   };
 };
 
+// createStickyPin's `top`, converted into the clause form that everything downstream works with.
+// Why it's a separate option at all: see the rejection in #refreshPinLayers.
+const topToStartClause = (top: number | (() => number)): PositionInput => {
+  const toClause = (value: number): string => {
+    if (!Number.isFinite(value)) {
+      throw new Error(
+        `StickyScrollTrigger: createStickyPin's top must be a finite number, got ${value}.`,
+      );
+    }
+
+    return `top ${value}px`;
+  };
+
+  return typeof top === 'function' ? () => toClause(top()) : toClause(top);
+};
+
 // Both layers and pinLayers share the constraint "the same trigger element can't be registered
 // twice," so this check is factored out as common logic for both.
 const hasDuplicateTrigger = (
@@ -403,11 +419,11 @@ export default class StickyScrollTrigger {
     // sticky/spacer state.
     const restoreSceneCoverStickyState = this.#resetSceneCoverStickyState();
 
-    // Pass 2 throws on a rejected option value (a 'max' end) from inside the window where that
-    // reset has stripped every Scene/Cover layer's sticky CSS. Without the `finally` it would stay
-    // stripped until a later refresh() succeeded, and the bad value doesn't have to be there from
-    // the start: a function-valued option can begin returning one long after setup, on a refresh
-    // GSAP itself triggers.
+    // Pass 2 throws on a rejected option value (an absolute start, a 'max' end) from inside the
+    // window where that reset has stripped every Scene/Cover layer's sticky CSS. Without the
+    // `finally` it would stay stripped until a later refresh() succeeded, and the bad value
+    // doesn't have to be there from the start: a function-valued option can begin returning one
+    // long after setup, on a refresh GSAP itself triggers.
     try {
       this.#refreshPinLayers(viewportHeight);
     } finally {
@@ -442,9 +458,29 @@ export default class StickyScrollTrigger {
         );
       }
 
-      const topPx = resolveMaybeFn(layer.top);
+      const resolvedStart = resolveMaybeFn(layer.start);
       const triggerTop = documentTop(layer.trigger);
       const triggerHeight = layer.trigger.offsetHeight;
+
+      // A bare number keeps GSAP's meaning here: an absolute scroll position, which a pin has no
+      // way to act on. A Scene layer can honor one because its freeze window is a scroll range to
+      // begin with, and its sticky top is derived from that range (freezeWindow.ts's
+      // `structureTop - freezeStart`). A pin works in the opposite direction: topPx below is the
+      // only value it has, and the scroll position it engages at (triggerTop - topPx) is derived
+      // from that. Inverting it into topPx = triggerTop - start would mean already knowing
+      // triggerTop, and anyone who does would write the px distance directly, which is what
+      // `top` is for.
+      if (isAbsoluteFormat(resolvedStart)) {
+        throw new Error(
+          `StickyScrollTrigger: createStickyPin's start "${resolvedStart}" is an absolute scroll `
+          + 'position (GSAP treats any bare-number start this way). A pin can\'t act on one: it '
+          + 'engages when position:sticky engages, so start says where trigger sits in the '
+          + `viewport while pinned. Use the top option (top: ${resolvedStart}) for a px distance `
+          + `from the viewport's top edge, or a position clause such as 'top top'.`,
+        );
+      }
+
+      const topPx = resolveAnchorTop(resolvedStart as string, triggerHeight, viewportHeight);
       // An absolute end (a bare number, matching GSAP) releases the pin at that fixed scroll
       // position directly, independent of endTrigger entirely. Same idea as an absolute start
       // for Scene/Cover layers (see resolveStartSpec above).
@@ -805,7 +841,8 @@ export default class StickyScrollTrigger {
   // (a setup with zero pins registered still needs another layer to bind it).
   createStickyPin({
     trigger: triggerInput,
-    top = 0,
+    start,
+    top,
     endTrigger: endTriggerInput,
     end = 'top top',
     onKill,
@@ -814,6 +851,15 @@ export default class StickyScrollTrigger {
     if (this.#destroyed) {
       throw new Error(
         'StickyScrollTrigger: cannot register a new pin after destroy() has been called.',
+      );
+    }
+
+    // Both name the pinned position, so accepting both would mean silently picking a winner.
+    if (start !== undefined && top !== undefined) {
+      throw new Error(
+        'StickyScrollTrigger: createStickyPin accepts either start or top, not both '
+        + '(top: 20 is start: \'top 20px\'). Use top for a plain px distance from the viewport\'s '
+        + 'top edge, start for anything else.',
       );
     }
 
@@ -836,7 +882,14 @@ export default class StickyScrollTrigger {
       + 'position:sticky behavior.',
     );
 
-    const layer: PinLayer = { trigger, outer: null, inner: null, top, endTrigger, end };
+    const layer: PinLayer = {
+      trigger,
+      outer: null,
+      inner: null,
+      start: top === undefined ? start ?? 'top top' : topToStartClause(top),
+      endTrigger,
+      end,
+    };
 
     this.#pinLayers.push(layer);
 
