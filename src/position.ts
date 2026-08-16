@@ -103,12 +103,14 @@ export const parseClauseToken = (
 };
 
 // GSAP's own _parsePosition treats an entire position value as an absolute scroll position
-// whenever it coerces cleanly to a finite number via unary '+' (`isNaN(value) || (value =
-// +value)` at ScrollTrigger.js:750). A plain number already qualifies, and so does a string
-// containing nothing but a number (no keyword, no second token, no '%'/'px' suffix). Something
-// like '500 top' (two tokens) or '500px' (an extra suffix) doesn't coerce cleanly, so GSAP
-// resolves those as a position clause via _offsetToPx instead, the same outcome parseClauseToken
-// already gives them, so this only needs to special-case the single-bare-number form.
+// whenever isNaN(value) is false (`isNaN(value) || (value = +value)` at ScrollTrigger.js:750).
+// A plain number already qualifies, and so does any string Number() parses without producing
+// NaN, including 'Infinity'. This module mirrors that condition as-is rather than tightening it
+// to a finite check, since a value GSAP itself treats as absolute shouldn't be rejected here.
+// Something like '500 top' (two tokens) or '500px' (an extra suffix) doesn't coerce cleanly, so
+// GSAP resolves those as a position clause via _offsetToPx instead, the same outcome
+// parseClauseToken already gives them, so this only needs to special-case the single-bare-number
+// form.
 // An empty string technically coerces to 0 in GSAP too, but this module deliberately doesn't
 // replicate that: it's always a caller mistake, and parseClauseToken's existing "empty token"
 // error is a more useful outcome than a silent absolute-0.

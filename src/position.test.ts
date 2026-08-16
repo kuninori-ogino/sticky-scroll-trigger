@@ -177,6 +177,13 @@ describe('isAbsoluteFormat', () => {
     expect(isAbsoluteFormat('500 top')).toBe(false);
   });
 
+  // isNaN('Infinity') is false (Number('Infinity') is Infinity, not NaN), so GSAP's own check
+  // treats it as absolute too. This module deliberately doesn't tighten that to a finite check.
+  it('recognizes non-finite numeric strings as absolute, matching GSAP', () => {
+    expect(isAbsoluteFormat('Infinity')).toBe(true);
+    expect(isAbsoluteFormat('-Infinity')).toBe(true);
+  });
+
   it('rejects a value with a unit suffix, matching GSAP (parseFloat alone isn\'t unary \'+\')', () => {
     expect(isAbsoluteFormat('500px')).toBe(false);
     expect(isAbsoluteFormat('50%')).toBe(false);
