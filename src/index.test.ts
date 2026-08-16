@@ -1932,6 +1932,12 @@ describe('scroll-margin-top synchronisation', () => {
     expect(query('#after').style.scrollMarginTop).not.toBe('');
   });
 
+  it('rejects an invalid scrollMarginTargets selector at construction', () => {
+    expect(() => setupAnchors({ scrollMarginTargets: ':not(' })).toThrow(
+      'scrollMarginTargets ":not(" is not a valid CSS selector',
+    );
+  });
+
   // A target that stops matching (its id removed, say) has to be handed back rather than left
   // carrying a correction nothing updates any more.
   it('restores a target that no longer matches the selector', () => {

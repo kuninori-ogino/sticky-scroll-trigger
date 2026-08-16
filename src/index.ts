@@ -279,6 +279,20 @@ export default class StickyScrollTrigger {
     this.#scrollMarginTargets = options.scrollMarginTargets === undefined
       ? '[id]'
       : options.scrollMarginTargets;
+
+    // Validated here rather than inside refresh(): refresh() runs from GSAP's own dispatch, so
+    // an uncaught SyntaxError from querySelectorAll on an invalid selector would abort every
+    // other ScrollTrigger's refresh on the page.
+    if (this.#scrollMarginTargets !== null) {
+      try {
+        this.#rootElement.querySelectorAll(this.#scrollMarginTargets);
+      } catch {
+        throw new Error(
+          `StickyScrollTrigger: scrollMarginTargets "${this.#scrollMarginTargets}" is not a `
+          + 'valid CSS selector.',
+        );
+      }
+    }
   }
 
   #unbuild() {
