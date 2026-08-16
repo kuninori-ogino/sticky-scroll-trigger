@@ -159,7 +159,7 @@ You can specify `onKill`, `invalidateOnRefresh`, and `onRefreshInit`; the module
 
 | option       | default        | description                                                                                                                                                                                                 |
 | ------------ | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `trigger`    | (required)     | The scene element to pin and animate. Must be inside the shared container                                                                                                                                   |
+| `trigger`    | (required)     | The scene element to pin and animate. Must be inside the shared container; throws otherwise                                                                                                                 |
 | `start`      | `'top top'`    | Where the scene lands in the viewport while pinned (same idea as sticky's CSS `top`). Same default GSAP itself uses for a pinned trigger. See [position syntax](#position-syntax)                           |
 | `end`        | `'bottom top'` | End of the freeze window. Auto-detects between a dwell distance and a position clause (see [end syntax](#end-syntax)). Same default GSAP uses too: dwell for the trigger's own height, not a fixed distance |
 | `endTrigger` | `trigger`      | Reference element when `end` uses position-clause syntax. Must be inside the shared container (see below)                                                                                                   |
@@ -170,7 +170,7 @@ Registers an overlap-scroll effect (`trigger` gets pinned while its siblings fro
 
 | option       | default                      | description                                                                                                                                                                                        |
 | ------------ | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `trigger`    | (required)                   | The element that gets pinned and covered. Must be a direct child of the shared container                                                                                                           |
+| `trigger`    | (required)                   | The element that gets pinned and covered. Must be inside the shared container, and normally a direct child of it; throws otherwise                                                                 |
 | `cover`      | `trigger.nextElementSibling` | The first element of the covering side; this and all following siblings cover together. Must share the same parent as `trigger`                                                                    |
 | `start`      | `'bottom bottom'`            | Pinned position of `trigger`. See [position syntax](#position-syntax). Unlike `createStickyTrigger`'s `start`, this doesn't support an absolute scroll position (a bare number): it throws instead |
 | `end`        | `null` (auto-computed)       | End of the freeze window. When `null`, computed automatically as "the distance until `cover`'s top edge reaches the top of the viewport"                                                           |
@@ -180,7 +180,7 @@ Registers an overlap-scroll effect (`trigger` gets pinned while its siblings fro
 
 ### `createStickyPin(options)`
 
-Pins small elements (badges, labels, etc.) with plain `position:sticky` (pinning handled entirely by CSS, not GSAP). Pinning starts when `trigger` reaches its sticky position and releases when `endTrigger` reaches the `end` clause. This is independent of Scene/Cover layers and works the same inside or outside the shared container.
+Pins small elements (badges, labels, etc.) with plain `position:sticky` (pinning handled entirely by CSS, not GSAP). Pinning starts when `trigger` reaches its sticky position and releases when `endTrigger` reaches the `end` clause. This is independent of Scene/Cover layers and works the same inside or outside the shared container. The only `trigger` it rejects is one that encloses the container (see [Constraints and caveats](#constraints-and-caveats)).
 
 Because pinning is handled by CSS, the returned `ScrollTrigger.Vars` does not define GSAP `start`/`end`; it exists for hooks such as `onKill`/`onRefreshInit`. Pass it to `ScrollTrigger.create()` if you want automatic cleanup and auto refresh-binding.
 
@@ -438,6 +438,9 @@ sticky.createOverlapScroll({
 - The structure directly under the shared container changes because of the added wrapper elements. Direct-child selectors like `.container__inner > .scene`, `:nth-child()`, adjacent-sibling selectors (`+`/`~`), and flex/grid layout on the shared container itself may break across the wrapper boundary
 - `position:sticky` doesn't work if any ancestor of the pinned target has `overflow:hidden`/`clip`
 - `createOverlapScroll`'s `trigger` and `cover` must be siblings sharing the same parent
+- `createStickyTrigger` and `createOverlapScroll` throw if `trigger` isn't inside the shared container. Both build their structure inside it, so a `trigger` elsewhere would wrap, move and style elements the instance doesn't own
+- `createStickyPin` works on either side of the container, and throws only for a `trigger` that encloses it (the container itself, or an ancestor). A pin wraps `trigger` in a `height:0`, `contain:layout` box, which would pull the container and the layers' dwell padding out of the flow
+- Selector strings for `trigger`/`endTrigger`/`cover`/`element` resolve against the whole document, as GSAP's own `trigger` does, rather than within the shared container; only the `trigger` rules above restrict where a match may land. Validate or scope these values yourself if they come from content you don't control
 - ScrollTrigger's `pin`/`pinSpacing`/`anticipatePin` can't be used (pinning is handled by sticky; these are already excluded at the type level)
 - A `createStickyTrigger` Scene layer can't point `endTrigger` at a registered layer that comes later in DOM order: it throws immediately, since the Scene layer's own dwell always precedes that later layer's position. `createOverlapScroll`'s cover layer isn't subject to this; it creates no padding, so a forward reference resolves normally
 - If a Scene layer's `end` uses a position clause, don't set `endTrigger` to an element that gets pushed down by that same scene's own dwell; the value won't converge

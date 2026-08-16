@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A rejected option value on a Scene/Cover layer (an `end` of `'max'`, an unparseable position clause) no longer leaves every layer's sticky CSS stripped until the next successful `refresh()`; the layout keeps the previous refresh's values instead. That matters when a function-valued option begins returning one long after setup, on a refresh GSAP itself triggers. The error is unchanged
 - Improved the position-clause regular expressions (`start`/`end`/`top`) to parse more efficiently on long input. What's accepted or rejected is unchanged
+- `createStickyTrigger` and `createOverlapScroll` now throw when `trigger` is outside the shared container, or is the container itself. The README always required this, but such a `trigger` used to be accepted, and the layer's wrapping, DOM moves and `position:sticky` styling landed on elements the instance doesn't own
+- `createStickyPin` still works on either side of the shared container, and now throws only for a `trigger` that encloses it (the container itself, or an ancestor). Such a `trigger` used to nest the container and the layers' dwell padding in the pin's own `height:0` box
 
 ## [0.4.0] - 2026-08-15
 

@@ -111,6 +111,120 @@ describe('selector-string support for trigger/endTrigger/cover', () => {
   });
 });
 
+// A Scene/Cover trigger has to live inside the shared container, so the wrapping and styling that
+// follow can't reach elements the instance doesn't own. The endTrigger rule below is separate.
+describe('trigger containment', () => {
+  it('throws when a Scene layer\'s trigger is outside the shared container', () => {
+    const { query, controller } = setup();
+
+    expect(() => controller.createStickyTrigger({ trigger: query('.outside') })).toThrow(
+      /createStickyTrigger: trigger <section\.outside> is outside the shared container/,
+    );
+  });
+
+  it('throws when a Cover layer\'s trigger is outside the shared container', () => {
+    const { query, controller } = setup();
+
+    expect(() => controller.createOverlapScroll({
+      trigger: query('.outside'),
+      cover: query('.inside'),
+    })).toThrow(/createOverlapScroll: trigger <section\.outside> is outside the shared container/);
+  });
+
+  it('throws when trigger is the shared container itself', () => {
+    const { query, controller } = setup();
+
+    expect(() => controller.createStickyTrigger({ trigger: query('.root') })).toThrow(
+      /trigger <div\.root> is the shared container itself/,
+    );
+  });
+
+  // A selector string resolves against the whole document; only this check confines it.
+  it('throws for a selector string that resolves outside the shared container', () => {
+    const { controller } = setup();
+
+    expect(() => controller.createOverlapScroll({ trigger: '.outside' })).toThrow(
+      /outside the shared container/,
+    );
+  });
+
+  // A rejected registration must not wrap, move or style anything.
+  it('leaves the rejected trigger and its surroundings untouched', () => {
+    const { query, controller } = setup();
+    const outside = query('.outside');
+
+    expect(() => controller.createOverlapScroll({ trigger: outside })).toThrow();
+    controller.refresh();
+
+    expect(outside.parentElement).toBe(document.body);
+    expect(outside.style.position).toBe('');
+    expect(outside.style.zIndex).toBe('');
+  });
+
+  it('accepts a trigger nested deeper inside the shared container', () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <div class="group">
+          <section class="scene"></section>
+        </div>
+      </div>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+
+    expect(() => controller.createStickyTrigger({ trigger: query('.scene'), end: '+=500' }))
+      .not.toThrow();
+    expect(() => controller.refresh()).not.toThrow();
+  });
+
+  // A pin stays free to sit on either side of the container (see "createStickyPin()" below). The
+  // exception: wrapPin's height:0 box would swallow a container nested inside the trigger.
+  describe('a pin trigger that encloses the shared container', () => {
+    it('throws when the pin trigger is the shared container itself', () => {
+      const { query, controller } = setup();
+
+      expect(() => controller.createStickyPin({
+        trigger: query('.root'),
+        endTrigger: query('.inside'),
+      })).toThrow(/createStickyPin: trigger <div\.root> is the shared container itself/);
+    });
+
+    it('throws when the pin trigger is an ancestor of the shared container', () => {
+      document.body.innerHTML = `
+        <div class="outerWrap">
+          <div class="root">
+            <section class="scene"></section>
+            <section class="inside"></section>
+          </div>
+        </div>
+      `;
+
+      const controller = new StickyScrollTrigger(query('.root'));
+
+      expect(() => controller.createStickyPin({
+        trigger: query('.outerWrap'),
+        endTrigger: query('.inside'),
+      })).toThrow(/createStickyPin: trigger <div\.outerWrap> is an ancestor of the shared container/);
+    });
+
+    // Without the check, refresh() nests the container and the layer's 500px of padding in the box.
+    it('leaves the container in the flow after the rejected pin', () => {
+      const { query, controller } = setup();
+
+      controller.createStickyTrigger({ trigger: query('.scene'), end: '+=500' });
+      expect(() => controller.createStickyPin({
+        trigger: query('.root'),
+        endTrigger: query('.inside'),
+      })).toThrow();
+      controller.refresh();
+
+      for (let node = query('.root').parentElement; node; node = node.parentElement) {
+        expect(node.style.height).not.toBe('0px');
+      }
+    });
+  });
+});
+
 describe('endTrigger validity', () => {
   // An endTrigger outside the shared container has no solution, since a Scene layer's own
   // dwell keeps pushing it further away. Silently approximating it would make padding grow
@@ -344,16 +458,18 @@ describe('Vars passed to GSAP', () => {
   // only `npm run typecheck` (tsc --noEmit), not `npm test`, would catch.
   it('rejects options that would break things at the type level, enforced by npm run typecheck', () => {
     const { query, controller } = setup();
-
     // Using the same element as the trigger of multiple layers is a separate error (see
     // "rejecting duplicate registration" below), so this uses a different element
-    // for each of the 3 type checks.
+    // for each of the 3 type checks. The third is appended rather than taken from setup()'s
+    // markup, since a trigger has to be inside the shared container (see "trigger containment").
+    const third = query('.root').appendChild(document.createElement('section'));
+
     // @ts-expect-error horizontal isn't supported (start/end are absolute px on the vertical axis)
     controller.createStickyTrigger({ trigger: query('.scene'), horizontal: true });
     // @ts-expect-error scroller isn't supported (documentTop/innerHeight assume window)
     controller.createStickyTrigger({ trigger: query('.inside'), scroller: document.body });
     // @ts-expect-error pin isn't allowed since sticky handles pinning
-    controller.createStickyTrigger({ trigger: query('.outside'), pin: true });
+    controller.createStickyTrigger({ trigger: third, pin: true });
   });
 });
 
@@ -1336,8 +1452,10 @@ describe('createOverlapScroll input validation', () => {
   it('throws naming trigger when cover cannot be found', () => {
     const { query, controller } = setup();
 
-    expect(() => controller.createOverlapScroll({ trigger: query('.outside') })).toThrow(
-      /cover element.*not found for trigger <section\.outside>/,
+    // .inside is the container's last child, so trigger.nextElementSibling (cover's default)
+    // finds nothing.
+    expect(() => controller.createOverlapScroll({ trigger: query('.inside') })).toThrow(
+      /cover element.*not found for trigger <section\.inside>/,
     );
   });
 

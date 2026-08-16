@@ -661,6 +661,43 @@ export default class StickyScrollTrigger {
     if (hasDuplicateTrigger(list, trigger)) throw new Error(message);
   }
 
+  // A cover layer moves and styles trigger's siblings, and a Scene layer measures trigger against
+  // the container it wraps, so both need trigger inside it. createStickyPin wraps trigger alone
+  // and stays exempt; see #assertTriggerNotEnclosingRoot for its one restriction.
+  #assertTriggerInsideRoot(trigger: HTMLElement, context: string): void {
+    // contains() reports true for the container itself, so that case needs its own branch.
+    if (trigger === this.#rootElement) {
+      throw new Error(
+        `${context}: trigger ${describeElement(trigger)} is the shared container itself. Point `
+        + 'trigger at an element inside the container.',
+      );
+    }
+
+    if (!this.#rootElement.contains(trigger)) {
+      throw new Error(
+        `${context}: trigger ${describeElement(trigger)} is outside the shared container. Point `
+        + 'trigger at an element inside it, or use createStickyPin, which works on either side.',
+      );
+    }
+  }
+
+  // A pin trigger may sit on either side of the container, since wrapPin only wraps trigger itself.
+  // The exception is one that encloses it; contains() covers the container itself and any of its
+  // ancestors.
+  #assertTriggerNotEnclosingRoot(trigger: HTMLElement, context: string): void {
+    if (!trigger.contains(this.#rootElement)) return;
+
+    const relation = trigger === this.#rootElement
+      ? 'is the shared container itself'
+      : 'is an ancestor of the shared container';
+
+    throw new Error(
+      `${context}: trigger ${describeElement(trigger)} ${relation}. A pin wraps trigger in a `
+      + 'height:0, contain:layout box, which would pull the container and every layer\'s dwell '
+      + 'padding out of the flow. Pin an element that doesn\'t contain the container.',
+    );
+  }
+
   // Registers a layer and builds the ScrollTrigger start/end that track the freeze window.
   // This doesn't call refresh() itself (calling it on every registration would be O(n^2));
   // call refresh() once after registering.
@@ -756,6 +793,9 @@ export default class StickyScrollTrigger {
     ...rest
   }: CreateStickyTriggerOptions): ScrollTrigger.Vars {
     const trigger = resolveElement(triggerInput, 'createStickyTrigger');
+
+    this.#assertTriggerInsideRoot(trigger, 'createStickyTrigger');
+
     const endTrigger = resolveEndTrigger(trigger, endTriggerInput, 'createStickyTrigger');
 
     return this.#registerLayer(
@@ -790,6 +830,11 @@ export default class StickyScrollTrigger {
     ...rest
   }: CreateOverlapScrollOptions): ScrollTrigger.Vars {
     const trigger = resolveElement(triggerInput, 'createOverlapScroll');
+
+    // Ahead of the cover checks below, so an outside trigger is reported as such rather than as a
+    // cover problem.
+    this.#assertTriggerInsideRoot(trigger, 'createOverlapScroll');
+
     const endTrigger = resolveEndTrigger(trigger, endTriggerInput, 'createOverlapScroll');
     const coverElement = cover === undefined ? trigger.nextElementSibling : resolveElement(cover, 'createOverlapScroll');
 
@@ -879,6 +924,8 @@ export default class StickyScrollTrigger {
 
     const trigger = resolveElement(triggerInput, 'createStickyPin');
     const endTrigger = resolveElement(endTriggerInput, 'createStickyPin');
+
+    this.#assertTriggerNotEnclosingRoot(trigger, 'createStickyPin');
 
     this.#assertTriggerAvailable(
       this.#pinLayers,
