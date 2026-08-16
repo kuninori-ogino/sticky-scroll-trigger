@@ -54,6 +54,16 @@ export const parseClauseToken = (
   // recognize either: CLAUSE_TOKEN_RE only makes the base optional so a signed-offset-only
   // token like '-=500' is valid, not so that '' passes.
   if (!match || (!match[1] && !match[3])) {
+    // 'max' (and its offset forms) is a real GSAP keyword, just scoped to end (see isMaxFormat
+    // below). Without this check, a start: 'max' typo gets the generic "unsupported position
+    // clause" error and looks like a made-up token instead of a misplaced one.
+    if (MAX_TOKEN_RE.test(token)) {
+      throw new Error(
+        `StickyScrollTrigger: unsupported position clause "${token}": 'max' is GSAP's `
+        + `end-only keyword for the scroller's maximum scroll position.`,
+      );
+    }
+
     throw new Error(`StickyScrollTrigger: unsupported position clause "${token}"`);
   }
 

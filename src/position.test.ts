@@ -79,6 +79,18 @@ describe('parseClauseToken', () => {
     expect(() => parseClauseToken('top+=10vh', 1000)).toThrow(/unsupported position clause/);
   });
 
+  it('names \'max\' as an end-only keyword rather than a generic unsupported clause', () => {
+    expect(() => parseClauseToken('max', 1000))
+      .toThrow(/'max' is GSAP's end-only keyword for the scroller's maximum scroll position\./);
+    expect(() => parseClauseToken('max-=100', 1000))
+      .toThrow(/'max' is GSAP's end-only keyword/);
+    expect(() => parseClauseToken('max+=10%', 1000))
+      .toThrow(/'max' is GSAP's end-only keyword/);
+    // A token that merely starts with "max" isn't this case; it stays the generic message.
+    expect(() => parseClauseToken('maxWidth', 1000))
+      .toThrow(/unsupported position clause "maxWidth"$/);
+  });
+
   // GSAP itself doesn't parse 'px' specially: _offsetToPx's parseFloat silently drops any
   // non-'%' suffix, so 'top 100px' and 'top 100' behave identically in real GSAP. This module
   // recognizes 'px' explicitly (rather than adopting parseFloat's full leniency, which would also
