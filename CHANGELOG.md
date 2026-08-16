@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - A rejected option value on a Scene/Cover layer (an `end` of `'max'`, an unparseable position clause) no longer leaves every layer's sticky CSS stripped until the next successful `refresh()`; the layout keeps the previous refresh's values instead. That matters when a function-valued option begins returning one long after setup, on a refresh GSAP itself triggers. The error is unchanged
+- Improved the position-clause regular expressions (`start`/`end`/`top`) to parse more efficiently on long input. What's accepted or rejected is unchanged
 
 ## [0.4.0] - 2026-08-15
 

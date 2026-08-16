@@ -42,7 +42,7 @@ const signedPx = (
 // The base itself is optional, matching GSAP's _offsetToPx: a token that's only a signed offset
 // (e.g. '-=500', with no keyword or number before it) is valid; the base implicitly is 0.
 const CLAUSE_TOKEN_RE
-  = /^(top|center|bottom|(?:\d+\.?\d*|\.\d+))?(%|px)?(?:([+-]=?)(\d+\.?\d*|\.\d+)(%|px)?)?$/;
+  = /^(top|center|bottom|(?:\d+(?:\.\d*)?|\.\d+))?(%|px)?(?:([+-]=?)(\d+(?:\.\d*)?|\.\d+)(%|px)?)?$/;
 
 export const parseClauseToken = (
   token: string,
@@ -148,7 +148,7 @@ export const resolveAnchorTop = (
 // GSAP's own "bare number = absolute scroll position" (isAbsoluteFormat/resolveAbsolute below
 // handle that case for end too).
 // An explicit 'px' suffix is accepted here too, for the same reason as CLAUSE_TOKEN_RE above.
-const DWELL_RELATIVE_RE = /^\+=(\d+\.?\d*|\.\d+)(%|px)?$/;
+const DWELL_RELATIVE_RE = /^\+=(\d+(?:\.\d*)?|\.\d+)(%|px)?$/;
 
 export const isDwellFormat = (resolved: EndValue): boolean =>
   typeof resolved === 'string' && DWELL_RELATIVE_RE.test(resolved.trim());
@@ -174,7 +174,7 @@ export const resolveDwell = (resolved: EndValue, viewportHeight: number): number
 // silently falls back to bare 'max' with the "-100" discarded entirely. Rather than replicate
 // that silent discard, this module doesn't recognize 'max-100' as max format at all, so it throws
 // instead (same "louder than GSAP for an ambiguous input" choice as CLAUSE_TOKEN_RE above).
-const MAX_TOKEN_RE = /^max(?:([+-]=)(\d+\.?\d*|\.\d+)(%|px)?)?$/;
+const MAX_TOKEN_RE = /^max(?:([+-]=)(\d+(?:\.\d*)?|\.\d+)(%|px)?)?$/;
 
 // Whether end is in 'max' notation ('max' / 'max-=100' / 'max+=10%'): the scroller's maximum
 // scroll position, optionally offset. GSAP defines this for `end` only, not `start`: in raw GSAP
