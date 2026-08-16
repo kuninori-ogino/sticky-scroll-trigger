@@ -166,13 +166,18 @@ export const resolveDwell = (resolved: EndValue, viewportHeight: number): number
 // instead (same "louder than GSAP for an ambiguous input" choice as CLAUSE_TOKEN_RE above).
 const MAX_TOKEN_RE = /^max(?:([+-]=)(\d+\.?\d*|\.\d+)(%|px)?)?$/;
 
-// Whether end is in GSAP's 'max' notation ('max' / 'max-=100' / 'max+=10%'): the scroller's
-// maximum scroll position, optionally offset. GSAP defines this for `end` only, not `start`.
+// Whether end is in 'max' notation ('max' / 'max-=100' / 'max+=10%'): the scroller's maximum
+// scroll position, optionally offset. GSAP defines this for `end` only, not `start`: in raw GSAP
+// 3.15.0, `start: 'max'` silently resolves to 0 instead of the scroller's max, so this module
+// rejects it for `start` rather than reproducing that.
 export const isMaxFormat = (resolved: EndValue): boolean =>
   typeof resolved === 'string' && MAX_TOKEN_RE.test(resolved.trim());
 
 // Converts an already-resolved 'max' end value into its offset (px) from the scroller's maximum
 // scroll position (0 for a bare 'max'). refSize mirrors GSAP's own scrollerSize (viewport height).
+// Only the bare form matches GSAP's own end: 'max'. Raw GSAP 3.15.0's offset forms
+// ('max-=100', 'max+=10%') don't work as documented: they silently drop both the offset and the
+// 'max' itself, collapsing end to start's position. This module doesn't replicate that.
 export const resolveMaxOffset = (resolved: string, viewportHeight: number): number => {
   const match = MAX_TOKEN_RE.exec(resolved.trim());
 

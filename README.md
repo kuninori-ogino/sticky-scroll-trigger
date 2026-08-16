@@ -419,7 +419,9 @@ For an unregistered `endTrigger`, its raw DOM position is measured directly, the
 >
 > `createOverlapScroll` isn't subject to this restriction.
 
-"`'max'` keyword": GSAP's own `end: 'max'` notation, the scroller's max scroll position, optionally offset (`'max-=100'`, `'max+=10%'`). Ignores `endTrigger` entirely.
+"`'max'` keyword": the scroller's max scroll position, optionally offset (`'max-=100'`, `'max+=10%'`). Ignores `endTrigger` entirely.
+
+Bare `'max'` matches GSAP's own `end: 'max'` notation exactly. The offset forms are this module's own extension, not a GSAP reproduction: raw GSAP 3.15.0 silently drops both the offset and the `'max'` itself for `end: 'max-=100'`/`'max+=10%'`, collapsing `end` down to `start`'s position.
 
 ```ts
 sticky.createOverlapScroll({
@@ -429,7 +431,7 @@ sticky.createOverlapScroll({
 }); // pin until the very bottom of the page
 ```
 
-`'max'` is only supported by [`createOverlapScroll`](#createoverlapscrolloptions) and [`resolveScrollPosition`](#resolvescrollpositionelement-position)/[`createResolvedTrigger`](#createresolvedtriggeroptions). `createStickyTrigger` and `createStickyPin` throw if `end` is `'max'`, because their own dwell padding or pin spacer adds to the document height that `'max'` measures: the freeze window would depend on itself and never settle, growing the page a little more on every `refresh()`. GSAP only defines `'max'` for `end`, not `start`, so this module doesn't support it for `start` either.
+`'max'` is only supported by [`createOverlapScroll`](#createoverlapscrolloptions) and [`resolveScrollPosition`](#resolvescrollpositionelement-position)/[`createResolvedTrigger`](#createresolvedtriggeroptions). `createStickyTrigger` and `createStickyPin` throw if `end` is `'max'`, because their own dwell padding or pin spacer adds to the document height that `'max'` measures: the freeze window would depend on itself and never settle, growing the page a little more on every `refresh()`. GSAP defines `'max'` for `end`, not `start`: in raw GSAP 3.15.0, `start: 'max'` silently resolves to `0` rather than the scroller's max, so this module rejects it for `start` instead of reproducing that.
 
 ## Constraints and caveats
 
