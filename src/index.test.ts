@@ -1432,6 +1432,33 @@ describe('\'max\' end keyword', () => {
     expect(stuckWrappers()).toBe(before);
   });
 
+  // The same window, on the Scene/Cover path. The end has to be function-valued and flip only on
+  // the second refresh: registering a layer with a rejected value up front marks the instance
+  // dirty, and the rebuild that follows hands pass 1 brand-new wrappers with no sticky state to
+  // restore.
+  it('leaves Scene layer sticky state intact when a Scene option throws mid-refresh', () => {
+    const { query, controller } = setup();
+    const stuckWrappers = () =>
+      [...document.querySelectorAll<HTMLElement>('div')]
+        .filter((el) => el.style.position === 'sticky').length;
+    let rejected = false;
+
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      start: 'top top',
+      end: () => (rejected ? 'max' : '+=500'),
+    });
+    controller.refresh();
+
+    const before = stuckWrappers();
+
+    rejected = true;
+
+    expect(() => controller.refresh()).toThrow(/'max'/);
+    expect(before).toBeGreaterThan(0);
+    expect(stuckWrappers()).toBe(before);
+  });
+
   it('resolveScrollPosition resolves \'max\' without throwing, ignoring element entirely', () => {
     const { query, controller } = setup();
 

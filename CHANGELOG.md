@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A rejected option value on a Scene/Cover layer (an `end` of `'max'`, an unparseable position clause) no longer leaves every layer's sticky CSS stripped until the next successful `refresh()`; the layout keeps the previous refresh's values instead. That matters when a function-valued option begins returning one long after setup, on a refresh GSAP itself triggers. The error is unchanged
+
 ## [0.4.0] - 2026-08-15
 
 - `createStickyPin` now takes `start` in the same [position syntax](README.md#position-syntax) as the other methods (e.g. `start: 'bottom bottom'`, `'top 20%'`), including clauses measured against `trigger`'s own height. The existing `top` option is unchanged and still the way to give a plain px distance (`top: 20` is `start: 'top 20px'`); passing both throws. A pin's `start` throws on an absolute scroll position (a bare number, GSAP's meaning everywhere else in this module), since a pin engages when `position:sticky` engages and has nothing to set on the scroll axis. `end` is unaffected

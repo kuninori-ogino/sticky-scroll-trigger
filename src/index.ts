@@ -389,7 +389,9 @@ export default class StickyScrollTrigger {
   // callers measuring arbitrary elements (a pin's trigger/endTrigger, or resolveScrollPosition's
   // element) aren't guaranteed to share stuck ancestors with anything, so it doesn't cancel out
   // automatically for them. Snapshot and reset every Scene/Cover wrapper's sticky state, returning
-  // a function that restores it; callers must call that before returning.
+  // a function that restores it; callers must call that before returning. #refreshScenesAndCovers
+  // shares this helper for its own pass 1, but restores only on the throwing path (see the catch
+  // there for why).
   #resetSceneCoverStickyState(): () => void {
     const wrapperSnapshots = this.#layers
       .map((layer) => layer.wrapper)
@@ -498,10 +500,35 @@ export default class StickyScrollTrigger {
     });
   }
 
-  // Recomputes each layer's sticky top, padding height, and start/end. This disables sticky
-  // on every wrapper and measures every layer's natural position together (pass 1),
-  // then applies sticky/padding while accumulating precedingGaps in DOM order
-  // (pass 2 = planLayers).
+  // Recomputes each layer's sticky top, padding height, and start/end. This disables sticky on
+  // every wrapper before the two passes below run, and puts it back if either one throws.
+  #refreshScenesAndCovers(viewportHeight: number) {
+    if (!this.#layers.length) return;
+
+    const active = this.#layers.filter((layer) => layer.wrapper !== null);
+
+    if (!active.length) return;
+
+    const restoreStickyState = this.#resetSceneCoverStickyState();
+
+    try {
+      this.#planLayerPositions(viewportHeight, active);
+    } catch (error) {
+      // The same window, and the same reasoning, as #refreshPins' `finally`: a rejected option
+      // value (a Scene layer's 'max' end, an endTrigger outside the container, an unparseable
+      // clause) throws while the reset above has every wrapper's sticky CSS stripped for
+      // measurement.
+      // A `catch` rather than a `finally` is the one difference: pass 2 writes the new sticky
+      // state itself, so after a successful pass the snapshot holds the state that pass replaced,
+      // and restoring it would undo everything just applied.
+      restoreStickyState();
+
+      throw error;
+    }
+  }
+
+  // Pass 1 measures every layer's natural position together, then pass 2 (planLayers) applies
+  // sticky/padding while accumulating precedingGaps in DOM order.
   // Mixing pass 1 and pass 2 would let an earlier layer's applied sticky throw off a later
   // layer's measurement, so keeping them separate is essential.
   // A position-clause endTrigger pointing at a registered layer positioned later in DOM order
@@ -513,20 +540,7 @@ export default class StickyScrollTrigger {
   // dwell pushes the measurement target away and never converges.
   // The arithmetic itself lives in freezeWindow.ts's planLayers (DOM-independent);
   // this function's job is just to "measure" and "write."
-  #refreshScenesAndCovers(viewportHeight: number) {
-    if (!this.#layers.length) return;
-
-    const active: Layer[] = [];
-
-    this.#layers.forEach((layer) => {
-      if (!layer.wrapper) return;
-
-      resetStickyPosition(layer.wrapper);
-      active.push(layer);
-    });
-
-    if (!active.length) return;
-
+  #planLayerPositions(viewportHeight: number, active: readonly Layer[]) {
     // Scene layers' wrappers line up at the start of the nested container, so every layer's
     // natural position aligns here.
     const structureTop = this.#outermostContainer ? documentTop(this.#outermostContainer) : 0;
