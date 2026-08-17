@@ -1,8 +1,7 @@
 /**
- * An extension helper that pins multiple ScrollTrigger effects using native position:sticky
- * instead of GSAP pinning. It works by wrapping the shared container in nested sticky layers.
- * This file is the only public entry point;
- * position.ts/dom.ts/structure.ts/freezeWindow.ts/types.ts/vars.ts are internal modules.
+ * Pins multiple ScrollTrigger effects with native position:sticky instead of GSAP pinning, by
+ * wrapping the shared container in nested sticky layers. This is the only public entry point;
+ * every other module under src/ is internal.
  */
 
 import {
@@ -57,15 +56,13 @@ export type {
 } from './types';
 export type { EndInput, EndValue, PositionInput } from './position';
 
-// Converts a resolved end value into an EndSpec. Only for a position-clause end does this decide
-// how to find endTrigger's position: for a registered layer, pass 2 (planLayers) resolves it,
-// including a cover layer's forward reference to a layer positioned later in DOM order. Cover
-// layers create no padding, so that reference always converges via fixed-point iteration. A
-// Scene layer's forward reference is rejected outright instead: its own dwell always precedes
-// anything after it, making the reference self-referential no matter how it's computed. For an
-// unregistered endTrigger inside the shared container, pass 1 can measure it directly and pass 2
-// adds precedingGaps. Outside the container, the measurement is itself affected by padding, so
-// it's re-measured in pass 2 after padding is applied (measureLive).
+// Converts a resolved end value into an EndSpec. Only a position-clause end needs a decision
+// here, about where endTrigger's position comes from:
+// - a registered layer: pass 2 (planLayers) resolves it, including a cover layer's forward
+//   reference, which converges because cover layers add no padding. A Scene layer's forward
+//   reference is rejected outright, since its own dwell precedes anything after it.
+// - unregistered, inside the shared container: pass 1 measures it, pass 2 adds precedingGaps.
+// - unregistered, outside it: padding shifts the measurement, so pass 2 re-measures (measureLive).
 const resolveEndSpec = (
   rootElement: HTMLElement,
   viewportHeight: number,
@@ -87,18 +84,16 @@ const resolveEndSpec = (
     return { mode: 'absolute', value: resolveAbsolute(endResolved) };
   }
 
-  // GSAP's 'max' keyword (the document's max scroll position). A Scene layer's own dwell padding
-  // contributes to that same max scroll position, so its freeze window would depend on itself.
-  // The equation never converges: each refresh grows the page a little more instead of settling.
-  // Cover layers never create padding, so they don't have this problem.
+  // A Scene layer's own dwell padding adds to the document's max scroll position, so a 'max' end
+  // would depend on itself, growing the page a little more on every refresh instead of settling.
+  // Cover layers add no padding.
   if (isMaxFormat(endResolved)) {
     if (layer.kind !== 'cover') {
       throw new Error(
         `StickyScrollTrigger: createStickyTrigger's trigger ${describeElement(layer.trigger)} `
-        + `has end "${endResolved}", which uses GSAP's 'max' keyword. This isn't supported here `
-        + '(a Scene layer\'s own dwell padding contributes to the document\'s max scroll '
-        + 'position, so the freeze window would depend on itself and never converge). Use '
-        + 'createOverlapScroll instead (cover layers never add padding), or a dwell distance '
+        + `has end "${endResolved}". GSAP's 'max' keyword isn't supported here: the layer's own `
+        + 'dwell padding adds to the document\'s max scroll position, so the freeze window would '
+        + 'depend on itself. Use createOverlapScroll, which adds no padding, or a dwell distance '
         + 'such as \'+=500\'.',
       );
     }
@@ -106,38 +101,35 @@ const resolveEndSpec = (
     return { mode: 'max', offsetPx: resolveMaxOffset(endResolved as string, viewportHeight) };
   }
 
-  // A Scene layer's own dwell padding always precedes (and pushes down) everything positioned
-  // after it in DOM order, regardless of what its own endTrigger points at. So a Scene layer
-  // forward-referencing a later layer's position always depends on its own dwell: the same
-  // self-reference problem as the 'max' keyword above, just reached through a registered-layer
-  // reference instead of directly. Unlike 'max', this can't be fixed by iterating: there's no
-  // fixed point, since the layer's own paddingHeight cancels out of its own defining equation,
-  // leaving either a contradiction or an arbitrary value. Cover layers never create padding, so
-  // they don't have this problem; planLayers resolves a cover layer's forward reference normally.
+  // The same self-reference as the 'max' case above, reached through a registered layer instead:
+  // a Scene layer's dwell padding pushes down everything after it in DOM order, so referencing a
+  // later layer's position means depending on its own dwell. Iteration can't fix this one, since
+  // the layer's own paddingHeight cancels out of its defining equation, leaving a contradiction
+  // or an arbitrary value. Cover layers add no padding, so planLayers resolves their forward
+  // references normally.
   if (layer.kind !== 'cover' && endTriggerIndex !== null && endTriggerIndex > ownIndex) {
     throw new Error(
       `StickyScrollTrigger: createStickyTrigger's trigger ${describeElement(layer.trigger)}'s `
       + `endTrigger (${describeElement(layer.endTrigger)}) refers to a layer positioned later `
-      + 'in DOM order. This isn\'t supported (the layer\'s own dwell padding always precedes and '
-      + 'pushes down that later layer\'s position, so the freeze window would depend on its own '
-      + 'dwell and never converge). Point endTrigger at a layer registered earlier in '
-      + 'DOM order, or use a dwell distance such as \'+=500\' instead.',
+      + 'in DOM order, which isn\'t supported: this layer\'s own dwell padding pushes that one '
+      + 'down, so the freeze window would depend on its own dwell. Point endTrigger at a layer '
+      + 'earlier in DOM order, or use a dwell distance such as \'+=500\'.',
     );
   }
 
   const unregistered = endTriggerIndex === null;
   const insideRoot = rootElement.contains(layer.endTrigger);
 
-  // A Scene layer stretches the document by its own dwell, so an endTrigger outside the shared
-  // container would keep retreating downward by that same amount, leaving the equation with no
-  // solution (cover layers are safe here since they never create padding).
+  // A Scene layer stretches the document by its own dwell, pushing an endTrigger outside the
+  // shared container down by that same amount, so the equation has no solution. Cover layers add
+  // no padding, so they're safe.
   if (unregistered && !insideRoot && layer.kind !== 'cover') {
     throw new Error(
       `StickyScrollTrigger: createStickyTrigger's trigger ${describeElement(layer.trigger)} `
       + `has an endTrigger (${describeElement(layer.endTrigger)}) outside the shared `
-      + 'container (the layer\'s own dwell would push it away, so the freeze window never '
-      + 'converges). Point endTrigger at an element inside the container, or use a dwell '
-      + 'distance such as \'+=500\'.',
+      + 'container: the layer\'s own dwell keeps pushing it away, so the freeze window never '
+      + 'settles. Point endTrigger at an element inside the container, or use a dwell distance '
+      + 'such as \'+=500\'.',
     );
   }
 
@@ -149,17 +141,12 @@ const resolveEndSpec = (
   };
 };
 
-// Converts a resolved start value into a StartSpec. GSAP's own _parsePosition treats a position
-// value as an absolute scroll position whenever the entire value (a number, or a string
-// containing nothing but a number) coerces cleanly via unary '+' (`isNaN(value) || (value =
-// +value)` at ScrollTrigger.js:750), with no element lookup at all. See position.ts's
-// isAbsoluteFormat for the exact check; a two-token clause like '500 top', or a suffixed value
-// like '500px', doesn't qualify and still resolves as a position clause as before.
+// Converts a resolved start value into a StartSpec. position.ts's isAbsoluteFormat defines which
+// values GSAP reads as an absolute scroll position rather than a clause.
 // A cover layer's stickyTop is computed relative to its own wrapper's natural position (see
-// freezeWindow.ts's stickyTop formula for cover layers), which requires start to be a clause.
-// An absolute scroll position has no meaning in that local coordinate space, unlike a Scene
-// layer's stickyTop, which is already document-absolute and works with either. So this rejects
-// it outright rather than silently producing a number that looks plausible but isn't.
+// freezeWindow.ts), so it needs a clause: an absolute scroll position has no meaning in that
+// local coordinate space, and is rejected rather than turned into a plausible-looking number. A
+// Scene layer's stickyTop is already document-absolute and works with either.
 const resolveStartSpec = (
   layer: Layer,
   startResolved: PositionValue,
@@ -176,18 +163,17 @@ const resolveStartSpec = (
   if (layer.kind === 'cover') {
     throw new Error(
       `StickyScrollTrigger: createOverlapScroll's trigger ${describeElement(layer.trigger)} has `
-      + `start "${startResolved}", an absolute scroll position (GSAP treats any bare-number `
-      + 'start this way). This isn\'t supported here: a cover layer\'s sticky position is always '
-      + 'computed relative to its own wrapper, which needs start to be a position clause (e.g. '
-      + '\'bottom bottom\'), not an absolute scroll position.',
+      + `start "${startResolved}", an absolute scroll position (GSAP reads any bare number this `
+      + 'way). That isn\'t supported here: a cover layer\'s sticky position is computed relative '
+      + 'to its own wrapper, so start must be a position clause such as \'bottom bottom\'.',
     );
   }
 
   return { mode: 'absolute', value: resolveAbsolute(startResolved) };
 };
 
-// Measures one layer's natural absolute position and end-resolution result together in pass 1
-// (called from refreshScenesAndCovers's pass 1).
+// Measures one layer's natural absolute position and resolves its start/end, in
+// #planLayerPositions' pass 1.
 const measureLayer = (
   rootElement: HTMLElement,
   viewportHeight: number,
@@ -239,8 +225,7 @@ const topToStartClause = (top: number | (() => number)): PositionInput => {
   return typeof top === 'function' ? () => toClause(top()) : toClause(top);
 };
 
-// Both layers and pinLayers share the constraint "the same trigger element can't be registered
-// twice," so this check is factored out as common logic for both.
+// Shared by the layer and pin registration paths, which both reject an already-registered trigger.
 const hasDuplicateTrigger = (
   list: readonly { trigger: HTMLElement }[],
   trigger: HTMLElement,
@@ -250,9 +235,8 @@ export default class StickyScrollTrigger {
   #rootElement: HTMLElement;
   // The set of layers that "should" exist. Changes immediately on register, kill, and reorder.
   #layers: Layer[] = [];
-  // A snapshot of the layers that are "actually built into the DOM."
-  // A layer removed from `#layers` by a kill can still remain here as long as it's still built,
-  // so it isn't lost mid-batch during teardown.
+  // The layers actually built into the DOM. A layer that a kill removed from `#layers` stays here
+  // as long as it's still built, so teardown never loses it mid-batch.
   #builtLayers: Layer[] = [];
   // Restore callbacks for cover layers' z-order. Kept in a WeakMap so destroy() can call them
   // even without going through GSAP's onKill.
@@ -262,12 +246,10 @@ export default class StickyScrollTrigger {
   #outermostContainer: HTMLDivElement | null = null;
   #destroyed = false;
   #rebuildScheduled = false;
-  // Reference to the ScrollTrigger class, obtained from the self that GSAP's kill passes in.
-  // Acquired at runtime without importing gsap (see #scheduleRebuild for details). Stays null
-  // until a kill ever happens.
+  // The ScrollTrigger class, read at runtime off the `self` GSAP passes to its callbacks, so gsap
+  // is never imported (see #scheduleRebuild). Null until the first onKill/onRefreshInit.
   #scrollTriggerClass: { refresh(safe?: boolean): void } | null = null;
-  // Pin layers: a mechanism independent of Scene/Cover layers, implemented entirely with
-  // plain position:sticky.
+  // Independent of Scene/Cover layers, implemented with plain position:sticky alone.
   #pinLayers: PinLayer[] = [];
   // Keeps scroll-margin-top on same-page-link targets in step with the current freeze windows,
   // so the browser's own scroll-into-view accounts for Scene layer dwell (see scrollMargin.ts).
@@ -312,16 +294,13 @@ export default class StickyScrollTrigger {
     this.#dirty = false;
   }
 
-  // Even when multiple kills happen synchronously in a row, teardown and rebuild are coalesced
-  // into one pass (doing it on every single kill would be O(n^2), and moving the shared
-  // container's subtree each time breaks iframes and focus). This defers the work to a microtask
-  // so multiple kills within the same task merge into a single refresh().
+  // Defers teardown and rebuild to a microtask, so kills within the same task coalesce into one
+  // refresh(). Rebuilding per kill would be O(n^2), and moving the shared container's subtree
+  // each time breaks iframes and focus.
   //
-  // GSAP doesn't re-read function-valued start/end until `ScrollTrigger.refresh()` is called, so
-  // updating freezeStart/freezeEnd in refresh() leaves GSAP's own cache stale.
-  // This grabs the ScrollTrigger class at runtime via `self.constructor` from the self that
-  // onKill passes in (the killed ScrollTrigger itself),
-  // and calls its refresh() right after the internal one to keep the cache in sync.
+  // GSAP doesn't re-read function-valued start/end until ScrollTrigger.refresh() is called, so
+  // refresh() alone would leave GSAP's cache holding stale freezeStart/freezeEnd. Calling
+  // ScrollTrigger.refresh() right after keeps the two in sync.
   #scheduleRebuild() {
     if (this.#rebuildScheduled || this.#destroyed) return;
 
@@ -339,25 +318,22 @@ export default class StickyScrollTrigger {
     });
   }
 
-  // Obtains a reference to the ScrollTrigger class from the self that onKill/onRefreshInit pass in,
-  // without ever importing gsap (see the comment on #scheduleRebuild's definition). Factored out
-  // here since both #registerLayer's and createStickyPin's onKill/onRefreshInit call it.
+  // Reads the ScrollTrigger class off the `self` that onKill/onRefreshInit pass in, so gsap is
+  // never imported (see #scheduleRebuild). Shared by #registerLayer's and createStickyPin's
+  // handlers.
   #captureScrollTriggerClass(self: ScrollTrigger) {
     this.#scrollTriggerClass = self.constructor as unknown as {
       refresh(safe?: boolean): void;
     };
   }
 
-  // Builds an onRefreshInit handler that binds refresh() to the refreshInit GSAP itself fires
-  // (resize/load, etc.), guaranteeing ordering without manually binding
-  // ScrollTrigger.addEventListener('refreshInit', refresh). To avoid calling refresh() once per
-  // layer/pin, only the current first entry of `list` takes responsibility (once it's killed,
-  // the role passes to the next surviving entry). Note that for list=#layers,
-  // refresh() itself reorders layers via layers.sort() into DOM order, so if DOM order and
-  // creation order diverge within the same dispatch, it can rarely fire more than once
-  // (list=#pinLayers has no such reordering, so a single call is guaranteed there).
-  // refresh() itself is idempotent no matter how many times it's called,
-  // so this causes no real harm.
+  // Binds refresh() to the refreshInit GSAP itself fires (resize/load), so callers get the right
+  // ordering without writing ScrollTrigger.addEventListener('refreshInit', refresh) themselves.
+  // Only the current first entry of `list` takes that role, so refresh() runs once rather than
+  // once per layer; if that entry is killed, the next survivor picks it up. For list=#layers,
+  // refresh() sorts the array into DOM order, so a dispatch where DOM and creation order diverge
+  // may occasionally fire twice. refresh() is idempotent, so that's harmless (#pinLayers is never
+  // reordered and always fires once).
   #createAutoRefreshHandler<T>(
     list: readonly T[],
     entry: T,
@@ -372,11 +348,10 @@ export default class StickyScrollTrigger {
     };
   }
 
-  // Wraps any not-yet-built pin layer via wrapPin(). Must run before #refreshScenesAndCovers
-  // measures Scene/Cover positions: wrapping removes trigger from the document flow (into
-  // outer{height:0}), so on the first refresh() it would still occupy its natural height during
-  // that measurement, then collapse right after, throwing off every Scene layer below it by
-  // trigger's own height, just once.
+  // Wraps any not-yet-built pin layer. Must run before #refreshScenesAndCovers measures Scene and
+  // Cover positions: wrapping takes trigger out of the flow (into outer{height:0}), so measuring
+  // first would count trigger's own height on the first refresh() only, throwing off every Scene
+  // layer below it.
   #wrapUnwrappedPins() {
     this.#pinLayers.forEach((layer) => {
       if (layer.outer) return;
@@ -388,25 +363,17 @@ export default class StickyScrollTrigger {
     });
   }
 
-  // Recomputes pin layers' sticky top and spacer height. Since this is implemented with plain
-  // position:sticky alone, it never computes an absolute scroll position to hand to GSAP the way
-  // Scene/Cover layers do.
+  // Snapshots and resets every Scene/Cover wrapper's sticky state, returning a function that puts
+  // it back. Callers must call that function before they return.
   //
-  // The spacer height is the distance from "the natural position where pinning begins"
-  // to "the absolute position where endTrigger's clause reaches the viewport's clause,"
-  // with the sticky top and trigger's own height added back (a sticky element unpins once
-  // it catches up to the bottom of its containing block).
-  // A Scene/Cover wrapper that's currently stuck (the page happens to be scrolled into its
-  // freeze window when this runs) shifts documentTop for anything nested inside it, by however
-  // far scroll has advanced past that wrapper's engagement point (see ARCHITECTURE.md's
-  // "Two-pass position measurement"). A Scene layer's own dwell computation is a difference of
-  // two documentTop calls sharing the same stuck ancestors, so that shift cancels out there, but
-  // callers measuring arbitrary elements (a pin's trigger/endTrigger, or resolveScrollPosition's
-  // element) aren't guaranteed to share stuck ancestors with anything, so it doesn't cancel out
-  // automatically for them. Snapshot and reset every Scene/Cover wrapper's sticky state, returning
-  // a function that restores it; callers must call that before returning. #refreshScenesAndCovers
-  // shares this helper for its own pass 1, but restores only on the throwing path (see the catch
-  // there for why).
+  // A wrapper that's currently stuck (the page is scrolled into its freeze window when this runs)
+  // shifts documentTop for everything nested inside it, by however far scroll has advanced past
+  // that wrapper's engagement point (see ARCHITECTURE.md's "Two-pass position measurement"). A
+  // Scene layer's own dwell is a difference of two documentTop calls sharing the same stuck
+  // ancestors, so the shift cancels out there; measuring an arbitrary element (a pin's
+  // trigger/endTrigger, or resolveScrollPosition's element) has no such guarantee.
+  // #refreshScenesAndCovers shares this helper for its own pass 1, but restores only on the
+  // throwing path (see the catch there for why).
   #resetSceneCoverStickyState(): () => void {
     const wrapperSnapshots = this.#layers
       .map((layer) => layer.wrapper)
@@ -436,11 +403,11 @@ export default class StickyScrollTrigger {
     // sticky/spacer state.
     const restoreSceneCoverStickyState = this.#resetSceneCoverStickyState();
 
-    // Pass 2 throws on a rejected option value (an absolute start, a 'max' end) from inside the
-    // window where that reset has stripped every Scene/Cover layer's sticky CSS. Without the
-    // `finally` it would stay stripped until a later refresh() succeeded, and the bad value
-    // doesn't have to be there from the start: a function-valued option can begin returning one
-    // long after setup, on a refresh GSAP itself triggers.
+    // Pass 2 throws on a rejected option value (an absolute start, a 'max' end) while that reset
+    // has every Scene/Cover layer's sticky CSS stripped. Without the `finally` it would stay
+    // stripped until a later refresh() succeeded. The bad value needn't be there from the start
+    // either: a function-valued option can begin returning one long after setup, on a refresh
+    // GSAP itself triggers.
     try {
       this.#refreshPinLayers(viewportHeight);
     } finally {
@@ -448,6 +415,11 @@ export default class StickyScrollTrigger {
     }
   }
 
+  // Recomputes pin layers' sticky top and spacer height. Pinning here is plain position:sticky, so
+  // unlike Scene/Cover layers this never hands GSAP an absolute scroll position. The spacer height
+  // spans from the natural position where pinning begins to the absolute position where
+  // endTrigger's clause reaches the viewport's, plus the sticky top and trigger's own height (a
+  // sticky element unpins once it catches up to the bottom of its containing block).
   #refreshPinLayers(viewportHeight: number) {
     // Pass 1: reset everything first so the previous sticky/spacer height doesn't affect
     // the reading, then measure the natural position.
@@ -462,16 +434,14 @@ export default class StickyScrollTrigger {
 
       const resolvedEnd = resolveMaybeFn(layer.end);
 
-      // GSAP's 'max' keyword isn't supported here: the pin's own spacer (layer.inner) height
-      // contributes to the document's max scroll position, so the height would depend on itself
-      // and never converge (same reasoning as resolveEndSpec's rejection for Scene layers).
+      // The same self-reference resolveEndSpec rejects for Scene layers: the pin's own spacer
+      // (layer.inner) adds to the document's max scroll position.
       if (isMaxFormat(resolvedEnd)) {
         throw new Error(
           `StickyScrollTrigger: createStickyPin's end "${resolvedEnd}" uses GSAP's 'max' keyword, `
-          + 'which isn\'t supported here (the pin\'s own spacer height contributes to the '
-          + 'document\'s max scroll position, so the spacer height would depend on itself and '
-          + 'never converge). Use a plain position clause such as \'top top\' against endTrigger '
-          + 'instead.',
+          + 'which isn\'t supported here: the pin\'s own spacer height adds to the document\'s '
+          + 'max scroll position, so it would depend on itself. Use a position clause against '
+          + 'endTrigger, such as \'top top\'.',
         );
       }
 
@@ -479,18 +449,17 @@ export default class StickyScrollTrigger {
       const triggerTop = documentTop(layer.trigger);
       const triggerHeight = layer.trigger.offsetHeight;
 
-      // A bare number keeps GSAP's meaning here: an absolute scroll position, which a pin has no
-      // way to act on. A Scene layer can honor one because its freeze window is a scroll range to
-      // begin with, and its sticky top is derived from that range (freezeWindow.ts's
-      // `structureTop - freezeStart`). A pin works in the opposite direction: topPx below is the
-      // only value it has, and the scroll position it engages at (triggerTop - topPx) is derived
-      // from that. Inverting it into topPx = triggerTop - start would mean already knowing
-      // triggerTop, and anyone who does would write the px distance directly, which is what
-      // `top` is for.
+      // A bare number keeps GSAP's meaning, an absolute scroll position, which a pin can't act on.
+      // A Scene layer honors one because its freeze window is a scroll range to begin with and its
+      // sticky top follows from that range (freezeWindow.ts's `structureTop - freezeStart`). A pin
+      // runs the other way: topPx below is the only value it has, and the scroll position it
+      // engages at (triggerTop - topPx) follows from that. Inverting it would mean already knowing
+      // triggerTop, and anyone who does would write the px distance directly, which is what `top`
+      // is for.
       if (isAbsoluteFormat(resolvedStart)) {
         throw new Error(
           `StickyScrollTrigger: createStickyPin's start "${resolvedStart}" is an absolute scroll `
-          + 'position (GSAP treats any bare-number start this way). A pin can\'t act on one: it '
+          + 'position (GSAP reads any bare number this way). A pin can\'t act on one: it '
           + 'engages when position:sticky engages, so start says where trigger sits in the '
           + `viewport while pinned. Use the top option (top: ${resolvedStart}) for a px distance `
           + `from the viewport's top edge, or a position clause such as 'top top'.`,
@@ -529,32 +498,24 @@ export default class StickyScrollTrigger {
     try {
       this.#planLayerPositions(viewportHeight, active);
     } catch (error) {
-      // The same window, and the same reasoning, as #refreshPins' `finally`: a rejected option
-      // value (a Scene layer's 'max' end, an endTrigger outside the container, an unparseable
-      // clause) throws while the reset above has every wrapper's sticky CSS stripped for
-      // measurement.
-      // A `catch` rather than a `finally` is the one difference: pass 2 writes the new sticky
-      // state itself, so after a successful pass the snapshot holds the state that pass replaced,
-      // and restoring it would undo everything just applied.
+      // The same window and reasoning as #refreshPins' `finally`. The one difference is `catch`
+      // rather than `finally`: pass 2 writes the new sticky state itself, so after a successful
+      // pass the snapshot holds what that pass replaced, and restoring it would undo the lot.
       restoreStickyState();
 
       throw error;
     }
   }
 
-  // Pass 1 measures every layer's natural position together, then pass 2 (planLayers) applies
-  // sticky/padding while accumulating precedingGaps in DOM order.
-  // Mixing pass 1 and pass 2 would let an earlier layer's applied sticky throw off a later
-  // layer's measurement, so keeping them separate is essential.
-  // A position-clause endTrigger pointing at a registered layer positioned later in DOM order
-  // (a forward reference) is resolved by planLayers' fixed-point iteration, not by this pass
-  // ordering. See freezeWindow.ts's planLayers.
-  // An endTrigger outside the shared container isn't at the right position
-  // until padding is finalized, so pass 2 runs a second time only in that case. This only
-  // applies to cover layers; Scene layers are rejected in resolveEndSpec because their own
-  // dwell pushes the measurement target away and never converges.
-  // The arithmetic itself lives in freezeWindow.ts's planLayers (DOM-independent);
-  // this function's job is just to "measure" and "write."
+  // Pass 1 measures every layer's natural position, then pass 2 (planLayers) applies sticky and
+  // padding while accumulating precedingGaps in DOM order. Keeping them separate is what stops an
+  // earlier layer's applied sticky from throwing off a later layer's measurement.
+  // Forward references are resolved by planLayers' fixed-point iteration rather than by this pass
+  // ordering. An endTrigger outside the shared container isn't at the right position until padding
+  // is finalized, so pass 2 runs a second time in that case alone (cover layers only;
+  // resolveEndSpec rejects it for Scene layers).
+  // The arithmetic lives in freezeWindow.ts's planLayers, which touches no DOM; this function only
+  // measures and writes.
   #planLayerPositions(viewportHeight: number, active: readonly Layer[]) {
     // Scene layers' wrappers line up at the start of the nested container, so every layer's
     // natural position aligns here.
@@ -574,11 +535,10 @@ export default class StickyScrollTrigger {
     );
     // Pass 2: leave the arithmetic to planLayers; this only supplies measuring
     // (measureLiveEndTriggerTop) and writing (onPlanned).
-    // documentMaxScroll starts at 0 (pass 1 hasn't written any Scene layer's padding yet, so the
-    // true value isn't known). This is harmless as a placeholder: only cover layers may use
-    // 'max' (resolveEndSpec rejects it for Scene layers), and a cover layer's freezeEnd doesn't
-    // feed into precedingGaps or any other layer's measurement, so a wrong first-pass value here
-    // has no side effects and is corrected below before anything reads it a second time.
+    // documentMaxScroll starts at 0, since no Scene layer's padding has been written yet and the
+    // true value isn't known. The placeholder is harmless: only cover layers may use 'max', and a
+    // cover layer's freezeEnd feeds into no other layer's measurement, so it's corrected below
+    // before anything reads it a second time.
     let documentMaxScroll = 0;
     const applyLayers = () =>
       planLayers(measured, {
@@ -634,11 +594,10 @@ export default class StickyScrollTrigger {
     // #wrapUnwrappedPins's own comment for why).
     this.#wrapUnwrappedPins();
 
-    // window.innerHeight isn't used because it fluctuates with a mobile browser's address bar
-    // showing/hiding (see measureViewportHeight).
-    // This measures once here so both Scene/Cover layers and pin layers share the same single
-    // reading (a setup using both used to force two layout reflows here).
-    // Skipped entirely if nothing is registered.
+    // Measured once here so Scene/Cover layers and pin layers share a single reading rather than
+    // forcing two layout reflows, and skipped entirely when nothing is registered.
+    // window.innerHeight is avoided because it fluctuates with a mobile browser's address bar
+    // showing and hiding (see measureViewportHeight).
     const viewportHeight
       = this.#layers.length || this.#pinLayers.length ? measureViewportHeight() : 0;
 
@@ -646,8 +605,8 @@ export default class StickyScrollTrigger {
     // A pin layer's spacer height spans the Scene layer dwell padding between trigger
     // and endTrigger, so it's measured only after #refreshScenesAndCovers has finalized padding.
     this.#refreshPins(viewportHeight);
-    // Last: the values written here are derived from the freeze windows the passes above settle,
-    // and nothing measures layout afterwards, so writing style here can't disturb anything.
+    // Last, because these values derive from the freeze windows the passes above settle, and
+    // nothing measures layout afterwards for the style written here to disturb.
     this.#syncScrollMargins();
   }
 
@@ -679,9 +638,9 @@ export default class StickyScrollTrigger {
     );
   }
 
-  // Throws `message` if any entry in `list` already uses `trigger`. Shared by #registerLayer and
-  // createStickyPin, which each check both #layers and #pinLayers in mirrored, opposite directions
-  // (see their own comments for why), using a message specific to each call site.
+  // Throws `message` if any entry in `list` already uses `trigger`. #registerLayer and
+  // createStickyPin each check both #layers and #pinLayers, with a message specific to the call
+  // site.
   #assertTriggerAvailable(
     list: readonly { trigger: HTMLElement }[],
     trigger: HTMLElement,
@@ -747,15 +706,13 @@ export default class StickyScrollTrigger {
       this.#layers,
       layer.trigger,
       `StickyScrollTrigger: ${describeElement(layer.trigger)} is already registered as a `
-      + 'trigger for another layer. Each element can only be used once across '
-      + 'createStickyTrigger/createOverlapScroll calls in the same controller instance (reusing it makes '
-      + 'endTrigger resolution ambiguous).',
+      + 'trigger for another layer. Each element can be used once per controller instance, '
+      + 'across createStickyTrigger and createOverlapScroll: reusing one makes endTrigger '
+      + 'resolution ambiguous.',
     );
 
-    // A pin layer, independent of Scene/Cover layers, wraps trigger itself via wrapPin()
-    // and applies position:sticky directly. Using the same element as a Scene/Cover layer's
-    // trigger too would wrap it a second time via wrapScene/wrapCover, and the two sticky
-    // behaviors would conflict.
+    // A pin wraps trigger itself via wrapPin(), so reusing the element here would wrap it a
+    // second time via wrapScene/wrapCover, leaving two conflicting sticky behaviors.
     this.#assertTriggerAvailable(
       this.#pinLayers,
       layer.trigger,
@@ -773,19 +730,16 @@ export default class StickyScrollTrigger {
       // Pinning is handled by sticky, so GSAP never pins. start/end return the freeze
       // window's absolute scroll position (px).
       start: () => layer.freezeStart,
-      // GSAP swaps a falsy end for "100% 0". freezeEnd is 0 right after registration,
-      // and GSAP refreshes synchronously inside its constructor, so this nudges a 0 value to
-      // a tiny non-zero one, just to avoid the trigger being born with a bogus window
-      // before refresh() ever runs.
+      // GSAP swaps a falsy end for "100% 0" and refreshes synchronously inside its constructor,
+      // so a freezeEnd still 0 from registration is nudged to a tiny non-zero value rather than
+      // letting the trigger be born with a bogus window before refresh() ever runs.
       end: () => layer.freezeEnd || 0.001,
-      // Every refresh rewrites padding height and sticky top, i.e. changes layout, so
-      // this defaults to true (so function-valued tween props get re-measured too).
-      // A value the caller specifies explicitly is respected.
+      // Every refresh rewrites padding height and sticky top, so this defaults to true and
+      // function-valued tween props get re-measured too. An explicit value is respected.
       invalidateOnRefresh: rest.invalidateOnRefresh ?? true,
-      // Removes the layer when GSAP kills it (e.g. a matchMedia switch).
-      // The actual teardown/rebuild is deferred to a microtask via #scheduleRebuild()
-      // and coalesced there. This removes it from `#layers` immediately, but since the real
-      // DOM teardown looks at #builtLayers, this wrapper is never lost even during that deferral.
+      // Removes the layer when GSAP kills it (a matchMedia switch, say). It leaves `#layers`
+      // immediately, while the DOM teardown #scheduleRebuild defers works from #builtLayers, so
+      // the wrapper survives that deferral.
       onKill: (self) => {
         this.#captureScrollTriggerClass(self);
 
@@ -801,18 +755,15 @@ export default class StickyScrollTrigger {
     };
   }
 
-  // Builds the ScrollTrigger config for an effect that sticky-pins a Scene.
-  // Registration order doesn't matter (refresh() builds it in DOM order).
-  // start/end's defaults match GSAP's own defaults for a pinned trigger:
+  // Builds the ScrollTrigger config for an effect that sticky-pins a Scene. Registration order
+  // doesn't matter, since refresh() builds in DOM order.
+  // start/end default to GSAP's own defaults for a pinned trigger:
   // - start (ScrollTrigger.js:1339, `vars.start || (... pin ? "0 0" : "0 100%")`): trigger's own
   //   top reaching the viewport's top.
-  // - end (ScrollTrigger.js:1401, `parsedEnd || (parsedEndTrigger ? "100% 0" : max)`;
-  //   parsedEndTrigger defaults to trigger itself, so it's always truthy in practice, meaning
-  //   "100% 0" is GSAP's actual default regardless of pin usage): endTrigger's own bottom edge
-  //   reaching the viewport's top edge. That's dwell for endTrigger's own height, not a fixed
-  //   distance.
-  // A caller who wants this module's previous defaults ('center center' start, one-viewport-height
-  // dwell) now has to say so explicitly (`start: 'center center', end: '+=100%'`).
+  // - end (ScrollTrigger.js:1401, `parsedEnd || (parsedEndTrigger ? "100% 0" : max)`): endTrigger's
+  //   own bottom edge reaching the viewport's top edge, so dwell for endTrigger's own height rather
+  //   than a fixed distance. parsedEndTrigger defaults to trigger itself and so is always truthy,
+  //   which makes "100% 0" GSAP's real default whether or not pinning is used.
   createStickyTrigger({
     trigger: triggerInput,
     start = '0 0',
@@ -847,10 +798,9 @@ export default class StickyScrollTrigger {
     );
   }
 
-  // Registers an overlap-scroll effect (the elements from right after trigger onward cover
-  // trigger).
-  // Creates no tween and no dwell padding. The returned Vars merely describes
-  // the freeze window; the caller must pass it to ScrollTrigger.create().
+  // Registers an overlap-scroll effect: the elements from right after trigger onward cover
+  // trigger. Creates no tween and no dwell padding, and the returned Vars only describes the
+  // freeze window, which the caller passes to ScrollTrigger.create().
   createOverlapScroll({
     trigger: triggerInput,
     cover,
@@ -896,9 +846,8 @@ export default class StickyScrollTrigger {
       freezeStart: 0,
       freezeEnd: 0,
     };
-    // liftAboveStickyWrapper only runs once #registerLayer has succeeded. #registerLayer throws on
-    // a duplicate trigger, and a layer that never reaches `#layers` has nothing to restore it
-    // later: neither onKill nor destroy() can find it.
+    // liftAboveStickyWrapper runs only after #registerLayer succeeds: a layer rejected as a
+    // duplicate never reaches `#layers`, so neither onKill nor destroy() could find it to restore.
     const vars = this.#registerLayer(
       layer,
       (self) => {
@@ -909,28 +858,24 @@ export default class StickyScrollTrigger {
     );
     const restoreCoverStyles = liftAboveStickyWrapper(coverElement);
 
-    // Usage that skips ScrollTrigger.create() never calls GSAP's onKill, leaving nothing to trigger
-    // the restore, so this keeps one per layer that destroy() can call directly.
+    // Usage that skips ScrollTrigger.create() never fires GSAP's onKill, so destroy() needs its
+    // own handle on the restore.
     this.#coverRestoreByLayer.set(layer, restoreCoverStyles);
 
     return vars;
   }
 
-  // Pins a small element using plain position:sticky alone, with pinning handled entirely
-  // by CSS, not GSAP: "start pinning once trigger naturally arrives at that position, release
-  // once endTrigger's end clause reaches the viewport." Unlike Scene/Cover layers, this only
-  // wraps trigger by itself in outer{ inner{ trigger } }, so it works free of nested-sticky
-  // lag whether it sits inside or outside the shared container. Registration order and DOM
-  // order don't matter either.
+  // Pins a small element with plain position:sticky, leaving pinning entirely to CSS: it starts
+  // once trigger naturally arrives at that position and releases once endTrigger's end clause
+  // reaches the viewport. Unlike Scene/Cover layers, this wraps trigger alone in
+  // outer{ inner{ trigger } }, so it's free of nested-sticky lag on either side of the shared
+  // container, whatever the registration or DOM order.
   //
-  // Since pinning itself never uses GSAP pinning, the returned Vars does nothing
-  // on the ScrollTrigger side (it just keeps start/end at their defaults).
-  // Vars is still returned so the caller passes it to ScrollTrigger.create(), purely to attach
-  // the onKill/onRefreshInit hooks. onKill lets it clean up after an individual kill
-  // (removing it from pinLayers and undoing outer), and onRefreshInit binds refresh()
-  // to the refreshInit GSAP itself fires (resize/load, etc.), so callers get that wiring
-  // without manually writing ScrollTrigger.addEventListener('refreshInit', refresh)
-  // (a setup with zero pins registered still needs another layer to bind it).
+  // The returned Vars does nothing on the ScrollTrigger side, keeping start/end at their defaults.
+  // It exists so the caller can pass it to ScrollTrigger.create() and get the hooks: onKill cleans
+  // up after an individual kill (dropping the layer from pinLayers and undoing outer), and
+  // onRefreshInit binds refresh() to the refreshInit GSAP fires on resize/load, sparing the caller
+  // a manual ScrollTrigger.addEventListener('refreshInit', refresh).
   createStickyPin({
     trigger: triggerInput,
     start,
@@ -1011,14 +956,12 @@ export default class StickyScrollTrigger {
     };
   }
 
-  // Returns the absolute scroll position (px) a GSAP-standard position clause points to,
-  // for any element inside the shared container (one that isn't registered as a layer).
-  // Nested sticky delays an inner element's on-screen movement by exactly the enclosing Scene
-  // layers' dwell, so using plain GSAP ScrollTrigger directly would throw it off.
-  // This corrects for that by adding the total dwell (freezeEnd - freezeStart) of every Scene
-  // layer earlier than the target element back onto documentTop (a static absolute position);
-  // cover layers are excluded since they never change document height.
-  // Call this only after refresh() has run.
+  // Returns the absolute scroll position (px) a GSAP-standard position clause points to, for any
+  // element inside the shared container, registered as a layer or not. Nested sticky delays an
+  // inner element's on-screen movement by exactly the enclosing Scene layers' dwell, which plain
+  // GSAP ScrollTrigger knows nothing about, so this adds that dwell (freezeEnd - freezeStart, over
+  // every Scene layer earlier than the element) back onto the static documentTop. Cover layers are
+  // excluded, never having changed the document height. Call this only after refresh() has run.
   resolveScrollPosition(
     elementInput: string | HTMLElement,
     position: PositionInput,
@@ -1027,19 +970,16 @@ export default class StickyScrollTrigger {
     const resolved = resolveMaybeFn(position);
     const viewportHeight = measureViewportHeight();
 
-    // 'max' isn't relative to element at all (GSAP's own scrollerMax, optionally offset), and
-    // this function doesn't register into `#layers` or add document height itself. Unlike
-    // Scene/Cover layers and createStickyPin, it can just be measured directly with no
-    // circularity or two-pass concerns (refresh() has already finalized every Scene layer's
-    // dwell padding by the time a caller invokes this, per this function's own contract).
+    // 'max' isn't relative to element at all: it's GSAP's scrollerMax, optionally offset. This
+    // function registers no layer and adds no document height, so unlike Scene/Cover layers and
+    // createStickyPin it can measure directly, with no circularity. Per this function's contract,
+    // refresh() has already finalized every Scene layer's dwell padding by now.
     if (isMaxFormat(resolved)) {
       return measureDocumentMaxScroll(viewportHeight)
         + resolveMaxOffset(resolved as string, viewportHeight);
     }
 
-    // An absolute position (a bare number, matching GSAP) is a fixed scroll position, independent
-    // of `element` entirely. Same idea as an absolute start for Scene/Cover layers (see
-    // resolveStartSpec above).
+    // A fixed scroll position, independent of `element` entirely (see resolveStartSpec above).
     if (isAbsoluteFormat(resolved)) return resolveAbsolute(resolved);
 
     let gap = 0;
@@ -1053,14 +993,12 @@ export default class StickyScrollTrigger {
     });
 
     const anchorOffset = resolveAnchorTop(resolved as string, element.offsetHeight, viewportHeight);
-    // element can be anywhere inside the shared container, not guaranteed to share stuck
-    // ancestors with anything else, so (like createStickyPin's trigger/endTrigger) its
-    // documentTop needs its own reset rather than relying on cancellation. Once refresh() has
-    // applied a Scene/Cover wrapper's position:sticky CSS, the browser keeps engaging and
-    // disengaging it natively as scroll changes, no matter when this function is called
-    // (including the documented pattern of a function-valued start/end, which GSAP re-evaluates
-    // during its own refresh). So a stuck ancestor here is a real possibility, not just a
-    // theoretical one.
+    // element can sit anywhere in the shared container and isn't guaranteed to share stuck
+    // ancestors with anything, so (like createStickyPin's trigger/endTrigger) its documentTop
+    // needs its own reset rather than the cancellation a Scene layer's own dwell relies on. A
+    // stuck ancestor here is a real possibility: once refresh() has applied a wrapper's
+    // position:sticky, the browser engages and disengages it natively as scroll changes, including
+    // during the documented function-valued start/end pattern GSAP re-evaluates on its own refresh.
     const restoreSceneCoverStickyState = this.#resetSceneCoverStickyState();
     const result = documentTop(element) + gap - anchorOffset;
 
@@ -1071,13 +1009,12 @@ export default class StickyScrollTrigger {
 
   // Returns the absolute scroll position (px) at which element's own top edge reaches the
   // viewport's top edge ('top top'), for an element that might belong to any one of several
-  // StickyScrollTrigger instances on the same page (e.g. a same-page anchor link, where the
-  // caller doesn't know in advance which instance's shared container the target lives in). Finds
-  // whichever instance's shared container actually contains element and delegates to that
-  // instance's own resolveScrollPosition; picking the wrong one would apply its dwell to a target
-  // it never delayed, corrupting the result the same way resolveScrollPosition's own docs warn
-  // against. This reaches into #rootElement on any instance passed in, not just its own, since
-  // private fields are scoped to the class body, not to `this`. An element outside every given
+  // StickyScrollTrigger instances on the page. A same-page anchor link is the usual case: the
+  // caller doesn't know in advance which shared container the target lives in, and applying the
+  // wrong instance's dwell to a target it never delayed corrupts the result. So this finds the
+  // instance whose container actually contains element and delegates to its resolveScrollPosition.
+  // Reading #rootElement off any instance passed in, not just its own, works because private
+  // fields are scoped to the class body rather than to `this`. An element outside every given
   // instance's container is measured directly, with no dwell to correct for.
   static getScrollTop(
     elementInput: string | HTMLElement,
@@ -1091,9 +1028,9 @@ export default class StickyScrollTrigger {
     return documentTop(element);
   }
 
-  // A thin wrapper that calls resolveScrollPosition for trigger/start and endTrigger/end
-  // together, building Vars for plain GSAP ScrollTrigger. Doesn't register into the layers array
-  // (it has no freeze window and is outside refresh()'s scope).
+  // A thin wrapper that calls resolveScrollPosition for trigger/start and endTrigger/end together,
+  // building Vars for plain GSAP ScrollTrigger. Registers no layer: it has no freeze window and
+  // sits outside refresh()'s scope.
   createResolvedTrigger({
     trigger: triggerInput,
     start,
@@ -1115,9 +1052,8 @@ export default class StickyScrollTrigger {
   }
 
   // Tears the whole system down: unwinds the nested DOM and restores cover layers' z-order,
-  // including layers that never went through GSAP's kill(). Destroying ScrollTrigger
-  // itself is the caller's responsibility. After this, neither registration
-  // nor refresh() is accepted (registration throws; refresh() is harmlessly ignored).
+  // including layers that never went through GSAP's kill(). Destroying ScrollTrigger itself is
+  // the caller's responsibility. Afterwards registration throws and refresh() does nothing.
   destroy(): void {
     if (this.#destroyed) return;
 

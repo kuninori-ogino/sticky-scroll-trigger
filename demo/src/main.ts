@@ -104,15 +104,14 @@ if (spanScenePin) {
 
 sticky.refresh();
 
-// ---- Everything from here down is a plain GSAP ScrollTrigger effect that uses neither
-// this library's createStickyTrigger nor createOverlapScroll (it sits inside .container__inner,
-// inside the sticky nesting structure).
+// ---- Everything below is a plain GSAP ScrollTrigger effect on an element that sits inside
+// .container__inner, and so inside the sticky nesting, without using createStickyTrigger or
+// createOverlapScroll.
 //
-// Inside the sticky nesting, the actual on-screen position and the absolute position
-// naively computed from GSAP's string start/end (e.g. 'top 80%') drift apart
-// by exactly the Scene layers' dwell.
-// sticky.createResolvedTrigger() builds a ScrollTrigger.Vars whose start/end already hold corrected
-// absolute px values, so passing it through as-is keeps it in sync with actual scroll distance.
+// Inside it, an element's on-screen position drifts from the absolute position that GSAP's
+// string start/end ('top 80%') resolves to, by exactly the Scene layers' dwell.
+// sticky.createResolvedTrigger() returns Vars whose start/end already hold corrected absolute px,
+// so passing it through as-is keeps the effect in sync with real scroll distance.
 
 const plainFadeBox = document.querySelector<HTMLElement>(
   '.plainSection--fade .plainSection__box',
@@ -138,12 +137,11 @@ if (plainFadeBox) {
   );
 }
 
-// GSAP refreshes every trigger on its own on DOMContentLoaded/load/resize.
-// refreshInit fires right before that, so the order "recompute sticky layers → GSAP recomputes"
-// needs to be guaranteed here, but createStickyTrigger/createOverlapScroll/createStickyPin all
-// perform the same binding via their own onRefreshInit, so as long as at least one of them
-// is registered above, there's no need to bind it again here (only setups where none of them
-// are registered need ScrollTrigger.addEventListener('refreshInit', () => sticky.refresh())).
+// GSAP refreshes every trigger itself on DOMContentLoaded/load/resize, and refreshInit fires
+// just before that, which is what guarantees the order "recompute sticky layers → GSAP
+// recomputes". The registrations above already bind it through their own onRefreshInit, so
+// nothing is needed here. Only a setup registering none of them has to add
+// ScrollTrigger.addEventListener('refreshInit', () => sticky.refresh()).
 
 const debouncedRefresh = debounce(() => {
   // sticky.refresh() is invoked via refreshInit, so all this needs to do is kick off GSAP.

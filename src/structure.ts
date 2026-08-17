@@ -6,11 +6,10 @@
 import { compareDocumentOrder, unwrapCover, wrapCover, wrapScene } from './dom';
 import type { Layer } from './types';
 
-// Returns whether layers is out of DOM order.
-// buildStructure always sorts into DOM order before building, so if it's out of order, it means
-// trigger elements were reordered since the last build
-// (a reorder with no additions/removals can't be detected by register/kill,
-// so refresh() checks this to decide whether to rebuild).
+// Returns whether layers is out of DOM order. buildStructure always sorts before building, so
+// anything out of order means the trigger elements moved since the last build. register and kill
+// can't detect a reorder with no additions or removals, so refresh() checks this to decide
+// whether to rebuild.
 export const isDomOrderStale = (layers: readonly Layer[]): boolean => {
   for (let i = 1; i < layers.length; i += 1) {
     if (compareDocumentOrder(layers[i - 1].trigger, layers[i].trigger) > 0) return true;
@@ -55,8 +54,8 @@ export const buildStructure = (
   return outermost;
 };
 
-// Tears down the nesting and restores the shared container,
-// along with the elements cover layers wrapped, to their original positions.
+// Tears down the nesting, returning the shared container and everything cover layers wrapped to
+// their original positions.
 export const unbuildStructure = (
   rootElement: HTMLElement,
   layers: readonly Layer[],

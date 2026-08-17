@@ -135,13 +135,13 @@ Avoid debounce logic that assumes it runs before GSAP's 200ms delay. Use `refres
 
 ### `new StickyScrollTrigger(root, options?)`
 
-Creates an instance that treats `root` (a selector string or `HTMLElement`) as the shared container, exposing `createStickyTrigger`, `createOverlapScroll`, `createStickyPin`, `createResolvedTrigger`, `resolveScrollPosition`, `refresh`, and `destroy` as instance methods. Throws if the shared container can't be found. The class itself also exposes a static [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances) method, for resolving a position across more than one instance.
+Creates an instance that treats `root` (a selector string or `HTMLElement`) as the shared container. Everything documented below is an instance method on it, apart from the static [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances), which resolves a position across more than one instance. Throws if the shared container can't be found.
 
 | option                | default  | description                                                                                                                                                  |
 | --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `scrollMarginTargets` | `'[id]'` | Which elements inside the shared container get their `scroll-margin-top` kept in sync (see [Same-page links](#same-page-links)). `null` disables it entirely |
 
-These are ordinary instance methods, not standalone functions, so always call them on the instance (`sticky.createStickyTrigger(...)`) rather than destructuring them out; a destructured method loses its `this` binding when called.
+Call them on the instance (`sticky.createStickyTrigger(...)`) rather than destructuring them out: a destructured method loses its `this` binding.
 
 Like `root`, every `trigger`/`endTrigger`/`cover` option below also accepts a CSS selector string (in addition to an `HTMLElement`), resolved via `document.querySelector`, the same as GSAP ScrollTrigger's own `trigger`/`endTrigger`. Throws an error if the selector matches no elements.
 
@@ -155,7 +155,7 @@ Registers a layer that pins a scene and advances its effect, and returns `Scroll
 | `pin` / `pinSpacing` / `anticipatePin` / `pinnedContainer` / `pinReparent` / `pinSpacer` / `pinType` | Pinning is handled by `position:sticky`, not GSAP pinning, so these have no effect   |
 | `horizontal` / `scroller` / `containerAnimation`                                                     | This module assumes vertical, window-based scrolling; setting these shifts positions |
 
-You can specify `onKill`, `invalidateOnRefresh`, and `onRefreshInit`; the module also uses them internally. `invalidateOnRefresh` defaults to `true` (GSAP defaults to `false`) so function-valued tween props are re-measured on refresh. Tracking of the freeze window (`start`/`end`) is independent of this flag, so setting `invalidateOnRefresh: false` will not break it. Explicit values are respected.
+You can specify `onKill`, `invalidateOnRefresh`, and `onRefreshInit`; the module also uses them internally. `invalidateOnRefresh` defaults to `true` (GSAP defaults to `false`) so function-valued tween props are re-measured on refresh, and an explicit value is respected. Freeze-window tracking is independent of the flag, so `invalidateOnRefresh: false` won't break it.
 
 | option       | default        | description                                                                                                                                                                                                 |
 | ------------ | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -210,15 +210,15 @@ sticky.refresh();
 | `endTrigger` | (required)  | Reference element for releasing the pin                                                                                                                                                          |
 | `end`        | `'top top'` | Which clause of `endTrigger` releases the pin (standard GSAP [position syntax](#position-syntax))                                                                                                |
 
-Here `start` means only "where it sits while pinned", not "when pinning begins" as it does for the other methods. Pinning begins the moment `trigger` reaches that position naturally, which is CSS's decision rather than a separate number to set, so a pin's position and the scroll position it engages at are the same setting.
+Here `start` means only where the element sits while pinned, not when pinning begins, as it does for the other methods. Pinning begins the moment `trigger` reaches that position naturally, which is CSS's decision rather than a separate number to set, so a pin's position and the scroll position it engages at are one setting.
 
-That's why `start` throws on an [absolute scroll position](#absolute-scroll-position) (`start: 20`, which GSAP reads as scroll position 20) instead of quietly treating it as a px distance. It's also why `top` is its own option: with `start`'s bare-number slot reserved for GSAP's meaning, a pin would otherwise have no way to say "20px below the top of the viewport" short of the string `'top 20px'`. `end` does take an absolute scroll position (`end: 3000` releases at scroll 3000), since a release point on the scroll axis is a real thing to ask for.
+That's why `start` throws on an [absolute scroll position](#absolute-scroll-position) (`start: 20`, which GSAP reads as scroll position 20) instead of quietly treating it as a px distance, and why `top` is its own option: with the bare-number slot reserved for GSAP's meaning, `'top 20px'` would be a pin's only way to say "20px below the top of the viewport". `end` does take an absolute scroll position (`end: 3000` releases at scroll 3000), since a release point is a real thing to ask for on the scroll axis.
 
-Every clause spelling resolves exactly as it does elsewhere, including the one-token forms that name the element's own side: `'top 20px'` sits 20px _below_ the viewport's top edge, while `'20px'` sits 20px _above_ it.
+Clauses resolve exactly as they do elsewhere, including the one-token forms that name the element's own side: `'top 20px'` puts the element's top 20px below the viewport's top edge, while `'20px'` puts it 20px above.
 
 Internally, the element wrapping `trigger` renders beyond its own section's bounds, into the visual area of following elements. Make sure the ancestor section containing `trigger` isn't hidden behind a later section in DOM order (e.g. via `position: relative; z-index: ...`).
 
-See the repository's `ARCHITECTURE.md` ("Why `createStickyPin` is unaffected by nested-sticky lag") for why `createStickyPin` is completely unaffected by nested-sticky lag, and why `trigger` needs to be wrapped in two nested divs.
+See the repository's `ARCHITECTURE.md` ("Why `createStickyPin` is unaffected by nested-sticky lag") for why the lag never applies here, and why `trigger` needs two nested wrapper divs.
 
 ### `createResolvedTrigger(options)`
 
@@ -274,7 +274,7 @@ Using it with `pin: true` is discouraged because the element can jump when pinni
 
 Only the dwell of Scene layers registered via `createStickyTrigger` is accumulated here (`createOverlapScroll` never changes the document height, so it doesn't contribute to the lag).
 
-For a target that might belong to a _different_ instance than the one at hand, use the static [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances) below instead.
+When the target might belong to some other instance than the one at hand, use the static [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances) below instead.
 
 ### `StickyScrollTrigger.getScrollTop(element, instances)`
 
@@ -335,7 +335,7 @@ Pinning decouples an element's position in the document from the scroll position
 ```
 
 - Your own `scroll-margin-top` still applies. The correction is added to whatever value the element already computes to, never written over it, re-read on every `refresh()` (so a later change, e.g. a responsive breakpoint, is picked up too), and `destroy()` puts the original inline value back
-- A fixed header's own offset is a different case: it applies to every scroll, not just ones inside the shared container. CSSOM View says `scroll-padding-top` (on the scroller) and `scroll-margin-top` (on the target) add together, so in principle the header offset could live on `scroll-padding-top` independently of this module's own correction. In practice, don't: real Firefox drops `scroll-padding-top` from a fragment jump once any `position:sticky` element on the page has engaged, landing short by exactly the header height (see ARCHITECTURE.md's "Firefox drops scroll-padding-top" for how this was verified). Fold the header offset into `--sst-scroll-margin-top-offset` instead (below), which sidesteps the combination entirely. See the repository's demo (`style.css`'s `html` rule)
+- A fixed header's offset is a different case, applying to every scroll rather than only those inside the shared container. CSSOM View says `scroll-padding-top` (on the scroller) and `scroll-margin-top` (on the target) add together, so in principle the header offset could live there, independently of this module's correction. In practice, don't: Firefox drops `scroll-padding-top` from a fragment jump once any `position:sticky` element on the page has engaged, landing short by exactly the header height (see ARCHITECTURE.md's "Firefox drops scroll-padding-top" for how this was verified). Fold it into `--sst-scroll-margin-top-offset` instead (below), as the repository's demo does in `style.css`'s `html` rule
 - To land deliberately short of or past a target, set the `--sst-scroll-margin-top-offset` custom property (a length) on it, or on any ancestor to cover several targets at once (it inherits like any other custom property). A positive value lands short, settling below the viewport's top edge instead of flush with it; negative overshoots. Being a plain `var()`, the browser reads it live at scroll-into-view time, so unlike the author-`scroll-margin-top` case above, no `refresh()` call is needed for a change to take effect
 
   ```css
@@ -378,7 +378,7 @@ If the entire value is just a number (a plain JS number, or a string that's noth
 
 `start: '500'` (or `start: 500`) freezes starting at absolute scroll position 500px, ignoring the trigger's natural position and any preceding dwell. `end: '500'` ends the freeze window at 500px the same way, clamped to `start` if that would put `end` before it, matching GSAP's own `end = Math.max(start, ...)`.
 
-`'500 top'` (two tokens) and `'500px'` (a suffix) don't qualify for this; they resolve via the bare-number _offset_ row in the table above instead, same as GSAP.
+`'500 top'` (two tokens) and `'500px'` (a suffix) don't qualify; they resolve as offsets via the bare-number row in the table above, same as GSAP.
 
 > [`createOverlapScroll`](#createoverlapscrolloptions)'s `start` doesn't support absolute scroll positions: a cover layer's sticky position is always computed relative to its own wrapper (see the repository's `ARCHITECTURE.md`), which has no equivalent for one. It throws instead; use a position clause.
 
@@ -409,9 +409,7 @@ sticky.createStickyTrigger({
 });
 ```
 
-If `endTrigger` points to another registered layer, its position is resolved using the same computation this module already does for that layer. Forward references (pointing to a layer registered later in DOM order) only work when the referencing layer is `createOverlapScroll`'s cover layer, since it adds no padding and so doesn't depend on its own dwell.
-
-A `createStickyTrigger` Scene layer can't forward-reference a later layer this way: its own dwell padding always precedes and pushes down everything after it, so the reference would depend on its own dwell and never converge. It throws immediately instead of trying.
+If `endTrigger` points to another registered layer, its position is resolved using the same computation this module already does for that layer. A forward reference (pointing to a layer later in DOM order) only works from `createOverlapScroll`'s cover layer, which adds no padding and so doesn't depend on its own dwell. A `createStickyTrigger` Scene layer throws immediately instead: its own dwell padding pushes down everything after it, so the reference would depend on that dwell and never converge.
 
 For an unregistered `endTrigger`, its raw DOM position is measured directly, then adjusted by the dwell of every registered Scene layer structurally positioned before it, including ones registered after this call, if their `trigger` sits between this layer's `trigger` and `endTrigger`.
 
@@ -431,7 +429,7 @@ sticky.createOverlapScroll({
 }); // pin until the very bottom of the page
 ```
 
-`'max'` is only supported by [`createOverlapScroll`](#createoverlapscrolloptions) and [`resolveScrollPosition`](#resolvescrollpositionelement-position)/[`createResolvedTrigger`](#createresolvedtriggeroptions). `createStickyTrigger` and `createStickyPin` throw if `end` is `'max'`, because their own dwell padding or pin spacer adds to the document height that `'max'` measures: the freeze window would depend on itself and never settle, growing the page a little more on every `refresh()`. GSAP defines `'max'` for `end`, not `start`: in raw GSAP 3.15.0, `start: 'max'` silently resolves to `0` rather than the scroller's max, so this module rejects it for `start` instead of reproducing that.
+`'max'` is only supported by [`createOverlapScroll`](#createoverlapscrolloptions) and [`resolveScrollPosition`](#resolvescrollpositionelement-position)/[`createResolvedTrigger`](#createresolvedtriggeroptions). `createStickyTrigger` and `createStickyPin` throw on it, because their own dwell padding or pin spacer adds to the document height `'max'` measures: the freeze window would depend on itself, growing the page a little more on every `refresh()`. GSAP defines `'max'` for `end`, not `start`: in raw GSAP 3.15.0, `start: 'max'` silently resolves to `0` rather than the scroller's max, so this module rejects it for `start` instead of reproducing that.
 
 ## Constraints and caveats
 
@@ -442,9 +440,9 @@ sticky.createOverlapScroll({
 - `createStickyPin` works on either side of the container, and throws only for a `trigger` that encloses it (the container itself, or an ancestor). A pin wraps `trigger` in a `height:0`, `contain:layout` box, which would pull the container and the layers' dwell padding out of the flow
 - Selector strings for `trigger`/`endTrigger`/`cover`/`element` resolve against the whole document, as GSAP's own `trigger` does, rather than within the shared container; only the `trigger` rules above restrict where a match may land. Validate or scope these values yourself if they come from content you don't control
 - ScrollTrigger's `pin`/`pinSpacing`/`anticipatePin` can't be used (pinning is handled by sticky; these are already excluded at the type level)
-- A `createStickyTrigger` Scene layer can't point `endTrigger` at a registered layer that comes later in DOM order: it throws immediately, since the Scene layer's own dwell always precedes that later layer's position. `createOverlapScroll`'s cover layer isn't subject to this; it creates no padding, so a forward reference resolves normally
+- A `createStickyTrigger` Scene layer can't point `endTrigger` at a registered layer later in DOM order; `createOverlapScroll`'s cover layer can, since it adds no padding (see [End syntax](#end-syntax))
 - If a Scene layer's `end` uses a position clause, don't set `endTrigger` to an element that gets pushed down by that same scene's own dwell; the value won't converge
-- If several layers' unregistered or cover-layer `endTrigger`s structurally depend on each other's dwell/position in a cycle (each layer's end depends on a layer whose own end depends back on it), `refresh()` throws instead of settling on an incorrect value
+- If several layers' unregistered or cover-layer `endTrigger`s form a dependency cycle, `refresh()` throws instead of settling on a wrong value
 - `end: 'max'` throws on `createStickyTrigger` and `createStickyPin` for the same reason (their own padding/spacer would depend on itself); use `createOverlapScroll` instead
 - Using the same element as the `trigger` of two different `createStickyTrigger`/`createOverlapScroll`/`createStickyPin` calls throws
 - You must call `refresh()` once manually after registration. Window resize/load recomputation is automatically wired to GSAP's own `refreshInit`, but for layout changes that don't involve those (e.g. content height changes), call `ScrollTrigger.refresh()` yourself (see [Calling refresh](#calling-refresh))

@@ -29,9 +29,8 @@ export const resolveElement = (value: string | HTMLElement, context: string): HT
   return el;
 };
 
-// Resolves an optional endTrigger option, defaulting to trigger itself when omitted (undefined).
-// Every registration method (createStickyTrigger/createOverlapScroll/createResolvedTrigger) shares
-// this same default.
+// Resolves an optional endTrigger option, defaulting to trigger itself when omitted. Every
+// registration method shares this default.
 export const resolveEndTrigger = (
   trigger: HTMLElement,
   endTriggerInput: string | HTMLElement | undefined,
@@ -67,10 +66,10 @@ export const documentTop = (el: HTMLElement): number => {
   return top;
 };
 
-// Measures a stable viewport height despite mobile browser address-bar visibility changes.
-// window.innerHeight fluctuates, so this temporarily appends a height:100vh div and reads its
-// offsetHeight instead (the same technique GSAP itself uses in _refresh100vh). Environments where
-// offsetHeight is always 0 (e.g. jsdom) fall back to window.innerHeight.
+// Measures a viewport height that stays stable as a mobile browser's address bar shows and hides,
+// which window.innerHeight doesn't. This appends a temporary height:100vh div and reads its
+// offsetHeight instead, the same technique GSAP uses in _refresh100vh. Environments where
+// offsetHeight is always 0 (jsdom) fall back to window.innerHeight.
 export const measureViewportHeight = (): number => {
   const probe = document.createElement('div');
 
@@ -170,9 +169,8 @@ export const unwrapCover = (wrapper: HTMLDivElement) => {
   wrapper.remove();
 };
 
-// Pin layer: wraps trigger in two levels, outer{ inner{ trigger } }.
-// outer has height 0 and contain:layout
-// so inner's actual height doesn't affect layout outside outer.
+// Pin layer: wraps trigger in two levels, outer{ inner{ trigger } }. outer has height 0 and
+// contain:layout, so inner's actual height doesn't affect layout outside outer.
 export const wrapPin = (trigger: HTMLElement) => {
   if (!trigger.parentNode) {
     throw new Error(
@@ -202,8 +200,8 @@ export const unwrapPin = (outer: HTMLDivElement, trigger: HTMLElement) => {
   outer.remove();
 };
 
-// State for an already-lifted element.
-// Multiple cover layers can lift the same element, so this is reference-counted.
+// State for an already-lifted element, reference-counted because several cover layers can lift
+// the same one.
 interface LiftState {
   count: number;
   position: string;

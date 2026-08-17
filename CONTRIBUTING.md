@@ -37,7 +37,7 @@ Before opening a PR, run the following command sequence:
 
 `npm run format:check && npm run typecheck && npm test && npm run build:lib && npm run build && npm run test:e2e`
 
-CI (`.github/workflows/ci.yml`) runs the same command sequence.
+CI (`.github/workflows/ci.yml`) runs the same sequence.
 
 Husky hooks are set up automatically by the `prepare` script during `npm ci`: `pre-commit` runs `lint-staged` (ESLint + Prettier on staged files), and `pre-push` runs `typecheck` and `test`.
 
@@ -51,7 +51,8 @@ Rule of thumb: layout-dependent behavior (for example `documentTop`) belongs in 
 
 ## Coding conventions
 
-- Comments should only explain _why_ something is the way it is, never what the code already makes obvious.
+- Comments should explain why something is the way it is, never what the code already makes obvious.
+- Write each reason out in full in one place, and refer to it from anywhere else that needs it. An error message should say enough to act on, but the derivation behind it belongs in a single comment or README section, not repeated in all three.
 - If you change the public API (the exports of `src/index.ts`), update the corresponding part of the README in the same change.
 
 ## Commit messages

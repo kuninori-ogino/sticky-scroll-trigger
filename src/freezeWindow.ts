@@ -2,17 +2,15 @@
  * Computes each layer's freeze window (freezeStart/freezeEnd) and the style values to apply,
  * from already-measured numbers. This does no DOM measuring or writing itself.
  *
- * There's one ordering dependency it can't resolve on its own: an endTrigger outside the shared
- * container can only be measured correctly after the preceding layers' padding has been applied.
- * That value is received from the caller via the deps callbacks.
+ * One ordering dependency needs the caller's help: an endTrigger outside the shared container can
+ * only be measured once the preceding layers' padding has been applied, so its position arrives
+ * through the deps callbacks.
  *
- * An unregistered endTrigger inside the shared container is different: its structural position
- * depends on the dwell padding of every Scene layer whose trigger precedes it, including ones
- * that appear later in `measurements` order. Likewise, a registered endTrigger pointing at a
- * layer positioned later in DOM order (a forward reference) depends on that layer's own natural
- * position, not yet known on a single pass. Neither needs a DOM round-trip like the
- * container-external case above; both are resolved in-memory by iterating the whole pass to a
- * fixed point, which only fails to converge when two or more layers' endTriggers genuinely
+ * Two others are resolved in memory instead, by iterating the whole pass to a fixed point. An
+ * unregistered endTrigger inside the container depends on the dwell of every Scene layer
+ * structurally before it, including layers that come later in `measurements` order; a registered
+ * endTrigger pointing at a layer later in DOM order (a forward reference) depends on that layer's
+ * natural position. Iteration only fails to converge when two or more endTriggers genuinely
  * depend on each other in a cycle.
  */
 
@@ -20,12 +18,10 @@ import { resolveAnchorTop } from './position';
 
 // The result of resolving start during refresh()'s first pass.
 export type StartSpec
-  // Position clause (or function returning one), resolved relative to trigger's own natural
-  // position: the usual case.
+  // The usual case: a position clause resolved relative to trigger's own natural position.
   = | { mode: 'clause'; anchorOffset: number }
-    // A bare number (or a numeric-only string), matching GSAP's own _parsePosition: this is an
-    // absolute scroll position, entirely unrelated to trigger's own natural position. See
-    // position.ts's isAbsoluteFormat.
+    // A bare number, which GSAP reads as an absolute scroll position unrelated to trigger's own
+    // natural position. See position.ts's isAbsoluteFormat.
     | { mode: 'absolute'; value: number };
 
 // The result of resolving end during refresh()'s first pass.
@@ -34,12 +30,11 @@ export type EndSpec
   = | { mode: 'auto' }
     // Dwell-distance notation ('+=500'). Relative distance (px) from freezeStart.
     | { mode: 'dwell'; distancePx: number }
-    // A bare number (or a numeric-only string), matching GSAP's own _parsePosition: an absolute
-    // scroll position, entirely unrelated to freezeStart. See position.ts's isAbsoluteFormat.
+    // A bare number, unrelated to freezeStart (same rule as StartSpec's absolute mode above).
     | { mode: 'absolute'; value: number }
-    // GSAP's 'max' notation. Offset (px) from the document's max scroll position, which is only
-    // valid for a cover layer. A Scene layer's own dwell padding would make it self-referential,
-    // so index.ts's resolveEndSpec rejects it there instead.
+    // GSAP's 'max' notation: an offset (px) from the document's max scroll position. Cover layers
+    // only, since a Scene layer's own dwell padding would make it self-referential (index.ts's
+    // resolveEndSpec rejects that).
     | { mode: 'max'; offsetPx: number }
     | {
       mode: 'clause';
@@ -75,11 +70,10 @@ export interface PlanDeps {
   viewportHeight: number;
   // Absolute top of the Scene layer nesting's outermost container (0 if none).
   structureTop: number;
-  // The document's max scroll position (px), used by a 'max'-mode end. Only meaningful once
-  // every Scene layer's dwell padding has been written (see index.ts's refreshScenesAndCovers);
-  // an earlier, not-yet-finalized value is harmless for a 'max'-mode end since only cover layers
-  // may use it, and a cover layer's freezeEnd doesn't feed into precedingGaps or any other
-  // layer's measurement.
+  // The document's max scroll position (px), for a 'max'-mode end. Only meaningful once every
+  // Scene layer's dwell padding has been written (see index.ts's #planLayerPositions), but an
+  // earlier value is harmless: only cover layers may use 'max', and a cover layer's freezeEnd
+  // feeds into no other layer's measurement.
   documentMaxScroll: number;
   measureLiveEndTriggerTop: (layerIndex: number) => number;
   onPlanned: (layerIndex: number, plan: LayerPlan) => void;
@@ -93,15 +87,13 @@ interface PreviousPass {
   naturalTops: readonly number[];
 }
 
-// Sum of paddingHeight for every Scene layer whose (pass-1, unpadded) triggerTop precedes
-// rawPosition, i.e. the total dwell that structurally sits before an unregistered endTrigger at
-// that raw position, regardless of which index processes before which in `measurements`.
-// For a layer already processed earlier in this same pass, `paddingHeightsSoFar` has its
-// freshly computed value; for one not yet reached this pass, `previous` (the previous full
-// pass's result, or null on the very first pass) is used instead. Mixing a fresh value for
-// one and a stale value for the other here would double-count or drop a layer relative to what
-// the sequential `precedingGaps` below already folded in, which is what caused this to oscillate
-// instead of converging.
+// Total dwell structurally before an unregistered endTrigger at rawPosition: the sum of
+// paddingHeight over every Scene layer whose (pass-1, unpadded) triggerTop precedes it, whatever
+// order `measurements` happens to process them in. A layer already handled this pass contributes
+// its fresh value from `paddingHeightsSoFar`; one not yet reached contributes the previous pass's
+// (null on the very first). Reading a fresh value where a stale one belongs, or the reverse,
+// double-counts or drops a layer relative to the sequential `precedingGaps` below, which makes
+// the iteration oscillate instead of converge.
 const gapsBeforeRawPosition = (
   measurements: readonly LayerMeasurement[],
   paddingHeightsSoFar: readonly (number | null | undefined)[],
@@ -125,16 +117,14 @@ const gapsBeforeRawPosition = (
 };
 
 // One full sequential pass over every layer, in DOM order.
-// precedingGaps only accumulates from Scene layer dwell (cover layers never increase document
-// height), and only from layers already processed in this pass: correct for a layer's own
-// natural position, since `measurements` is already DOM-ordered. An unregistered clause's endTop
-// uses gapsBeforeRawPosition instead because that dependency isn't limited to already-processed
-// layers; a registered clause pointing at a layer positioned later in DOM order (a forward
-// reference) similarly falls back to `previous.naturalTops` below.
-// Returns naturalTops alongside plans (rather than letting a caller reconstruct
-// naturalAbsoluteTop from freezeStart) because that reconstruction assumed
-// freezeStart = naturalAbsoluteTop - start.anchorOffset, true for a clause start, but not for an
-// absolute start (freezeStart = start.value directly, unrelated to naturalAbsoluteTop).
+// precedingGaps accumulates Scene layer dwell only (cover layers never increase document height),
+// and only from layers already processed this pass, which is exactly right for a layer's own
+// natural position because `measurements` is already DOM-ordered. The two clause cases that reach
+// beyond those layers look elsewhere: an unregistered endTrigger through gapsBeforeRawPosition, a
+// forward reference through `previous.naturalTops`.
+// naturalTops is returned alongside plans because a caller can't reconstruct it from freezeStart:
+// freezeStart = naturalAbsoluteTop - start.anchorOffset only holds for a clause start, not an
+// absolute one, where freezeStart is start.value directly.
 const runPass = (
   measurements: readonly LayerMeasurement[],
   { viewportHeight, structureTop, documentMaxScroll, measureLiveEndTriggerTop }: PlanDeps,
@@ -145,8 +135,8 @@ const runPass = (
   let precedingGaps = 0;
   const plans = measurements.map((measurement, index) => {
     const naturalAbsoluteTop = measurement.triggerTop + precedingGaps;
-    // An absolute start (a bare number, matching GSAP) is a fixed scroll position, unrelated to
-    // trigger's own natural position. Unlike a clause start, precedingGaps plays no part in it.
+    // An absolute start is a fixed scroll position, so unlike a clause start, trigger's own
+    // natural position and precedingGaps play no part in it.
     const freezeStart = measurement.start.mode === 'absolute'
       ? measurement.start.value
       : naturalAbsoluteTop - measurement.start.anchorOffset;
@@ -154,11 +144,9 @@ const runPass = (
 
     switch (measurement.end.mode) {
       case 'auto':
-        // Only reachable with a clause start: 'auto' end only ever occurs on a cover layer
-        // (createOverlapScroll), and index.ts's resolveStartSpec rejects an absolute start for
-        // any cover layer outright (its stickyTop is computed relative to its own wrapper, which
-        // needs a clause's anchorOffset; an absolute scroll position has no meaning there). The
-        // check below is a defensive fallback for that invariant, not an expected runtime path.
+        // 'auto' only occurs on a cover layer, and index.ts's resolveStartSpec rejects an absolute
+        // start there, since a cover layer's stickyTop needs a clause's anchorOffset. The check
+        // below guards that invariant; it isn't an expected runtime path.
         if (measurement.start.mode !== 'clause') {
           throw new Error(
             'StickyScrollTrigger: internal error: an absolute start reached \'auto\' end mode, '
@@ -175,9 +163,8 @@ const runPass = (
         freezeEnd = freezeStart + measurement.end.distancePx;
         break;
 
-      // An absolute end (a bare number, matching GSAP) is a fixed scroll position, unrelated to
-      // freezeStart, clamped to freezeStart the same way GSAP itself does
-      // (`end = Math.max(start, ...)` in ScrollTrigger.js) when it would otherwise precede start.
+      // A fixed scroll position unrelated to freezeStart, clamped to it the way GSAP itself does
+      // (`end = Math.max(start, ...)` in ScrollTrigger.js).
       case 'absolute':
         freezeEnd = Math.max(freezeStart, measurement.end.value);
         break;
@@ -213,9 +200,8 @@ const runPass = (
           }
         }
 
-        // When the end would fall before the start (e.g. endTrigger sits above trigger),
-        // clamp it to freezeStart, collapsing to a zero-length window (same behavior as GSAP
-        // ScrollTrigger).
+        // An end that falls before the start (endTrigger sitting above trigger, say) collapses to
+        // a zero-length window, the same behavior as GSAP ScrollTrigger.
         const anchorOffsetEnd = resolveAnchorTop(
           measurement.end.clause,
           measurement.endTriggerHeight,
@@ -230,8 +216,7 @@ const runPass = (
     let plan: LayerPlan;
 
     if (measurement.kind === 'cover') {
-      // A cover layer's start is always a clause: index.ts's resolveStartSpec rejects an
-      // absolute start outright for any cover layer (see the 'auto' case above for why).
+      // The same invariant the 'auto' case above guards: a cover layer's start is always a clause.
       if (measurement.start.mode !== 'clause') {
         throw new Error(
           'StickyScrollTrigger: internal error: a cover layer measurement carries an absolute '
@@ -266,24 +251,21 @@ const runPass = (
   return { plans, naturalTops };
 };
 
-// Finalizes every layer's freeze window and style values, from measurements laid out in DOM
-// order. Most end modes only need one pass. Two kinds of clause end need more:
+// Finalizes every layer's freeze window and style values, from measurements laid out in DOM order.
+// Most end modes settle in one pass. Two kinds of clause end need more:
 //
-// - An unregistered clause needs gapsBeforeRawPosition's structural lookup, which depends on
-//   other layers' padding heights that aren't all known on the first pass (see runPass). That
-//   dependency always resolves: gapsBeforeRawPosition only lets layer i's endTop depend on layer
-//   j's paddingHeight without cancelling (see its own comment) when j's array index is >= i's,
-//   so every non-cancelling edge of this kind points from a lower-or-equal index to a
-//   higher-or-equal one, which can never close into a cycle between two distinct indices.
-// - A registered clause pointing at a layer positioned later in DOM order (a forward reference)
-//   depends directly on that layer's naturalTop, with no such cancellation, so two layers whose
-//   endTriggers point at each other (or a longer cycle through several layers) form a genuine
-//   cycle with no fixed point. That's exactly the case the throw below exists for.
+// - An unregistered clause needs gapsBeforeRawPosition's structural lookup, whose inputs aren't
+//   all known on the first pass (see runPass). This always resolves: that lookup only creates a
+//   non-cancelling dependency from layer i to layer j when j's index is >= i's, and such edges
+//   can never close into a cycle between two distinct indices.
+// - A forward reference depends directly on the referenced layer's naturalTop, with no such
+//   cancellation, so endTriggers pointing at each other (or a longer cycle through several
+//   layers) have no fixed point. That's the case the throw below exists for.
 //
-// Re-running the full pass with the previous pass's results converges on the correct totals for
-// every acyclic dependency, bounded to one iteration per layer, enough to settle any chain no
-// longer than the number of layers (see the DOM-order-scrambled stress test in
-// freezeWindow.test.ts, and the genuine-cycle test next to it).
+// Re-running the full pass with the previous pass's results converges for every acyclic
+// dependency, within one iteration per layer, enough for any chain no longer than the layer count
+// (see freezeWindow.test.ts's DOM-order-scrambled stress test and the genuine-cycle test beside
+// it).
 export const planLayers = (
   measurements: readonly LayerMeasurement[],
   deps: PlanDeps,
@@ -295,11 +277,10 @@ export const planLayers = (
       ? measurement.end.rawTop !== null
       : measurement.endTriggerIndex >= index;
   });
-  // Nothing in the shared DOM state changes between internal passes below. onPlanned (the only
-  // thing that writes DOM/layer state) only runs once, after the loop, on the final result, so a
-  // live remeasurement gives the same answer on every pass. Without this cache, a layer with an
-  // endTrigger outside the container would get re-measured (a forced-layout DOM read) once per
-  // pass instead of once per planLayers call, for no benefit.
+  // onPlanned, the only thing that writes DOM or layer state, runs once after the loop, so no
+  // shared state changes between passes and a live remeasurement gives the same answer every time.
+  // Without this cache, an endTrigger outside the container costs one forced-layout read per pass
+  // instead of one per planLayers call.
   const liveTopCache = new Map<number, number>();
   const passDeps: PlanDeps = {
     ...deps,
@@ -333,11 +314,10 @@ export const planLayers = (
 
       if (pass === measurements.length - 1) {
         throw new Error(
-          'StickyScrollTrigger: could not resolve endTrigger positions: some Scene layers\' '
-          + 'endTrigger references form a circular structural dependency (either two or more '
-          + 'triggers reference each other\'s endTrigger, or an unregistered endTrigger\'s '
-          + 'dwell depends on a layer whose own end depends back on it). Point each endTrigger '
-          + 'at a layer that doesn\'t depend on it.',
+          'StickyScrollTrigger: could not resolve endTrigger positions: some endTrigger '
+          + 'references form a circular structural dependency, each layer\'s end depending on a '
+          + 'layer whose own end depends back on it. Point each endTrigger at a layer that '
+          + 'doesn\'t depend on it.',
         );
       }
     }

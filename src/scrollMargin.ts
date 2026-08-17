@@ -1,8 +1,8 @@
 /**
- * Declares each Scene layer's dwell to the browser through `scroll-margin-top`, so that the
- * platform's own "scroll an element into view" lands where the element really reaches the
- * viewport top. This covers same-page `<a href="#...">` links, `scrollIntoView`, `:target` and
- * anything else routed through that algorithm, with no code on the caller's side.
+ * Declares each Scene layer's dwell to the browser through `scroll-margin-top`, so the platform's
+ * own "scroll an element into view" lands where the element really reaches the viewport top. That
+ * covers same-page `<a href="#...">` links, `scrollIntoView`, `:target` and anything else routed
+ * through that algorithm, with no code on the caller's side.
  *
  * ## Why a correction is needed at all
  *
@@ -10,11 +10,11 @@
  *
  *   landing = currentScroll + paintedTop − scrollMarginTop
  *
- * That is only right when `paintedTop + currentScroll` is the same at every scroll position, i.e.
- * when the element always moves at exactly scroll speed. Pinning deliberately violates that, so
- * no pinning technique (GSAP's own `pin` included) can leave the native calculation correct on
- * its own. `scroll-margin-top` is the one channel CSS gives for saying "aim this far off from
- * what you measured", so it's where the correction belongs.
+ * That only holds when `paintedTop + currentScroll` is the same at every scroll position, i.e.
+ * when the element moves at exactly scroll speed. Pinning deliberately violates it, so no pinning
+ * technique, GSAP's own `pin` included, leaves the native calculation correct by itself.
+ * `scroll-margin-top` is the one channel CSS offers for saying "aim this far off from what you
+ * measured".
  *
  * ## The value
  *
@@ -30,65 +30,58 @@
  *
  *   scrollMarginTop = Σ h_i(currentScroll) − lag
  *
- * The `lag` half is a constant this module knows after `refresh()`. The `Σ h_i` half depends on
- * where the jump is started from, which is why it can't be a plain number: with a constant
- * `−lag` alone, a jump from the top of the page is exact but one started mid-page overshoots by
- * whatever dwell has already been consumed.
+ * `lag` is a constant this module knows after `refresh()`. `Σ h_i` depends on where the jump was
+ * started from, which is why the value can't be a plain number: with `−lag` alone, a jump from the
+ * top of the page is exact but one started mid-page overshoots by the dwell already consumed.
  *
  * ## How the scroll-dependent half is supplied
  *
- * Each layer's `h_i` is a registered custom property ramped from 0 to its dwell across its own
- * freeze window, driven by a CSS scroll-driven animation (`animation-timeline: scroll(root
- * block)` plus an `animation-range` in absolute px) where the browser supports it. That keeps
- * this module's promise of never running code on scroll for those browsers: the browser advances
- * the ramps itself, off the main thread.
+ * Each `h_i` is a registered custom property ramped from 0 to its dwell across its own freeze
+ * window, driven by a CSS scroll-driven animation (`animation-timeline: scroll(root block)` plus
+ * an `animation-range` in absolute px) where the browser supports it. The browser advances the
+ * ramps itself, off the main thread, which is what keeps this module's promise of running no code
+ * on scroll.
  *
- * Where `animation-timeline: scroll()` isn't supported, a `scroll` listener on `window` writes
- * the same `h_i` values directly instead. A plain `−lag` constant was tried first, but that's
- * wrong for exactly the same reason a fixed `scrollMarginTop` is wrong in general (see above):
- * it only lands correctly for a jump from above every freeze window, not one started mid-dwell.
- * This fallback doesn't share Chromium's known limitation below, since Chromium is never the
- * browser running it: every engine that lacks `animation-timeline: scroll()` support was verified
- * to tolerate a `scroll-margin-top` that keeps changing through an in-flight smooth scroll, which
- * is exactly what Chromium can't.
+ * Where `animation-timeline: scroll()` isn't supported, a `scroll` listener on `window` writes the
+ * same `h_i` values instead. A plain `−lag` constant is wrong here for the same reason it's wrong
+ * in general (above). This fallback doesn't share Chromium's limitation below, since Chromium
+ * always takes the CSS path: every engine that lacks scroll timelines was verified to tolerate a
+ * `scroll-margin-top` that keeps changing through an in-flight smooth scroll.
  *
- * The animation (or the `scroll` listener's writes) targets the outermost container this module
+ * The animation, and the `scroll` listener's writes, target the outermost container this module
  * builds, never an element the caller owns, and the custom properties reach the targets by
  * inheritance from there.
  *
  * ## Known limitation: Chromium + native smooth scrolling
  *
- * Chromium's own `scroll-behavior: smooth` implementation doesn't run a fragment jump as one
- * continuous animation: it advances in several short steps, each firing its own `scrollend`. If
- * `scroll-margin-top` changes at any point before the last of those (including in reaction to an
- * intermediate `scrollend`, which was tried and made things worse), Chromium recomputes the
- * landing target mid-flight and can under- or overshoot, occasionally by enough to reverse
- * direction briefly. This reproduces identically whether the value is driven by CSS or by JS, so
- * there's no variant of this module that avoids it while keeping the correction accurate for a
- * jump started mid-dwell. Sites that need animated same-page scrolling in Chromium should drive
- * it themselves in JS instead (`getScrollTop` plus `scrollTo({ top, behavior: 'smooth' })` to a
- * precomputed, unchanging target).
+ * Chromium's `scroll-behavior: smooth` doesn't run a fragment jump as one continuous animation: it
+ * advances in several short steps, each firing its own `scrollend`. A `scroll-margin-top` that
+ * changes before the last of those makes Chromium recompute the landing target mid-flight and
+ * under- or overshoot, occasionally by enough to reverse direction briefly. It happens whether the
+ * value is driven by CSS or by JS, and reacting to the intermediate `scrollend` makes it worse,
+ * so no variant of this module avoids it while staying accurate for a jump started
+ * mid-dwell. Sites that need animated same-page scrolling in Chromium should drive it themselves
+ * (`getScrollTop` plus `scrollTo({ top, behavior: 'smooth' })` to a precomputed, unchanging
+ * target).
  *
  * ## Nudging the landing spot on purpose
  *
- * `--sst-scroll-margin-top-offset` is reserved for exactly this: it's folded into the same
- * calc() as an extra term, so `calc(authorPx + --sst-scroll-margin-top-offset + Σh_i − lag)`.
- * A positive value lands short (the target settles below the viewport's top edge instead of
- * flush with it); negative overshoots. Being an ordinary (unregistered) custom property, it's
- * read live by the browser on every scroll-into-view, no refresh() required, and inherits
- * normally, so it can be set once on the shared container for every target, or per-target to
- * override that. This is deliberately independent of the author's own scroll-margin-top (still
- * supported, see above): the two answer different questions, "how far off do I want to land" vs.
- * "what does this element's own CSS already say".
+ * `--sst-scroll-margin-top-offset` is folded into the same calc() as an extra term:
+ * `calc(authorPx + --sst-scroll-margin-top-offset + Σh_i − lag)`. A positive value lands short,
+ * settling below the viewport's top edge instead of flush with it; negative overshoots. Being an
+ * ordinary (unregistered) custom property, it's read live on every scroll-into-view with no
+ * refresh() needed, and inherits normally, so it can be set once on the shared container for every
+ * target or per-target to override that. It stays separate from the author's own
+ * scroll-margin-top (still supported, see above) because the two answer different questions: how
+ * far off the caller wants to land, and what the element's own CSS already says.
  */
 
 import { compareDocumentOrder } from './dom';
 
 // Reserved custom property for nudging where a target lands, independent of both the dwell
-// correction and the author's own scroll-margin-top. Fixed (not per-instance) because it's a
-// per-target authoring knob, not something that needs to avoid colliding across controller
-// instances: unlike the per-layer ramp properties in buildStylesheet, nothing here ever writes to
-// it, so there's nothing for two instances to collide over.
+// correction and the author's own scroll-margin-top. Fixed rather than per-instance because it's
+// an authoring knob nothing here ever writes to, unlike the per-layer ramp properties in
+// buildStylesheet, so two instances have nothing to collide over.
 const OFFSET_PROPERTY = '--sst-scroll-margin-top-offset';
 
 // One Scene layer's contribution, as of the current refresh().
@@ -98,10 +91,10 @@ export interface SceneDwell {
   freezeEnd: number;
 }
 
-// What a target element's own inline scroll-margin-top was before this module first wrote to it.
-// Restores the element on destroy, and lets a later sync() reset a target back to its pre-module
-// state before re-reading the author's computed value (see sync's own two-pass comment for why
-// that re-read has to happen every time, not just once).
+// A target element's own inline scroll-margin-top, as it was before this module first wrote to it.
+// Restores the element on destroy, and lets a later sync() put a target back to its pre-module
+// state before re-reading the author's computed value (see sync's two-pass comment for why that
+// re-read happens every time).
 interface TargetSnapshot {
   inline: string;
 }
@@ -138,20 +131,14 @@ const buildStylesheet = (instanceId: string, scenes: readonly SceneDwell[]): str
     ranges.push(`${scene.freezeStart}px ${scene.freezeEnd}px`);
   });
 
-  // Gated behind a support check for animation-timeline itself, not just left to degrade on its
-  // own: a browser that doesn't recognize `animation-timeline: scroll(...)` drops that whole
-  // declaration as invalid, leaving `animation-timeline` at its initial value `auto` rather than
-  // at scroll(). Under `auto` the `animation` shorthand above is a perfectly ordinary time-based
-  // animation, and since it carries no explicit duration, that duration is 0s. A 0-duration
-  // animation with fill-mode `both` still runs, instantly: every custom property jumps straight
-  // to its keyframe's `to` value (each layer's own dwell) the moment the page loads, which is a
-  // rebuild-the-Firefox-bug-verified failure mode (Firefox has no scroll(); the resulting
-  // scroll-margin-top pointed at a scroll position hundreds of px away from every real target).
-  // Wrapping the whole animation rule in @supports keeps it from ever running unless the browser
-  // actually understands the timeline it's asked to run on, which is exactly the condition this
-  // module's fallback promise depends on: every var() below then simply has nothing to read and
-  // falls back to its own 0px default, degrading to the constant '-lag' form intentionally,
-  // instead of a stale animation forcing every value to its opposite extreme.
+  // The @supports gate is load-bearing rather than a precaution. A browser that can't parse
+  // `animation-timeline: scroll(...)` drops that declaration and leaves animation-timeline at its
+  // initial `auto`, which turns the `animation` shorthand above into an ordinary time-based
+  // animation with no explicit duration, hence 0s. At 0s with fill-mode `both` it still runs,
+  // instantly, jumping every custom property to its keyframe's `to` value on load. Gating the
+  // whole rule leaves each var() below with nothing to read, so it falls back to its own 0px
+  // default, degrading to the constant '-lag' form by design. See ARCHITECTURE.md's "Why the
+  // animation rule needs an explicit @supports gate" for how this was verified in Firefox.
   //
   // animation-timeline and animation-range have to follow the `animation` shorthand, which resets
   // both to their initial values.
@@ -240,12 +227,10 @@ export const createScrollMarginSync = (rootElement: HTMLElement) => {
         animationHost.setAttribute(`data-${instanceId}`, '');
       }
 
-      // Only where supportsScrollDrivenAnimations is false (see the listener set up above):
-      // applied once immediately so the calc() below is correct right away, without waiting for
-      // a scroll event that may never come before the next scroll-into-view. Skipped entirely
-      // where the CSS animation already handles it: writing here too wouldn't be wrong (the
-      // animation wins the cascade over a plain inline value regardless), just a pointless write
-      // on every refresh() on every engine that never needed it.
+      // Applied once immediately so the calc() below is correct right away, without waiting for a
+      // scroll event that may never come before the next scroll-into-view. Skipped where the CSS
+      // animation already handles it: writing there wouldn't be wrong, since the animation wins
+      // the cascade over an inline value either way, just a pointless write on every refresh().
       if (!supportsScrollDrivenAnimations) {
         jsRamps = ramps;
         jsHost = host;
@@ -261,13 +246,11 @@ export const createScrollMarginSync = (rootElement: HTMLElement) => {
 
       const targets = Array.from(rootElement.querySelectorAll<HTMLElement>(targetSelector));
 
-      // Pass 1: put every previously-written target back to its pre-module inline value (snapshot
-      // it first, on the first sight of it), so the author's own scroll-margin-top can be read
-      // fresh in pass 2 below. Skipping this reset would read back this module's own calc() from
-      // last time and mistake it for the author's value; without a reset each sync() would be
-      // permanently stuck on whatever the author's value happened to be the very first time (a
-      // responsive header height changing at a breakpoint, or updated via JS, wouldn't be picked
-      // up again).
+      // Pass 1: snapshot each target on first sight, then put every previously-written one back to
+      // its pre-module inline value, so pass 2 can read the author's own scroll-margin-top fresh.
+      // Without the reset, pass 2 would read back this module's own calc() and mistake it for the
+      // author's value, leaving every sync() stuck on whatever that value was the first time (a
+      // header height that changes at a breakpoint, or via JS, would never be picked up again).
       targets.forEach((target) => {
         const existing = snapshots.get(target);
 
@@ -280,9 +263,8 @@ export const createScrollMarginSync = (rootElement: HTMLElement) => {
         .join(' + ');
 
       // Pass 2: read each target's author value now that it's back to that state, then write the
-      // corrected one. Interleaving this with pass 1 (reading one target right after resetting it)
-      // would still be correct, but doing every reset first, then every read, avoids forcing a
-      // style recalc per target.
+      // corrected one. Interleaving the two passes would be just as correct, but resetting
+      // everything before reading anything avoids forcing a style recalc per target.
       targets.forEach((target) => {
         const authorPx = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
         let lag = 0;

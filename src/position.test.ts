@@ -253,8 +253,8 @@ describe('resolveAnchorTop', () => {
 
 describe('isDwellFormat', () => {
   // Only the literal '+=' prefix means dwell, matching GSAP's own `!parsedEnd.indexOf("+=")`
-  // check. A bare number is *not* dwell notation: it's absolute format instead (see
-  // isAbsoluteFormat above), matching GSAP.
+  // check. A bare number is absolute format instead (see isAbsoluteFormat above), also matching
+  // GSAP.
   it('recognizes dwell-distance notation as dwell', () => {
     expect(isDwellFormat('+=500')).toBe(true);
     expect(isDwellFormat('+=100%')).toBe(true);
