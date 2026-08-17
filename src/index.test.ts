@@ -451,25 +451,36 @@ describe('Vars passed to GSAP', () => {
     expect(vars.onKill).not.toBe(userOnKill); // replaced by this module's wrapping function
   });
 
-  // `@ts-expect-error` is the actual assertion here, not anything vitest runs: vitest transpiles
-  // this file without type-checking it, so the body below executing without throwing proves
-  // nothing on its own. If horizontal/scroller/pin were ever loosened to be accepted, the
-  // `@ts-expect-error` comments would fail to suppress an error that no longer exists, which
-  // only `npm run typecheck` (tsc --noEmit), not `npm test`, would catch.
-  it('rejects options that would break things at the type level, enforced by npm run typecheck', () => {
+  // `@ts-expect-error` guards the type level: if horizontal/scroller/pin were ever loosened to
+  // be accepted, the comment would fail to suppress an error that no longer exists, which only
+  // `npm run typecheck` (tsc --noEmit), not `npm test`, would catch. The `toThrow` calls guard
+  // runtime too (#assertNoExcludedVars), since a plain JS/JSON caller bypasses the type check
+  // entirely.
+  it('rejects options that would break things, at both the type level and runtime', () => {
     const { query, controller } = setup();
     // Using the same element as the trigger of multiple layers is a separate error (see
     // "rejecting duplicate registration" below), so this uses a different element
-    // for each of the 3 type checks. The third is appended rather than taken from setup()'s
-    // markup, since a trigger has to be inside the shared container (see "trigger containment").
+    // for each of the 3 checks. The third is appended rather than taken from setup()'s markup,
+    // since a trigger has to be inside the shared container (see "trigger containment").
     const third = query('.root').appendChild(document.createElement('section'));
 
-    // @ts-expect-error horizontal isn't supported (start/end are absolute px on the vertical axis)
-    controller.createStickyTrigger({ trigger: query('.scene'), horizontal: true });
-    // @ts-expect-error scroller isn't supported (documentTop/innerHeight assume window)
-    controller.createStickyTrigger({ trigger: query('.inside'), scroller: document.body });
-    // @ts-expect-error pin isn't allowed since sticky handles pinning
-    controller.createStickyTrigger({ trigger: third, pin: true });
+    expect(() => controller.createStickyTrigger({
+      trigger: query('.scene'),
+      // @ts-expect-error horizontal isn't supported (start/end are px on the vertical axis)
+      horizontal: true,
+    })).toThrow('createStickyTrigger: horizontal is not supported here');
+
+    expect(() => controller.createStickyTrigger({
+      trigger: query('.inside'),
+      // @ts-expect-error scroller isn't supported (documentTop/innerHeight assume window)
+      scroller: document.body,
+    })).toThrow('createStickyTrigger: scroller is not supported here');
+
+    expect(() => controller.createStickyTrigger({
+      trigger: third,
+      // @ts-expect-error pin isn't allowed since sticky handles pinning
+      pin: true,
+    })).toThrow('createStickyTrigger: pin is not supported here');
   });
 });
 
@@ -1015,6 +1026,18 @@ describe('createResolvedTrigger()', () => {
     expect(vars.scrub).toBe(true);
   });
 
+  it('rejects pin/scroller/horizontal at runtime, not just the type level', () => {
+    const { query, controller } = setup();
+
+    expect(() => controller.createResolvedTrigger({
+      trigger: query('.inside'),
+      start: 'top 80%',
+      end: 'top 30%',
+      // @ts-expect-error scroller isn't supported (documentTop/innerHeight assume window)
+      scroller: document.body,
+    })).toThrow('createResolvedTrigger: scroller is not supported here');
+  });
+
   it('turns start/end into functions that, when called, return the same values as resolveScrollPosition', () => {
     const { query, controller } = setup();
     const trigger = query('.inside');
@@ -1082,6 +1105,17 @@ describe('createResolvedTrigger()', () => {
 // can't be verified here (that's e2e's job). This only checks DOM building/teardown
 // and exceptions around registration.
 describe('createStickyPin()', () => {
+  it('rejects pin/scroller/horizontal at runtime, not just the type level', () => {
+    const { query, controller } = setup();
+
+    expect(() => controller.createStickyPin({
+      trigger: query('.inside'),
+      endTrigger: query('.scene'),
+      // @ts-expect-error pin isn't allowed since sticky handles pinning
+      pin: true,
+    })).toThrow('createStickyPin: pin is not supported here');
+  });
+
   it('wraps trigger in two levels, outer/inner, once refresh() runs', () => {
     const { query, controller } = setup();
     const trigger = query('.inside');
@@ -1449,6 +1483,16 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
 });
 
 describe('createOverlapScroll input validation', () => {
+  it('rejects pin/scroller/horizontal at runtime, not just the type level', () => {
+    const { query, controller } = setup();
+
+    expect(() => controller.createOverlapScroll({
+      trigger: query('.scene'),
+      // @ts-expect-error horizontal isn't supported (start/end are px on the vertical axis)
+      horizontal: true,
+    })).toThrow('createOverlapScroll: horizontal is not supported here');
+  });
+
   it('throws naming trigger when cover cannot be found', () => {
     const { query, controller } = setup();
 

@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `createStickyTrigger` and `createOverlapScroll` now throw when `trigger` is outside the shared container, or is the container itself. The README always required this, but such a `trigger` used to be accepted, and the layer's wrapping, DOM moves and `position:sticky` styling landed on elements the instance doesn't own
 - `createStickyPin` still works on either side of the shared container, and now throws only for a `trigger` that encloses it (the container itself, or an ancestor). Such a `trigger` used to nest the container and the layers' dwell padding in the pin's own `height:0` box
 - An invalid `scrollMarginTargets` selector now throws when the instance is constructed, instead of inside `refresh()`, where it used to abort every other `ScrollTrigger`'s refresh on the page
+- `pin`, `scroller`, `horizontal`, and the rest of the pin/axis vars this module handles itself now throw at runtime, not just at the TypeScript type level. A plain JS or JSON caller could pass them straight through to GSAP before, silently breaking pinning or the scroll axis
 
 ## [0.4.0] - 2026-08-15
 

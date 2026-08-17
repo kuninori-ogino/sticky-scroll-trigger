@@ -2,7 +2,7 @@
  * An extension helper that pins multiple ScrollTrigger effects using native position:sticky
  * instead of GSAP pinning. It works by wrapping the shared container in nested sticky layers.
  * This file is the only public entry point;
- * position.ts/dom.ts/structure.ts/freezeWindow.ts/types.ts are internal modules.
+ * position.ts/dom.ts/structure.ts/freezeWindow.ts/types.ts/vars.ts are internal modules.
  */
 
 import {
@@ -35,6 +35,7 @@ import {
   resolveMaybeFn,
 } from './position';
 import type { EndValue, PositionInput, PositionValue } from './position';
+import { EXCLUDED_VAR_KEYS } from './vars';
 import type {
   CoverLayer,
   CreateOverlapScrollOptions,
@@ -664,6 +665,20 @@ export default class StickyScrollTrigger {
     );
   }
 
+  // PassThroughVars (types.ts) excludes these only at the TypeScript level; a plain JS/JSON
+  // caller can still hand them through in `rest`. Rejected here too, so GSAP never silently
+  // receives them (see vars.ts for why each one is excluded).
+  #assertNoExcludedVars(rest: object, context: string): void {
+    const found = EXCLUDED_VAR_KEYS.filter((key) => key in rest);
+
+    if (found.length === 0) return;
+
+    throw new Error(
+      `${context}: ${found.join(', ')} ${found.length > 1 ? 'are' : 'is'} not supported here; `
+      + 'this module handles pinning and the scroll axis itself.',
+    );
+  }
+
   // Throws `message` if any entry in `list` already uses `trigger`. Shared by #registerLayer and
   // createStickyPin, which each check both #layers and #pinLayers in mirrored, opposite directions
   // (see their own comments for why), using a message specific to each call site.
@@ -806,6 +821,8 @@ export default class StickyScrollTrigger {
     onKill,
     ...rest
   }: CreateStickyTriggerOptions): ScrollTrigger.Vars {
+    this.#assertNoExcludedVars(rest, 'createStickyTrigger');
+
     const trigger = resolveElement(triggerInput, 'createStickyTrigger');
 
     this.#assertTriggerInsideRoot(trigger, 'createStickyTrigger');
@@ -843,6 +860,8 @@ export default class StickyScrollTrigger {
     onKill,
     ...rest
   }: CreateOverlapScrollOptions): ScrollTrigger.Vars {
+    this.#assertNoExcludedVars(rest, 'createOverlapScroll');
+
     const trigger = resolveElement(triggerInput, 'createOverlapScroll');
 
     // Ahead of the cover checks below, so an outside trigger is reported as such rather than as a
@@ -921,6 +940,8 @@ export default class StickyScrollTrigger {
     onKill,
     ...rest
   }: CreateStickyPinOptions): ScrollTrigger.Vars {
+    this.#assertNoExcludedVars(rest, 'createStickyPin');
+
     if (this.#destroyed) {
       throw new Error(
         'StickyScrollTrigger: cannot register a new pin after destroy() has been called.',
@@ -1080,6 +1101,8 @@ export default class StickyScrollTrigger {
     endTrigger: endTriggerInput,
     ...rest
   }: CreateResolvedTriggerOptions): ScrollTrigger.Vars {
+    this.#assertNoExcludedVars(rest, 'createResolvedTrigger');
+
     const trigger = resolveElement(triggerInput, 'createResolvedTrigger');
     const endTrigger = resolveEndTrigger(trigger, endTriggerInput, 'createResolvedTrigger');
 

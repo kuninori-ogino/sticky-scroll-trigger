@@ -3,29 +3,12 @@
  */
 
 import type { EndInput, PositionInput } from './position';
+import type { EXCLUDED_VAR_KEYS } from './vars';
 
-// ScrollTrigger.Vars minus the fields this module decides for itself.
-// Why excluded: (1) this module derives these itself (trigger/start/end/endTrigger);
-// (2) the pin family is meaningless since sticky handles pinning;
-// (3) these assume vertical, window scrolling,
-// so passing them would silently throw things off (horizontal/scroller/containerAnimation).
-export type PassThroughVars = Omit<
-  ScrollTrigger.Vars,
-  | 'trigger'
-  | 'start'
-  | 'end'
-  | 'endTrigger'
-  | 'pin'
-  | 'pinSpacing'
-  | 'anticipatePin'
-  | 'pinnedContainer'
-  | 'pinReparent'
-  | 'pinSpacer'
-  | 'pinType'
-  | 'horizontal'
-  | 'scroller'
-  | 'containerAnimation'
->;
+// ScrollTrigger.Vars keys this module decides for itself. See vars.ts for the full list and why
+// each is excluded; index.ts's #assertNoExcludedVars enforces the same list at runtime, since
+// PassThroughVars only stops a TypeScript caller.
+export type PassThroughVars = Omit<ScrollTrigger.Vars, typeof EXCLUDED_VAR_KEYS[number]>;
 
 export interface StickyScrollTriggerOptions {
   // Which elements inside the shared container get their scroll-margin-top kept in sync, so the
