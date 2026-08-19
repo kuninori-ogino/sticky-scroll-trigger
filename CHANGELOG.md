@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Documented the room a `createOverlapScroll` reveal needs: `trigger`'s own parent bounds the cover layer's sticky wrapper, not the shared container, so that parent needs `end - start` worth of content below `trigger`, or the browser releases the wrapper mid-rise, at a point that shifts with the window size. Behavior is unchanged; only the README was missing it (see [Room for the reveal](README.md#room-for-the-reveal))
+- Corrected `createOverlapScroll`'s `trigger` description: it said a `trigger` that isn't a direct child of the shared container throws, when only a `trigger` outside the container does
+
 ## [0.5.0] - 2026-08-17
 
 - A rejected option value on a Scene/Cover layer (an `end` of `'max'`, an unparseable position clause) no longer leaves every layer's sticky CSS stripped until the next successful `refresh()`; the layout keeps the previous refresh's values instead. That matters when a function-valued option begins returning one long after setup, on a refresh GSAP itself triggers. The error is unchanged
