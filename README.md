@@ -168,17 +168,17 @@ You can specify `onKill`, `invalidateOnRefresh`, and `onRefreshInit`; the module
 
 Registers an overlap-scroll effect (`trigger` gets pinned while its siblings from `cover` onward scroll normally and rise up to cover it) and returns `ScrollTrigger.Vars`. No tween or dwell spacer is created. Since the return value only describes the freeze window, the effect works even without passing it to `ScrollTrigger.create()`, unless you need `markers` or callbacks.
 
-| option       | default                      | description                                                                                                                                                                                                   |
-| ------------ | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `trigger`    | (required)                   | The element that gets pinned and covered. Must be inside the shared container; throws otherwise. Its own parent, which doesn't have to be the container itself, bounds how far the reveal can run (see below) |
-| `cover`      | `trigger.nextElementSibling` | The first element of the covering side; this and all following siblings cover together. Must share the same parent as `trigger`                                                                               |
-| `start`      | `'bottom bottom'`            | Pinned position of `trigger`. See [position syntax](#position-syntax). Unlike `createStickyTrigger`'s `start`, this doesn't support an absolute scroll position (a bare number): it throws instead            |
-| `end`        | `null` (auto-computed)       | End of the freeze window. When `null`, computed automatically as "the distance until `cover`'s top edge reaches the top of the viewport"                                                                      |
-| `endTrigger` | `trigger`                    | Reference element when `end` uses position-clause syntax                                                                                                                                                      |
+| option       | default                      | description                                                                                                                                                                                                 |
+| ------------ | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trigger`    | (required)                   | The element that gets pinned and covered. Must be inside the shared container; throws otherwise. Its own parent, which doesn't have to be the container itself, bounds how far the rise can run (see below) |
+| `cover`      | `trigger.nextElementSibling` | The first element of the covering side; this and all following siblings cover together. Must share the same parent as `trigger`                                                                             |
+| `start`      | `'bottom bottom'`            | Pinned position of `trigger`. See [position syntax](#position-syntax). Unlike `createStickyTrigger`'s `start`, this doesn't support an absolute scroll position (a bare number): it throws instead          |
+| `end`        | `null` (auto-computed)       | End of the freeze window. When `null`, computed automatically as "the distance until `cover`'s top edge reaches the top of the viewport"                                                                    |
+| `endTrigger` | `trigger`                    | Reference element when `end` uses position-clause syntax                                                                                                                                                    |
 
 `createOverlapScroll` adjusts `position`/`z-index` on the covering side only when needed, never overrides explicit values, and restores its changes on GSAP `kill()`.
 
-#### Room for the reveal
+#### Room for the rise
 
 Pinning here is plain `position:sticky`, and the browser keeps a sticky element stuck only until its containing block's bottom edge catches up with it. That containing block is `trigger`'s own parent, not the shared container:
 
@@ -189,6 +189,48 @@ trigger's parent's bottom edge - trigger's bottom edge  >=  end - start
 With the auto `end`, that distance is where `cover`'s top edge sits when the freeze starts: `start`'s pinned offset, plus `trigger`'s own height, plus any gap between the two. Under the defaults (`start: 'bottom bottom'`, `cover` directly after `trigger`) it comes to one viewport height; a `trigger` taller than the viewport, pinned near the top, needs more.
 
 With less room than that, the browser releases the wrapper mid-rise: `trigger` scrolls away before `cover` has covered it, at a point that moves with the window size, since the requirement scales with the viewport while the room doesn't. Content after `trigger`'s parent never counts, however long the page is. Add the missing height below `trigger` (a taller `cover`, or a spacer after it), or keep the sections that follow inside the same parent rather than wrapping `trigger` and `cover` in a box of their own.
+
+#### Delaying the rise
+
+`cover` starts rising as soon as the freeze window opens, so a scrubbed effect on `trigger` plays out underneath it. To let the effect finish first, put a Scene layer in front of the cover layer: freezing one freezes the whole shared container, `cover` included, and the scene's dwell doubles as the hold. Since the two layers can't share a trigger element, the cover layer gets a zero-height marker between the scene and `cover`:
+
+```html
+<div class="container__inner">
+  <section class="scene">...</section>
+  <div class="hold" style="height: 0"></div>
+  <section class="cover">...</section>
+</div>
+```
+
+```ts
+gsap.fromTo(
+  ".scene",
+  { opacity: 0 },
+  {
+    opacity: 1,
+    scrollTrigger: sticky.createStickyTrigger({
+      trigger: ".scene",
+      start: "bottom bottom",
+      end: "+=800",
+      scrub: true,
+    }),
+  },
+);
+
+ScrollTrigger.create(
+  sticky.createOverlapScroll({
+    trigger: ".hold",
+    cover: ".cover",
+    start: "bottom bottom",
+  }),
+);
+```
+
+The rise picks up where the scrub ends, with no arithmetic on your side, because `refresh()` adds a Scene layer's dwell to the freeze window of every layer whose trigger comes later in DOM order. That is also why the marker goes after the scene rather than inside it.
+
+The marker sits on the scene's bottom edge, so one `'bottom bottom'` describes both layers and nothing moves at the handover. The scene pins with that edge on the viewport's bottom, and `cover`, which begins there, stays just off screen for the whole hold. Pin the scene anywhere else and you have to reconcile the two clauses by hand, since a zero-height marker resolves any clause to a plain viewport position. Its `start` has to name wherever the scene's bottom edge sits while pinned, or `trigger` jumps.
+
+The marker is the cover layer's `trigger`, so [the room](#room-for-the-rise) the rise needs is measured below it, not below the scene.
 
 ### `createStickyPin(options)`
 
@@ -448,7 +490,7 @@ sticky.createOverlapScroll({
 - The structure directly under the shared container changes because of the added wrapper elements. Direct-child selectors like `.container__inner > .scene`, `:nth-child()`, adjacent-sibling selectors (`+`/`~`), and flex/grid layout on the shared container itself may break across the wrapper boundary
 - `position:sticky` doesn't work if any ancestor of the pinned target has `overflow:hidden`/`clip`
 - `createOverlapScroll`'s `trigger` and `cover` must be siblings sharing the same parent
-- That shared parent also caps how far a `createOverlapScroll` reveal can run: it needs `end - start` worth of content below `trigger`, or the browser releases the wrapper mid-rise, at a point that shifts with the window size (see [Room for the reveal](#room-for-the-reveal))
+- That shared parent also caps how far `cover` can rise: it needs `end - start` worth of content below `trigger`, or the browser releases the wrapper mid-rise, at a point that shifts with the window size (see [Room for the rise](#room-for-the-rise))
 - `createStickyTrigger` and `createOverlapScroll` throw if `trigger` isn't inside the shared container. Both build their structure inside it, so a `trigger` elsewhere would wrap, move and style elements the instance doesn't own
 - `createStickyPin` works on either side of the container, and throws only for a `trigger` that encloses it (the container itself, or an ancestor). A pin wraps `trigger` in a `height:0`, `contain:layout` box, which would pull the container and the layers' dwell padding out of the flow
 - Selector strings for `trigger`/`endTrigger`/`cover`/`element` resolve against the whole document, as GSAP's own `trigger` does, rather than within the shared container; only the `trigger` rules above restrict where a match may land. Validate or scope these values yourself if they come from content you don't control
