@@ -17,6 +17,7 @@ import {
   resolveElement,
   resolveEndTrigger,
   resolveRoot,
+  restoreInlinePosition,
   unwrapPin,
   wrapPin,
 } from './dom';
@@ -400,41 +401,66 @@ export default class StickyScrollTrigger {
     };
   }
 
+  // Pass 1 of the pin refresh: snapshots and strips every pin's own sticky top and spacer height,
+  // returning a function that puts them back. #refreshPinLayers then measures a natural position
+  // rather than the previous refresh's result.
+  #resetPinState(): () => void {
+    const snapshots = this.#pinLayers.map((layer) => ({
+      layer,
+      position: captureInlinePosition(layer.trigger),
+      height: layer.inner ? layer.inner.style.height : '',
+    }));
+
+    snapshots.forEach(({ layer }) => {
+      resetStickyPosition(layer.trigger);
+
+      if (layer.inner) layer.inner.style.height = '';
+    });
+
+    return () => {
+      snapshots.forEach(({ layer, position, height }) => {
+        restoreInlinePosition(layer.trigger, position);
+
+        if (layer.inner) layer.inner.style.height = height;
+      });
+    };
+  }
+
   #refreshPins(viewportHeight: number) {
     if (!this.#pinLayers.length) return;
 
     // #refreshScenesAndCovers already finished applying its own (possibly-stuck) sticky state by
     // the time this runs, so trigger/endTrigger measurement below needs its own reset. This is a
-    // separate pass 1/pass 2 split from the one below, which only concerns pins' own previous
+    // separate pass 1/pass 2 split from #resetPinState's, which only concerns pins' own previous
     // sticky/spacer state.
     const restoreSceneCoverStickyState = this.#resetSceneCoverStickyState();
+    const restorePinState = this.#resetPinState();
 
-    // Pass 2 throws on a rejected option value (an absolute start, a 'max' end) while that reset
-    // has every Scene/Cover layer's sticky CSS stripped. Without the `finally` it would stay
-    // stripped until a later refresh() succeeded. The bad value needn't be there from the start
-    // either: a function-valued option can begin returning one long after setup, on a refresh
-    // GSAP itself triggers.
+    // Pass 2 throws on a rejected option value (an absolute start, a 'max' end) while both resets
+    // above have their CSS stripped. Without the restores below, the Scene/Cover wrappers and
+    // every pin from the throwing one onward would stay stripped until a later refresh()
+    // succeeded. The bad value doesn't have to be there from the start either: a function-valued
+    // option can begin returning one long after setup, on a refresh GSAP itself triggers.
     try {
       this.#refreshPinLayers(viewportHeight);
+    } catch (error) {
+      // catch rather than finally (see #refreshScenesAndCovers' catch for why). The Scene/Cover
+      // reset below is measurement scaffolding that nothing rewrites, so it stays a finally.
+      restorePinState();
+
+      throw error;
     } finally {
       restoreSceneCoverStickyState();
     }
   }
 
+  // Pass 2 of the pin refresh, run once #resetPinState has stripped the previous values.
   // Recomputes pin layers' sticky top and spacer height. Pinning here is plain position:sticky, so
   // unlike Scene/Cover layers this never hands GSAP an absolute scroll position. The spacer height
   // spans from the natural position where pinning begins to the absolute position where
   // endTrigger's clause reaches the viewport's, plus the sticky top and trigger's own height (a
   // sticky element unpins once it catches up to the bottom of its containing block).
   #refreshPinLayers(viewportHeight: number) {
-    // Pass 1: reset everything first so the previous sticky/spacer height doesn't affect
-    // the reading, then measure the natural position.
-    this.#pinLayers.forEach((layer) => {
-      resetStickyPosition(layer.trigger);
-
-      if (layer.inner) layer.inner.style.height = '';
-    });
-
     this.#pinLayers.forEach((layer) => {
       if (!layer.inner) return;
 

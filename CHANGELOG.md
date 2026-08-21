@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Corrected `createOverlapScroll`'s `trigger` description: it said a `trigger` that isn't a direct child of the shared container throws, when only a `trigger` outside the container does
 - Documented how to hold `cover` off screen until a scrubbed effect on `trigger` finishes, using a `createStickyTrigger` dwell and a zero-height marker (see [Delaying the rise](README.md#delaying-the-rise))
 - `createStickyPin` now puts `trigger`'s own inline `position`/`top` back on kill and `destroy()`, rather than clearing both to `''`. An element that arrived with, say, `position: relative; top: 8px` used to lose them for good, though [`destroy()`](README.md#destroy) documents a full restore
+- A rejected option value on one pin (an absolute `start`, an `end` of `'max'`) no longer releases the others: every pin keeps the last successful `refresh()`'s sticky top and spacer height, the same rollback Scene/Cover layers already had. Only those layers' sticky CSS was put back before, so each pin the failed pass hadn't reached yet stayed stripped of both until the next successful `refresh()`, however long it had been pinning correctly. The error is unchanged
 
 ## [0.5.0] - 2026-08-17
 

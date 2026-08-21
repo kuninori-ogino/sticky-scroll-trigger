@@ -1674,6 +1674,65 @@ describe('\'max\' end keyword', () => {
     expect(stuckWrappers()).toBe(before);
   });
 
+  // The third case in the same family, and the one the two above leave open: the pins' own state.
+  // The throwing pin is registered first here, so pass 2 aborts before it reaches the good one.
+  it('leaves the other pins\' sticky state intact when a pin option throws mid-refresh', () => {
+    const { query, controller } = setup();
+    let rejected = false;
+
+    controller.createStickyPin({
+      trigger: query('.outside'),
+      endTrigger: query('.scene'),
+      end: () => (rejected ? 'max' : 'top top'),
+    });
+    controller.createStickyPin({ trigger: query('.inside'), endTrigger: query('.scene'), top: 39 });
+    controller.refresh();
+
+    const good = query('.inside');
+    const spacer = good.parentElement!;
+
+    expect(good.style.position).toBe('sticky');
+    expect(good.style.top).toBe('39px');
+    expect(spacer.style.height).toBe('39px');
+
+    rejected = true;
+
+    expect(() => controller.refresh()).toThrow(/'max' keyword/);
+    expect(good.style.position).toBe('sticky');
+    expect(good.style.top).toBe('39px');
+    expect(spacer.style.height).toBe('39px');
+  });
+
+  // The rollback reaches pins pass 2 had already rewritten, not just the ones it never got to.
+  // The rewritten pin's top changes on the failing refresh, so a half-written result shows 77px.
+  it('rolls an already-rewritten pin back to the last successful refresh', () => {
+    const { query, controller } = setup();
+    let pinnedTop = 39;
+    let rejected = false;
+
+    controller.createStickyPin({
+      trigger: query('.inside'),
+      endTrigger: query('.scene'),
+      top: () => pinnedTop,
+    });
+    controller.createStickyPin({
+      trigger: query('.outside'),
+      endTrigger: query('.scene'),
+      end: () => (rejected ? 'max' : 'top top'),
+    });
+    controller.refresh();
+
+    const good = query('.inside');
+
+    expect(good.style.top).toBe('39px');
+
+    pinnedTop = 77;
+    rejected = true;
+
+    expect(() => controller.refresh()).toThrow(/'max' keyword/);
+    expect(good.style.top).toBe('39px');
+  });
+
   it('resolveScrollPosition resolves \'max\' without throwing, ignoring element entirely', () => {
     const { query, controller } = setup();
 
