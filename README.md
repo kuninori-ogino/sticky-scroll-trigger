@@ -426,6 +426,10 @@ A px/% offset needs the `=` when it follows a keyword or number (`top+=50`, `80-
 
 A trailing `px` (`top 100px`, `center+=50px`) is accepted and ignored, the same idea as GSAP's own `_offsetToPx`, which only special-cases `%` and otherwise passes the value through `parseFloat`. This module isn't as lenient as GSAP toward other unrecognized suffixes, though: an actually-unsupported unit like `top 100vh` still throws, rather than silently behaving like `top 100`.
 
+The table above is the whole accepted grammar. GSAP's `clamp()` wrapper (`start: 'clamp(top center)'`, which holds the resolved position inside the scroller's own range) is not part of it and throws. Nothing clamps the freeze window either, so a clause that resolves past the top of the document keeps its negative value: a Scene layer sitting at the very start of the container with `start: 'top bottom'` begins one viewport height before scroll 0. `end` is the exception, already clamped to `start`.
+
+GSAP passes the `ScrollTrigger` instance to its own function-valued `start`/`end` (`start: (self) => ...`), and this module doesn't, so a function declaring that parameter is a TypeScript error. There is nothing to pass: this module's `refresh()` resolves these functions, and it runs whether or not the returned `ScrollTrigger.Vars` was ever handed to `ScrollTrigger.create()`. `self.start`/`self.end` would be circular anyway, since the freeze window they report is what `refresh()` is in the middle of computing.
+
 ### Absolute scroll position
 
 If the entire value is just a number (a plain JS number, or a string that's nothing but digits, with no keyword, second token, or `%`/`px` suffix), GSAP treats it as an absolute scroll position rather than a clause, ignoring the reference element entirely (`ScrollTrigger.js`'s `_parsePosition`: `isNaN(value) || (value = +value)`). This module follows the same rule for `start` and `end`, and for [`createStickyPin`](#createstickypinoptions)'s `end`, [`createResolvedTrigger`](#createresolvedtriggeroptions)'s `start`/`end`, and [`resolveScrollPosition`](#resolvescrollpositionelement-position)'s `position`.
@@ -495,6 +499,7 @@ sticky.createOverlapScroll({
 - `createStickyPin` works on either side of the container, and throws only for a `trigger` that encloses it (the container itself, or an ancestor). A pin wraps `trigger` in a `height:0`, `contain:layout` box, which would pull the container and the layers' dwell padding out of the flow
 - Selector strings for `trigger`/`endTrigger`/`cover`/`element` resolve against the whole document, as GSAP's own `trigger` does, rather than within the shared container; only the `trigger` rules above restrict where a match may land. Validate or scope these values yourself if they come from content you don't control
 - ScrollTrigger's `pin`/`pinSpacing`/`anticipatePin` can't be used (pinning is handled by sticky; these are already excluded at the type level)
+- GSAP's `clamp()` position wrapper isn't accepted, and a function-valued `start`/`end` is called with no arguments rather than with the `ScrollTrigger` instance GSAP passes (see [Position syntax](#position-syntax))
 - A `createStickyTrigger` Scene layer can't point `endTrigger` at a registered layer later in DOM order; `createOverlapScroll`'s cover layer can, since it adds no padding (see [End syntax](#end-syntax))
 - If a Scene layer's `end` uses a position clause, don't set `endTrigger` to an element that gets pushed down by that same scene's own dwell; the value won't converge
 - If several layers' unregistered or cover-layer `endTrigger`s form a dependency cycle, `refresh()` throws instead of settling on a wrong value
