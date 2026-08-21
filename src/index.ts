@@ -344,9 +344,15 @@ export default class StickyScrollTrigger {
     return (self) => {
       this.#captureScrollTriggerClass(self);
 
+      // GSAP dispatches refreshInit before any measurement, so a callback that puts something in
+      // place to be measured expects to run before refresh() too.
+      const result = userOnRefreshInit?.(self);
+
       if (list[0] === entry) this.refresh();
 
-      userOnRefreshInit?.(self);
+      // GSAP reverts an animation a refreshInit listener returns, once the refresh is done
+      // (ScrollTrigger.js's `refreshInits.forEach(...render(-1))`).
+      return result;
     };
   }
 

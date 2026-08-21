@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documented how to hold `cover` off screen until a scrubbed effect on `trigger` finishes, using a `createStickyTrigger` dwell and a zero-height marker (see [Delaying the rise](README.md#delaying-the-rise))
 - `createStickyPin` now puts `trigger`'s own inline `position`/`top` back on kill and `destroy()`, rather than clearing both to `''`. An element that arrived with, say, `position: relative; top: 8px` used to lose them for good, though [`destroy()`](README.md#destroy) documents a full restore
 - A rejected option value on one pin (an absolute `start`, an `end` of `'max'`) no longer releases the others: every pin keeps the last successful `refresh()`'s sticky top and spacer height, the same rollback Scene/Cover layers already had. Only those layers' sticky CSS was put back before, so each pin the failed pass hadn't reached yet stayed stripped of both until the next successful `refresh()`, however long it had been pinning correctly. The error is unchanged
+- `onRefreshInit` now runs before this module's own `refresh()` rather than after it, and whatever it returns reaches GSAP. GSAP dispatches `refreshInit` ahead of all measurement and calls `render(-1)` on an animation a listener returns once the refresh is done, so a `gsap.set()` meant to put something in place for measuring was neither picked up by `refresh()` nor reverted afterwards. `createResolvedTrigger` passes `onRefreshInit` straight through and was never affected
 
 ## [0.5.0] - 2026-08-17
 

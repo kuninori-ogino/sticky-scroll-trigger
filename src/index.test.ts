@@ -516,6 +516,37 @@ describe('registerLayer\'s onRefreshInit', () => {
     expect(called).toBe(true);
   });
 
+  // The fake stands in for an animation: GSAP only reverts a returned value that has render().
+  it('hands the user callback\'s return value back to GSAP', () => {
+    const { query, controller } = setup();
+    const animation = { render: () => {} };
+    const vars = controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: '+=100',
+      onRefreshInit: () => animation,
+    });
+
+    expect(vars.onRefreshInit?.(fakeSelf)).toBe(animation);
+  });
+
+  it('runs the user callback before refresh()', () => {
+    const { query, controller } = setup();
+    const order: string[] = [];
+    const vars = controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: '+=100',
+      onRefreshInit: () => {
+        // refresh() builds the nesting, so its absence means this call came first.
+        order.push(document.querySelector('div[aria-hidden="true"]') ? 'after' : 'before');
+      },
+    });
+
+    vars.onRefreshInit?.(fakeSelf);
+
+    expect(order).toEqual(['before']);
+    expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(1);
+  });
+
   // Even with multiple layers, refresh() should actually run only once (not once per
   // registered layer). This is implemented via the approximation "only the current first
   // entry in layers takes responsibility"; this confirms that a non-first layer's
