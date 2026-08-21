@@ -547,31 +547,36 @@ describe('registerLayer\'s onRefreshInit', () => {
     expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(1);
   });
 
-  // Even with multiple layers, refresh() should actually run only once (not once per
-  // registered layer). This is implemented via the approximation "only the current first
-  // entry in layers takes responsibility"; this confirms that a non-first layer's
-  // onRefreshInit is a no-op, and that the role passes to the next surviving layer only
-  // once the first is killed.
-  it('with multiple layers, only the currently-surviving first layer actually calls refresh() (killing it hands off to the next layer)', () => {
+  // jsdom measures everything as 0, so a callback can't check the DOM to see whether its own
+  // layer was measured yet. It records how many refreshes ran before it instead. Each layer
+  // should see only the refreshes of the layers dispatched earlier, hence [0, 1, 2]. If one
+  // layer took over the refresh for all of them, the last two would both see 1.
+  it('every layer\'s callback precedes a refresh() of its own', () => {
     document.body.innerHTML = `
       <div class="root">
         <section class="s1"></section>
         <section class="s2"></section>
+        <section class="s3"></section>
       </div>`;
 
     const controller = new StickyScrollTrigger(query('.root'));
-    const vars1 = controller.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
-    const vars2 = controller.createStickyTrigger({ trigger: query('.s2'), end: '+=100' });
+    const refresh = vi.spyOn(controller, 'refresh');
+    const refreshesBefore: number[] = [];
 
-    // s2 isn't first (s1 is), so refresh() never runs even if onRefreshInit is called.
-    vars2.onRefreshInit?.(fakeSelf);
-    expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(0);
+    const track = () => () => {
+      refreshesBefore.push(refresh.mock.calls.length);
+    };
 
-    // s1 gets killed, and layers's first entry hands off to s2.
-    vars1.onKill?.(fakeSelf);
+    const vars = ['.s1', '.s2', '.s3'].map((selector) => controller.createStickyTrigger({
+      trigger: query(selector),
+      end: '+=100',
+      onRefreshInit: track(),
+    }));
 
-    vars2.onRefreshInit?.(fakeSelf);
-    expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(1);
+    vars.forEach(({ onRefreshInit }) => onRefreshInit?.(fakeSelf));
+
+    expect(refreshesBefore).toEqual([0, 1, 2]);
+    expect(refresh).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -1538,10 +1543,9 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
     expect(called).toBe(true);
   });
 
-  // pinLayers is never reordered (no DOM-order sort like Scene/Cover layers), so "only the
-  // currently-surviving first pin takes responsibility" holds strictly as a
-  // duplicate-prevention rule.
-  it('with multiple pins, only the surviving first pin actually calls refresh() (killing it hands off to the next pin)', () => {
+  // A pin gets its own refresh() like a Scene layer does, so dispatching to the second pin
+  // alone still pins it.
+  it('a pin other than the first still calls refresh()', () => {
     document.body.innerHTML = `
       <div class="root">
         <section class="p1"></section>
@@ -1551,17 +1555,13 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
 
     const controller = new StickyScrollTrigger(query('.root'));
     const p2 = query('.p2');
-    const vars1 = controller.createStickyPin({ trigger: query('.p1'), endTrigger: query('.scene') });
+
+    controller.createStickyPin({ trigger: query('.p1'), endTrigger: query('.scene') });
+
     const vars2 = controller.createStickyPin({ trigger: p2, endTrigger: query('.scene') });
 
-    // p2 isn't first (p1 is), so refresh() never runs even if onRefreshInit is called.
     vars2.onRefreshInit?.(fakeSelf);
-    expect(p2.style.position).not.toBe('sticky');
 
-    // p1 gets killed, and pinLayers's first entry hands off to p2.
-    vars1.onKill?.(fakeSelf);
-
-    vars2.onRefreshInit?.(fakeSelf);
     expect(p2.style.position).toBe('sticky');
   });
 });

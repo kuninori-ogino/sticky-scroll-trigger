@@ -331,14 +331,10 @@ export default class StickyScrollTrigger {
 
   // Binds refresh() to the refreshInit GSAP itself fires (resize/load), so callers get the right
   // ordering without writing ScrollTrigger.addEventListener('refreshInit', refresh) themselves.
-  // Only the current first entry of `list` takes that role, so refresh() runs once rather than
-  // once per layer; if that entry is killed, the next survivor picks it up. For list=#layers,
-  // refresh() sorts the array into DOM order, so a dispatch where DOM and creation order diverge
-  // may occasionally fire twice. refresh() is idempotent, so that's harmless (#pinLayers is never
-  // reordered and always fires once).
-  #createAutoRefreshHandler<T>(
-    list: readonly T[],
-    entry: T,
+  // Every layer refreshes: GSAP runs all refreshInit listeners before it measures anything, so a
+  // layer that skipped refresh() would leave its callback's layout changes out of the freeze
+  // window. That costs one refresh() per layer, on the resize and load refreshes GSAP fires.
+  #createAutoRefreshHandler(
     userOnRefreshInit: ScrollTrigger.Vars['onRefreshInit'],
   ): ScrollTrigger.Vars['onRefreshInit'] {
     return (self) => {
@@ -348,7 +344,7 @@ export default class StickyScrollTrigger {
       // place to be measured expects to run before refresh() too.
       const result = userOnRefreshInit?.(self);
 
-      if (list[0] === entry) this.refresh();
+      this.refresh();
 
       // GSAP reverts an animation a refreshInit listener returns, once the refresh is done
       // (ScrollTrigger.js's `refreshInits.forEach(...render(-1))`).
@@ -789,7 +785,7 @@ export default class StickyScrollTrigger {
         this.#scheduleRebuild();
         onKill?.(self);
       },
-      onRefreshInit: this.#createAutoRefreshHandler(this.#layers, layer, rest.onRefreshInit),
+      onRefreshInit: this.#createAutoRefreshHandler(rest.onRefreshInit),
     };
   }
 
@@ -992,7 +988,7 @@ export default class StickyScrollTrigger {
 
         onKill?.(self);
       },
-      onRefreshInit: this.#createAutoRefreshHandler(this.#pinLayers, layer, rest.onRefreshInit),
+      onRefreshInit: this.#createAutoRefreshHandler(rest.onRefreshInit),
     };
   }
 

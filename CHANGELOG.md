@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Every layer's `onRefreshInit` now runs before this module's own `refresh()`. Only the layer dispatched first used to trigger that refresh, so the callbacks after it ran too late for their layout changes to reach the freeze window. Which layer that was depended on registration order. GSAP dispatches `refreshInit` to every listener before it measures anything, so each callback now gets a `refresh()` of its own. That costs one `refresh()` per layer on the resize and load refreshes GSAP fires, and leaves the settled layout unchanged
+
 ## [0.6.0] - 2026-08-21
 
 - Documented the room `cover` needs to rise: `trigger`'s own parent bounds the cover layer's sticky wrapper, not the shared container, so that parent needs `end - start` worth of content below `trigger`, or the browser releases the wrapper mid-rise, at a point that shifts with the window size. Behavior is unchanged; only the README was missing it (see [Room for the rise](README.md#room-for-the-rise))
