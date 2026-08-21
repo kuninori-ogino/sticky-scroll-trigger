@@ -106,6 +106,11 @@ export const isAbsoluteFormat = (resolved: PositionValue): boolean => {
 export const resolveAbsolute = (resolved: PositionValue): number =>
   (typeof resolved === 'number' ? resolved : Number(resolved));
 
+// GSAP's clamp() wrapper, matched the same way GSAP's own _parseClamp does (a 'clamp(' prefix).
+// Caught on the whole value rather than per token, since the split below would otherwise report
+// the meaningless fragment 'clamp(top'.
+const CLAMP_PREFIX = 'clamp(';
+
 // Back-calculates the top position (px) at which the element's anchor point lines up with
 // the viewport's anchor point, from a GSAP-standard position clause (e.g. 'center center').
 // When only one clause is given, the viewport side defaults to 'top' (matching GSAP).
@@ -114,7 +119,19 @@ export const resolveAnchorTop = (
   elementHeight: number,
   viewportHeight: number,
 ): number => {
-  const [elementToken, viewportToken = 'top'] = position.trim().split(/\s+/);
+  const trimmed = position.trim();
+
+  if (trimmed.startsWith(CLAMP_PREFIX)) {
+    const inner = trimmed.slice(CLAMP_PREFIX.length).replace(/\)$/, '').trim();
+
+    throw new Error(
+      `StickyScrollTrigger: unsupported position clause "${trimmed}": GSAP's clamp() wrapper `
+      + 'isn\'t supported here.'
+      + (inner ? ` Did you mean "${inner}"?` : ''),
+    );
+  }
+
+  const [elementToken, viewportToken = 'top'] = trimmed.split(/\s+/);
   const elementClause = parseClauseToken(elementToken, elementHeight);
   const viewportClause = parseClauseToken(viewportToken, viewportHeight);
 

@@ -227,6 +227,31 @@ describe('resolveAnchorTop', () => {
     expect(resolveAnchorTop('bottom bottom', 300, 800)).toBe(500);
   });
 
+  describe('GSAP\'s clamp() wrapper', () => {
+    it('names the whole value and suggests the clause inside it', () => {
+      expect(() => resolveAnchorTop('clamp(top center)', 100, 800)).toThrow(
+        /unsupported position clause "clamp\(top center\)": GSAP's clamp\(\) wrapper isn't supported here\. Did you mean "top center"\?/,
+      );
+    });
+
+    it('covers the single-clause and end-keyword forms too', () => {
+      expect(() => resolveAnchorTop('clamp(top)', 100, 800)).toThrow(/Did you mean "top"\?/);
+      expect(() => resolveAnchorTop('clamp(max)', 100, 800)).toThrow(/Did you mean "max"\?/);
+    });
+
+    it('drops the suggestion when there is no clause to suggest', () => {
+      expect(() => resolveAnchorTop('clamp()', 100, 800)).toThrow(
+        /clamp\(\) wrapper isn't supported here\.$/,
+      );
+    });
+
+    it('ignores a token that starts with clamp but opens no parenthesis', () => {
+      expect(() => resolveAnchorTop('clamped', 100, 800)).toThrow(
+        /unsupported position clause "clamped"$/,
+      );
+    });
+  });
+
   it('treats the viewport side as `top` when only one clause is given (matching GSAP)', () => {
     // GSAP itself defaults the second clause to "0" via
     // `_offsetToPx(offsets[1] || "0", scrollerSize)`.
