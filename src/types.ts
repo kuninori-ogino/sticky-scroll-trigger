@@ -2,6 +2,7 @@
  * Type definitions for the public options and the internal layer (Layer) representation.
  */
 
+import type { InlinePosition } from './dom';
 import type { EndInput, PositionInput } from './position';
 import type { EXCLUDED_VAR_KEYS } from './vars';
 
@@ -89,6 +90,8 @@ export interface CreateStickyPinOptions extends PassThroughVars {
 
 export interface PinLayer {
   trigger: HTMLElement;
+  // Captured by #wrapUnwrappedPins, and put back by unwrapPin (see InlinePosition in dom.ts).
+  savedPosition: InlinePosition;
   // Nesting assigned during build() (outer: height 0, inner: actual height).
   outer: HTMLDivElement | null;
   inner: HTMLDivElement | null;

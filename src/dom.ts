@@ -112,6 +112,24 @@ export const applyStickyPosition = (el: HTMLElement, topPx: number): void => {
   el.style.top = `${topPx}px`;
 };
 
+// An element's own inline position/top, captured before a pin overwrites them. Only
+// createStickyPin needs this: everything else this module positions is a wrapper it created,
+// so clearing back to '' is already correct.
+export interface InlinePosition {
+  position: string;
+  top: string;
+}
+
+export const captureInlinePosition = (el: HTMLElement): InlinePosition => ({
+  position: el.style.position,
+  top: el.style.top,
+});
+
+export const restoreInlinePosition = (el: HTMLElement, saved: InlinePosition): void => {
+  el.style.position = saved.position;
+  el.style.top = saved.top;
+};
+
 // Scene layer: wraps inner in one level of stickyContainer{ stickyWrapper, stickyPadding }
 // and moves it inside the wrapper.
 export const wrapScene = (inner: HTMLElement) => {
@@ -190,10 +208,14 @@ export const wrapPin = (trigger: HTMLElement) => {
   return { outer, inner };
 };
 
-export const unwrapPin = (outer: HTMLDivElement, trigger: HTMLElement) => {
+export const unwrapPin = (
+  outer: HTMLDivElement,
+  trigger: HTMLElement,
+  saved: InlinePosition,
+) => {
   const parent = outer.parentNode;
 
-  resetStickyPosition(trigger);
+  restoreInlinePosition(trigger, saved);
 
   if (parent) parent.insertBefore(trigger, outer);
 

@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyStickyPosition,
+  captureInlinePosition,
   compareDocumentOrder,
   describeElement,
   liftAboveStickyWrapper,
@@ -9,6 +10,7 @@ import {
   measureViewportHeight,
   resetStickyPosition,
   resolveElement,
+  restoreInlinePosition,
   resolveEndTrigger,
   resolveRoot,
   unwrapCover,
@@ -137,6 +139,34 @@ describe('applyStickyPosition/resetStickyPosition', () => {
   });
 });
 
+describe('captureInlinePosition/restoreInlinePosition', () => {
+  it('puts back the values applyStickyPosition overwrote', () => {
+    const el = document.createElement('div');
+
+    el.style.position = 'relative';
+    el.style.top = '8px';
+
+    const saved = captureInlinePosition(el);
+
+    applyStickyPosition(el, 39);
+    restoreInlinePosition(el, saved);
+
+    expect(el.style.position).toBe('relative');
+    expect(el.style.top).toBe('8px');
+  });
+
+  it('leaves an element that had no inline values with none', () => {
+    const el = document.createElement('div');
+    const saved = captureInlinePosition(el);
+
+    applyStickyPosition(el, 39);
+    restoreInlinePosition(el, saved);
+
+    expect(el.style.position).toBe('');
+    expect(el.style.top).toBe('');
+  });
+});
+
 describe('wrapScene', () => {
   it('wraps inner in container{wrapper[inner], padding} and inserts it at the original position', () => {
     document.body.innerHTML
@@ -202,10 +232,23 @@ describe('wrapPin', () => {
     const trigger = document.getElementById('trigger')!;
     const { outer } = wrapPin(trigger);
 
-    unwrapPin(outer, trigger);
+    unwrapPin(outer, trigger, captureInlinePosition(trigger));
 
     expect(Array.from(host.children).map((el) => el.id)).toEqual(['before', 'trigger', 'after']);
     expect(outer.parentElement).toBeNull();
+  });
+
+  it('unwrapPin puts back the inline position/top it was given', () => {
+    document.body.innerHTML = '<div id="host"><div id="trigger"></div></div>';
+
+    const trigger = document.getElementById('trigger')!;
+    const { outer } = wrapPin(trigger);
+
+    applyStickyPosition(trigger, 39);
+    unwrapPin(outer, trigger, { position: 'relative', top: '8px' });
+
+    expect(trigger.style.position).toBe('relative');
+    expect(trigger.style.top).toBe('8px');
   });
 });
 

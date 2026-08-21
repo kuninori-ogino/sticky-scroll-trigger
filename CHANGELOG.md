@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documented the room `cover` needs to rise: `trigger`'s own parent bounds the cover layer's sticky wrapper, not the shared container, so that parent needs `end - start` worth of content below `trigger`, or the browser releases the wrapper mid-rise, at a point that shifts with the window size. Behavior is unchanged; only the README was missing it (see [Room for the rise](README.md#room-for-the-rise))
 - Corrected `createOverlapScroll`'s `trigger` description: it said a `trigger` that isn't a direct child of the shared container throws, when only a `trigger` outside the container does
 - Documented how to hold `cover` off screen until a scrubbed effect on `trigger` finishes, using a `createStickyTrigger` dwell and a zero-height marker (see [Delaying the rise](README.md#delaying-the-rise))
+- `createStickyPin` now puts `trigger`'s own inline `position`/`top` back on kill and `destroy()`, rather than clearing both to `''`. An element that arrived with, say, `position: relative; top: 8px` used to lose them for good, though [`destroy()`](README.md#destroy) documents a full restore
 
 ## [0.5.0] - 2026-08-17
 

@@ -6,6 +6,7 @@
 
 import {
   applyStickyPosition,
+  captureInlinePosition,
   compareDocumentOrder,
   describeElement,
   documentTop,
@@ -355,6 +356,11 @@ export default class StickyScrollTrigger {
   #wrapUnwrappedPins() {
     this.#pinLayers.forEach((layer) => {
       if (layer.outer) return;
+
+      // Captured when the pin first wraps trigger, not back at registration, so a caller that
+      // restyles trigger in between still gets those values back on teardown. Nothing has written
+      // to trigger's position/top yet.
+      layer.savedPosition = captureInlinePosition(layer.trigger);
 
       const wrapped = wrapPin(layer.trigger);
 
@@ -925,6 +931,8 @@ export default class StickyScrollTrigger {
 
     const layer: PinLayer = {
       trigger,
+      // Only initializes the field: #wrapUnwrappedPins overwrites it before anything reads it.
+      savedPosition: captureInlinePosition(trigger),
       outer: null,
       inner: null,
       start: top === undefined ? start ?? 'top top' : topToStartClause(top),
@@ -945,7 +953,7 @@ export default class StickyScrollTrigger {
         if (index !== -1) this.#pinLayers.splice(index, 1);
 
         if (layer.outer) {
-          unwrapPin(layer.outer, layer.trigger);
+          unwrapPin(layer.outer, layer.trigger, layer.savedPosition);
           layer.outer = null;
           layer.inner = null;
         }
@@ -1067,7 +1075,7 @@ export default class StickyScrollTrigger {
     this.#layers.length = 0;
     this.#builtLayers = [];
     this.#pinLayers.forEach((layer) => {
-      if (layer.outer) unwrapPin(layer.outer, layer.trigger);
+      if (layer.outer) unwrapPin(layer.outer, layer.trigger, layer.savedPosition);
     });
     this.#pinLayers.length = 0;
   }

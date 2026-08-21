@@ -1371,6 +1371,43 @@ describe('createStickyPin()', () => {
     expect(trigger.style.top).toBe('');
   });
 
+  // A pin's trigger belongs to the caller and may already carry inline position/top of its own.
+  it('destroy() puts the caller\'s own inline position and top back', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+
+    trigger.style.position = 'relative';
+    trigger.style.top = '8px';
+
+    controller.createStickyPin({ trigger, endTrigger: query('.scene'), top: 39 });
+    controller.refresh();
+
+    expect(trigger.style.position).toBe('sticky');
+
+    controller.destroy();
+
+    expect(trigger.style.position).toBe('relative');
+    expect(trigger.style.top).toBe('8px');
+  });
+
+  it('destroy() puts back inline values set after registration', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+
+    trigger.style.position = 'relative';
+    trigger.style.top = '8px';
+
+    controller.createStickyPin({ trigger, endTrigger: query('.scene'), top: 39 });
+
+    trigger.style.top = '24px';
+
+    controller.refresh();
+    controller.destroy();
+
+    expect(trigger.style.position).toBe('relative');
+    expect(trigger.style.top).toBe('24px');
+  });
+
   it('is not wrapped twice even after multiple refresh() calls', () => {
     const { query, controller } = setup();
     const trigger = query('.inside');
@@ -1409,6 +1446,22 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
 
     expect(trigger.parentElement).toBe(originalParent);
     expect(trigger.style.position).toBe('');
+  });
+
+  it('onKill puts the caller\'s own inline position and top back', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+
+    trigger.style.position = 'relative';
+    trigger.style.top = '8px';
+
+    const vars = controller.createStickyPin({ trigger, endTrigger: query('.scene'), top: 39 });
+
+    controller.refresh();
+    vars.onKill?.(fakeSelf);
+
+    expect(trigger.style.position).toBe('relative');
+    expect(trigger.style.top).toBe('8px');
   });
 
   it('also calls the user\'s onKill callback', () => {
