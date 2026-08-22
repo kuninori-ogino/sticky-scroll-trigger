@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinKillRemeasure fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .pin {
+        height: 300px;
+      }
+      .scene {
+        height: 400px;
+      }
+      .tail {
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="pin"></div>
+      <section class="scene"></section>
+    </div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      // .pin sits right before .scene in DOM order, and a wrapped pin occupies a height:0 box, so
+      // .scene's freeze window starts out measured as if .pin's 300px weren't there. Killing the
+      // pin puts that height back, and .scene's window has to move down by the same 300px.
+      const sceneVars = sticky.createStickyTrigger({ trigger: '.scene', start: 'top top', end: '+=200' });
+      const pinVars = sticky.createStickyPin({ trigger: '.pin', endTrigger: '.tail', end: 'top top' });
+
+      const sceneTrigger = ScrollTrigger.create(sceneVars);
+      const pinTrigger = ScrollTrigger.create(pinVars);
+
+      sticky.refresh();
+      ScrollTrigger.refresh();
+
+      // snapshot() reads GSAP's own cached start alongside the module's, since only a static
+      // refresh after the kill keeps the two in step (the same pairing batchKill.html checks
+      // for a Scene kill).
+      const snapshot = () => ({ module: sceneVars.start(), gsap: sceneTrigger.start });
+
+      window.__runPinKill = async () => {
+        const before = snapshot();
+
+        pinTrigger.kill();
+
+        // Long enough for the microtask the kill schedules, plus GSAP's own refresh after it.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        return { before, after: snapshot() };
+      };
+    </script>
+  </body>
+</html>

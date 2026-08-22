@@ -1462,10 +1462,10 @@ describe('createStickyPin()', () => {
   });
 });
 
-// Unlike Scene/Cover layers, createStickyPin's returned Vars uses onKill/onRefreshInit purely
-// for pinLayers-specific cleanup and auto-refresh binding (there's no batching into a microtask
-// like Scene/Cover layers' scheduleRebuild, since a pin wraps/unwraps independently
-// without going through the shared container, it can be done synchronously on the spot).
+// Unlike Scene/Cover layers, createStickyPin's returned Vars uses onKill/onRefreshInit for
+// pinLayers-specific cleanup and auto-refresh binding. A pin wraps/unwraps independently without
+// going through the shared container, so the DOM teardown is synchronous; only the re-measure it
+// forces on the layers below goes through scheduleRebuild's microtask.
 describe('createStickyPin\'s onKill/onRefreshInit', () => {
   const fakeSelf = makeFakeSelf();
 
@@ -1515,6 +1515,62 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
     vars.onKill?.(fakeSelf);
 
     expect(called).toBe(true);
+  });
+
+  // jsdom has no layout, so this can't check the moved freeze windows (see the note at the top
+  // of this file); e2e's pinKillRemeasure.html covers the numbers.
+  it('onKill schedules a re-measure of the layers below', async () => {
+    const { query, controller } = setup();
+    const vars = controller.createStickyPin({ trigger: query('.inside'), endTrigger: query('.scene') });
+
+    controller.refresh();
+
+    const refreshSpy = vi.spyOn(controller, 'refresh');
+
+    vars.onKill?.(fakeSelf);
+    await Promise.resolve();
+
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    expect(FakeScrollTrigger.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  // A pin killed before any refresh() never wrapped trigger, so nothing below it moved.
+  it('onKill on a pin that was never built schedules nothing', async () => {
+    const { query, controller } = setup();
+    const vars = controller.createStickyPin({ trigger: query('.inside'), endTrigger: query('.scene') });
+    const refreshSpy = vi.spyOn(controller, 'refresh');
+
+    vars.onKill?.(fakeSelf);
+    await Promise.resolve();
+
+    expect(refreshSpy).not.toHaveBeenCalled();
+    expect(FakeScrollTrigger.refresh).not.toHaveBeenCalled();
+  });
+
+  it('pins killed in the same task share one re-measure', async () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="p1"></section>
+        <section class="p2"></section>
+        <section class="scene"></section>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const vars = [
+      controller.createStickyPin({ trigger: query('.p1'), endTrigger: query('.scene') }),
+      controller.createStickyPin({ trigger: query('.p2'), endTrigger: query('.scene') }),
+    ];
+
+    controller.refresh();
+
+    const refreshSpy = vi.spyOn(controller, 'refresh');
+
+    vars.forEach((entry) => {
+      entry.onKill?.(fakeSelf);
+    });
+    await Promise.resolve();
+
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
   });
 
   it('calling onRefreshInit runs refresh() and builds the pin', () => {

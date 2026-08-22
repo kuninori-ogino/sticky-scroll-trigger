@@ -829,6 +829,34 @@ test('a Scene layer after a not-yet-wrapped pin gets a stable freeze window on t
   expect(afterFirstRefresh).toEqual(afterSecondRefresh);
 });
 
+// A pin's kill moves the layers below it by the pin's own height, and jsdom has no layout to
+// move, so the unit tests can only check that the re-measure is scheduled. This checks the
+// 300px.
+test('killing a pin moves the freeze window of the Scene layer below it, in the module and in GSAP', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/pinKillRemeasure.html');
+
+  const result = await page.evaluate(() =>
+    (
+      window as unknown as {
+        __runPinKill: () => Promise<{
+          before: { module: number; gsap: number };
+          after: { module: number; gsap: number };
+        }>;
+      }
+    ).__runPinKill(),
+  );
+
+  // the pin was covering .scene's whole offset from the top of the document, so 'top top'
+  // resolves to 0 while it's wrapped
+  expect(result.before.module).toBe(0);
+  // .pin's 300px is back in the flow, and .scene starts that much later
+  expect(result.after.module).toBe(300);
+  // GSAP's cached start tracks it, rather than staying on the pre-kill measurement
+  expect(result.after.gsap).toBe(result.after.module);
+});
+
 // scenario.html no longer manually binds refreshInit (see the earlier commit removing it), relying
 // solely on this module's own onRefreshInit auto-binding (createAutoRefreshHandler). That binding
 // has to run before GSAP recomputes each trigger's start/end during a resize-triggered refresh;

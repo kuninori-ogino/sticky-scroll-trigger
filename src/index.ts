@@ -984,6 +984,10 @@ export default class StickyScrollTrigger {
           unwrapPin(layer.outer, layer.trigger, layer.savedPosition);
           layer.outer = null;
           layer.inner = null;
+          // outer is height:0, so unwrapping puts trigger's own height back into the flow and
+          // moves everything below it down by that much. That invalidates every later Scene
+          // layer's freeze window. An unwrapped pin moved nothing, so it skips this.
+          this.#scheduleRebuild();
         }
 
         onKill?.(self);

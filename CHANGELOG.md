@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Every layer's `onRefreshInit` now runs before this module's own `refresh()`. Only the layer dispatched first used to trigger that refresh, so the callbacks after it ran too late for their layout changes to reach the freeze window. Which layer that was depended on registration order. GSAP dispatches `refreshInit` to every listener before it measures anything, so each callback now gets a `refresh()` of its own. That costs one `refresh()` per layer on the resize and load refreshes GSAP fires, and leaves the settled layout unchanged
+- Killing a pin now re-measures the layers below it. A pinned `trigger` sits in a zero-height box, so unwrapping it on kill puts its own height back into the flow and moves everything below down by that much. Every later Scene layer's freeze window used to keep its pre-kill measurement until something else called `refresh()`. Kills in the same task share one re-measure, and a pin killed before it was ever built schedules nothing
 
 ## [0.6.0] - 2026-08-21
 
