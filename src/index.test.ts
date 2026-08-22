@@ -1500,6 +1500,25 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
     expect(trigger.style.top).toBe('8px');
   });
 
+  // The ordinary teardown order is destroy(), then killing the ScrollTriggers, so onKill runs on
+  // a pin destroy() has already unwrapped.
+  it('onKill after destroy() leaves the trigger\'s inline position alone', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+    const vars = controller.createStickyPin({ trigger, endTrigger: query('.scene'), top: 39 });
+
+    controller.refresh();
+    controller.destroy();
+
+    trigger.style.position = 'fixed';
+    trigger.style.top = '12px';
+
+    vars.onKill?.(fakeSelf);
+
+    expect(trigger.style.position).toBe('fixed');
+    expect(trigger.style.top).toBe('12px');
+  });
+
   it('also calls the user\'s onKill callback', () => {
     const { query, controller } = setup();
     let called = false;

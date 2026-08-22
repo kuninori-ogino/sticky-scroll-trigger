@@ -372,6 +372,19 @@ export default class StickyScrollTrigger {
     });
   }
 
+  // #wrapUnwrappedPins's counterpart. Nulling outer keeps it idempotent: destroy() and a kill
+  // both run over the same layer, and a second unwrap would put savedPosition back over whatever
+  // inline position/top the caller has set on trigger since the first.
+  #unwrapPinLayer(layer: PinLayer): boolean {
+    if (!layer.outer) return false;
+
+    unwrapPin(layer.outer, layer.trigger, layer.savedPosition);
+    layer.outer = null;
+    layer.inner = null;
+
+    return true;
+  }
+
   // Snapshots and resets every Scene/Cover wrapper's sticky state, returning a function that puts
   // it back. Callers must call that function before they return.
   //
@@ -980,15 +993,10 @@ export default class StickyScrollTrigger {
 
         if (index !== -1) this.#pinLayers.splice(index, 1);
 
-        if (layer.outer) {
-          unwrapPin(layer.outer, layer.trigger, layer.savedPosition);
-          layer.outer = null;
-          layer.inner = null;
-          // outer is height:0, so unwrapping puts trigger's own height back into the flow and
-          // moves everything below it down by that much. That invalidates every later Scene
-          // layer's freeze window. An unwrapped pin moved nothing, so it skips this.
-          this.#scheduleRebuild();
-        }
+        // outer is height:0, so unwrapping puts trigger's own height back into the flow and
+        // moves everything below it down by that much. That invalidates every later Scene
+        // layer's freeze window. An unwrapped pin moved nothing, so it skips this.
+        if (this.#unwrapPinLayer(layer)) this.#scheduleRebuild();
 
         onKill?.(self);
       },
@@ -1106,9 +1114,7 @@ export default class StickyScrollTrigger {
     this.#unbuild();
     this.#layers.length = 0;
     this.#builtLayers = [];
-    this.#pinLayers.forEach((layer) => {
-      if (layer.outer) unwrapPin(layer.outer, layer.trigger, layer.savedPosition);
-    });
+    this.#pinLayers.forEach((layer) => this.#unwrapPinLayer(layer));
     this.#pinLayers.length = 0;
   }
 }
