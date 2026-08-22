@@ -2022,7 +2022,7 @@ describe('rejecting duplicate registration', () => {
   });
 });
 
-// scroll-margin-top synchronisation (see src/scrollMargin.ts). jsdom has no layout, so every
+// scroll-margin-top synchronization (see src/scrollMargin.ts). jsdom has no layout, so every
 // documentTop comes out 0 and the dwell has to come from '+=' notation, which resolves without
 // measuring. What's checked here is the bookkeeping: which elements get written to, what value,
 // and that everything is handed back. Whether the resulting numbers actually make the browser's
@@ -2031,7 +2031,7 @@ describe('rejecting duplicate registration', () => {
 // support, since jsdom's own CSS.supports is a syntax-only stub that reports that combination as
 // supported regardless of what it's actually asked about, making the fallback branch unreachable
 // here.
-describe('scroll-margin-top synchronisation', () => {
+describe('scroll-margin-top synchronization', () => {
   // Each controller registers its own custom-property names off a module-level counter, so the
   // exact index depends on how many instances the whole suite has built by now.
   const correction = (lagPx: number, authorPx = 0) =>
@@ -2185,7 +2185,7 @@ describe('scroll-margin-top synchronisation', () => {
     expect(ownStyles()).toHaveLength(0);
   });
 
-  it('honours a custom scrollMarginTargets selector', () => {
+  it('honors a custom scrollMarginTargets selector', () => {
     const { query, controller } = setupAnchors({ scrollMarginTargets: '#after' });
 
     controller.refresh();

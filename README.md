@@ -268,7 +268,7 @@ sticky.refresh();
 
 Here `start` means only where the element sits while pinned, not when pinning begins, as it does for the other methods. Pinning begins the moment `trigger` reaches that position naturally, which is CSS's decision rather than a separate number to set, so a pin's position and the scroll position it engages at are one setting.
 
-That's why `start` throws on an [absolute scroll position](#absolute-scroll-position) (`start: 20`, which GSAP reads as scroll position 20) instead of quietly treating it as a px distance, and why `top` is its own option: with the bare-number slot reserved for GSAP's meaning, `'top 20px'` would be a pin's only way to say "20px below the top of the viewport". `end` does take an absolute scroll position (`end: 3000` releases at scroll 3000), since a release point is a real thing to ask for on the scroll axis.
+That's why `start` throws on an [absolute scroll position](#absolute-scroll-position) (`start: 20`, which GSAP reads as scroll position 20) instead of silently treating it as a px distance. `top` is its own option for the same reason: with the bare-number slot reserved for GSAP's meaning, `'top 20px'` would otherwise be a pin's only way to say "20px below the top of the viewport". `end` does take an absolute scroll position (`end: 3000` releases at scroll 3000), since a release point is a real thing to ask for on the scroll axis.
 
 Clauses resolve exactly as they do elsewhere, including the one-token forms that name the element's own side: `'top 20px'` puts the element's top 20px below the viewport's top edge, while `'20px'` puts it 20px above.
 
@@ -377,7 +377,7 @@ If surviving layers' freeze windows change after kill, GSAP's cached `start`/`en
 
 Tears down the controller, restores the original DOM layout, and reverts z-order changes from `createOverlapScroll`. This is also the only entry point that can clean up cover layers that were never passed to `ScrollTrigger.create()`.
 
-It only cleans up DOM/styles managed by this module. You still need to kill active ScrollTrigger instances yourself. After `destroy()`, `createStickyTrigger`/`createOverlapScroll` throw and `refresh()` is a no-op. Calling `destroy()` twice is safe.
+It only cleans up DOM/styles managed by this module. You still need to kill active ScrollTrigger instances yourself. After `destroy()`, `createStickyTrigger`, `createOverlapScroll` and `createStickyPin` throw and `refresh()` is a no-op. Calling `destroy()` twice is safe.
 
 ## Same-page links
 
@@ -386,7 +386,7 @@ Pinning decouples an element's position in the document from the scroll position
 `refresh()` declares that difference to the browser by keeping `scroll-margin-top` in sync on every element inside the shared container that matches `scrollMarginTargets` (`'[id]'` by default). Nothing else is needed: plain `<a href="#target">` links, `scrollIntoView()`, `:target` and a `#hash` on load all land correctly as written.
 
 ```html
-<!-- Just works. No click handler, no scroll maths. -->
+<!-- Lands correctly with no click handler and no scroll math. -->
 <a href="#chapter3">Chapter 3</a>
 ```
 
@@ -434,7 +434,7 @@ GSAP passes the `ScrollTrigger` instance to its own function-valued `start`/`end
 
 ### Absolute scroll position
 
-If the entire value is just a number (a plain JS number, or a string that's nothing but digits, with no keyword, second token, or `%`/`px` suffix), GSAP treats it as an absolute scroll position rather than a clause, ignoring the reference element entirely (`ScrollTrigger.js`'s `_parsePosition`: `isNaN(value) || (value = +value)`). This module follows the same rule for `start` and `end`, and for [`createStickyPin`](#createstickypinoptions)'s `end`, [`createResolvedTrigger`](#createresolvedtriggeroptions)'s `start`/`end`, and [`resolveScrollPosition`](#resolvescrollpositionelement-position)'s `position`.
+If the entire value is just a number (a plain JS number, or a string that's nothing but digits, with no keyword, second token, or `%`/`px` suffix), GSAP treats it as an absolute scroll position rather than a clause, and ignores the reference element entirely (`ScrollTrigger.js`'s `_parsePosition`: `isNaN(value) || (value = +value)`). This module follows the same rule for `start` and `end`, and for [`createStickyPin`](#createstickypinoptions)'s `end`, [`createResolvedTrigger`](#createresolvedtriggeroptions)'s `start`/`end`, and [`resolveScrollPosition`](#resolvescrollpositionelement-position)'s `position`.
 
 `start: '500'` (or `start: 500`) freezes starting at absolute scroll position 500px, ignoring the trigger's natural position and any preceding dwell. `end: '500'` ends the freeze window at 500px the same way, clamped to `start` if that would put `end` before it, matching GSAP's own `end = Math.max(start, ...)`.
 
@@ -442,7 +442,7 @@ If the entire value is just a number (a plain JS number, or a string that's noth
 
 > [`createOverlapScroll`](#createoverlapscrolloptions)'s `start` doesn't support absolute scroll positions: a cover layer's sticky position is always computed relative to its own wrapper (see the repository's `ARCHITECTURE.md`), which has no equivalent for one. It throws instead; use a position clause.
 
-> [`createStickyPin`](#createstickypinoptions)'s `start` throws on one too, for a different reason than the cover layer above: the scroll position a pin engages at follows from where it sits, so an absolute value could only be honored by inverting it back into a viewport position the caller never chose (a trigger 2000px down the document asked to engage at scroll 500 would sit 1500px below the viewport's top edge, off-screen). Its `end` does take one.
+> [`createStickyPin`](#createstickypinoptions)'s `start` throws on one too, for a different reason than the cover layer above. The scroll position a pin engages at follows from where it sits, so honoring an absolute value would mean inverting it back into a viewport position the caller never chose. A trigger 2000px down the document, asked to engage at scroll 500, would sit 1500px below the viewport's top edge, off-screen. Its `end` does take one.
 
 ## End syntax
 
@@ -489,7 +489,7 @@ sticky.createOverlapScroll({
 }); // pin until the very bottom of the page
 ```
 
-`'max'` is only supported by [`createOverlapScroll`](#createoverlapscrolloptions) and [`resolveScrollPosition`](#resolvescrollpositionelement-position)/[`createResolvedTrigger`](#createresolvedtriggeroptions). `createStickyTrigger` and `createStickyPin` throw on it, because their own dwell padding or pin spacer adds to the document height `'max'` measures: the freeze window would depend on itself, growing the page a little more on every `refresh()`. GSAP defines `'max'` for `end`, not `start`: in raw GSAP 3.15.0, `start: 'max'` silently resolves to `0` rather than the scroller's max, so this module rejects it for `start` instead of reproducing that.
+`'max'` is only supported by [`createOverlapScroll`](#createoverlapscrolloptions) and [`resolveScrollPosition`](#resolvescrollpositionelement-position)/[`createResolvedTrigger`](#createresolvedtriggeroptions). `createStickyTrigger` and `createStickyPin` throw on it, because their own dwell padding or pin spacer adds to the document height `'max'` measures: the freeze window would depend on itself, growing the page a little more on every `refresh()`. GSAP defines `'max'` for `end`, not `start`. In raw GSAP 3.15.0, `start: 'max'` silently resolves to `0` rather than the scroller's max, so this module rejects it for `start` instead of reproducing that.
 
 ## Constraints and caveats
 

@@ -10,7 +10,7 @@ Pinning each scene directly with `position:sticky` avoids that drift, but only t
 
 This library solves both issues by wrapping the shared container in nested sticky layers and pinning a different layer per scene. The same container can then freeze at multiple scene positions in sequence, with neighboring content frozen together and no visual gaps.
 
-## Nested structure of the Scene and cover layers
+## Nested structure of the Scene and Cover layers
 
 ### Scene layer (`createStickyTrigger`)
 
@@ -28,7 +28,7 @@ container2                         ← layer for the 2nd scene
 
 `padding` defines the dwell distance, and the sticky `wrapper` keeps the container pinned for that duration. GSAP does not pin here; it only advances effects using `start`/`end` values aligned to this freeze window.
 
-### cover layer (`createOverlapScroll`)
+### Cover layer (`createOverlapScroll`)
 
 Unlike Scene layers, this does not freeze the whole shared container. Inside `trigger`'s parent, only "everything from the start through `trigger`" is moved into a sticky wrapper; `cover` and later siblings stay outside.
 
@@ -47,7 +47,7 @@ Making only `trigger` sticky would leave a gap as earlier content scrolls away, 
 
 ## Two-pass position measurement
 
-`refresh()` (in `README.md`) runs in two passes: first it measures all natural positions with sticky temporarily disabled, then it applies sticky and padding in DOM order. The split is a correctness requirement, not a performance nicety. An ancestor currently pinned by the browser, as opposed to one merely carrying the `position:sticky` CSS, shifts `documentTop` for its descendants by however far the page has scrolled past that ancestor's natural engagement point (verified in `e2e/StickyScrollTrigger.spec.ts`'s "documentTop is corrupted by an actively-stuck sticky ancestor"). `refresh()` can run at any scroll position, including one where an earlier layer is already stuck (a resize-triggered refresh mid-scroll, say), so without the split that layer's offset leaks into every later measurement.
+`refresh()` (in `README.md`) runs in two passes: first it measures all natural positions with sticky temporarily disabled, then it applies sticky and padding in DOM order. The split is a correctness requirement, not a performance nicety. A pinned ancestor shifts `documentTop` for its descendants by however far the page has scrolled past its natural engagement point (verified in `e2e/StickyScrollTrigger.spec.ts`'s "documentTop is corrupted by an actively-stuck sticky ancestor"). Carrying the `position:sticky` CSS is not enough on its own. The browser has to have engaged it. `refresh()` can run at any scroll position, including one where an earlier layer is already stuck (a resize-triggered refresh mid-scroll, say), so without the split that layer's offset leaks into every later measurement.
 
 Measurements use `documentTop` (`offsetParent` chain), not `getBoundingClientRect`, so values stay stable across scroll position and across `position:sticky` merely being applied without being stuck. They aren't stable across an ancestor actually being stuck, though, which is exactly why pass 1 resets sticky first.
 
@@ -59,7 +59,7 @@ A common integration pattern (used in `demo/src/main.ts`) watches `document.scro
 
 It settles instead of growing without bound because `refresh()` is idempotent. Once every Scene layer's dwell padding reflects the current (unstickied) layout, recomputing it from that same layout yields the same padding again, so the observer-triggered second `refresh()` changes nothing and no third callback fires. This holds even for a cover layer's `end: 'max'` (verified empirically against `e2e/fixtures/maxEnd.html`, where repeated `refresh()` calls settle immediately), because a cover layer never adds padding itself, so resolving `'max'` after Scene padding has settled doesn't reopen the loop.
 
-## Why resolveScrollPosition corrects for lag
+## Why `resolveScrollPosition` corrects for lag
 
 Nested sticky introduces visual lag: during a Scene layer's dwell, screen position appears frozen while real scroll keeps advancing. The lag equals the sum of dwell distances from earlier Scene layers in DOM order.
 
@@ -69,15 +69,15 @@ Its target element isn't guaranteed to share stuck ancestors with anything else,
 
 ## Why scroll-margin-top carries the correction
 
-`resolveScrollPosition` fixes the numbers this module hands to GSAP, but it can't help the browser's own scrolling: fragment navigation, `scrollIntoView`, `:target` and friends all run a one-shot calculation from the current layout, and pinning breaks that calculation the same way it breaks GSAP's own `pin`. `scrollMargin.ts`'s own doc comment derives the fix in full (the `landing = currentScroll + paintedTop − scrollMarginTop` formula, and why the correction needs a scroll-dependent term rather than a single constant). The mid-page case isn't just theoretical: a jump started 800px into an 800px freeze window overshot by exactly 800px when the correction used a plain constant instead of the scroll-dependent term.
+`resolveScrollPosition` fixes the numbers this module hands to GSAP, but it can't help the browser's own scrolling: fragment navigation, `scrollIntoView`, `:target` and friends all run a one-shot calculation from the current layout, and pinning breaks that calculation the same way it breaks GSAP's own `pin`. `scrollMargin.ts`'s own doc comment derives the fix in full (the `landing = currentScroll + paintedTop − scrollMarginTop` formula, and why the correction needs a scroll-dependent term rather than a single constant). A jump started 800px into an 800px freeze window overshot by exactly 800px when the correction used a plain constant instead of the scroll-dependent term.
 
-The rest of this section covers what that comment doesn't: the browser bugs that shaped the implementation.
+The rest of this section covers what that comment doesn't: the browser behaviors that shaped the implementation.
 
 ### Why the animation rule needs an explicit `@supports` gate
 
-Firefox doesn't support `animation-timeline: scroll()`. The natural assumption is that a browser without that support leaves the declaration inert, but it doesn't (verified against real Firefox via Playwright, not inferred from spec text): `animation-timeline: scroll(...)` is unparseable there, so the whole declaration is dropped and `animation-timeline` stays at its initial value `auto`. Under `auto` the `animation` shorthand this module also writes becomes an ordinary time-based animation with no explicit duration, hence 0s, and a 0-duration animation with fill-mode `both` still runs, instantly: every custom property jumps straight to its keyframe's `to` value, the layer's full dwell, the moment the page loads. The resulting `scroll-margin-top` lands hundreds of pixels from any real target, worse than doing nothing. Wrapping the animation rule in `@supports (animation-timeline: scroll())` (see `scrollMargin.ts`'s `buildStylesheet`) keeps it from running at all on an engine that can't parse it. `e2e/StickyScrollTrigger.spec.ts`'s Firefox-only regression test reproduces the unguarded failure and confirms the gate closes it.
+Firefox doesn't support `animation-timeline: scroll()`. The natural assumption is that a browser without that support leaves the declaration inert, but it doesn't (verified against real Firefox via Playwright, not inferred from spec text). `animation-timeline: scroll(...)` is unparseable there, so the whole declaration is dropped and `animation-timeline` stays at its initial value `auto`. Under `auto` the `animation` shorthand this module also writes becomes an ordinary time-based animation with no explicit duration, hence 0s. A 0-duration animation with fill-mode `both` still runs, instantly: every custom property jumps straight to its keyframe's `to` value, the layer's full dwell, the moment the page loads. The resulting `scroll-margin-top` lands hundreds of pixels from any real target, worse than doing nothing. Wrapping the animation rule in `@supports (animation-timeline: scroll())` (see `scrollMargin.ts`'s `buildStylesheet`) keeps it from running at all on an engine that can't parse it. `e2e/StickyScrollTrigger.spec.ts`'s Firefox-only regression test reproduces the unguarded failure and confirms the gate closes it.
 
-The JS fallback this leaves Firefox with (a `window` `scroll` listener writing the same custom properties) was checked against Chromium's smooth-scroll bug below and doesn't share it: every engine that lacks native scroll-timeline support tolerates a `scroll-margin-top` that keeps changing mid-scroll, which is a Chromium compositor quirk rather than a general consequence of updating the value dynamically.
+The JS fallback this leaves Firefox with (a `window` `scroll` listener writing the same custom properties) was checked against the Chromium smooth-scroll limitation below and doesn't share it. Every engine that lacks native scroll-timeline support tolerates a `scroll-margin-top` that keeps changing mid-scroll. That limitation is specific to Chromium's compositor, not a general consequence of updating the value dynamically.
 
 ### Known limitation: Chromium + native smooth scrolling
 
@@ -85,7 +85,7 @@ Chromium's `scroll-behavior: smooth` doesn't run a fragment jump as one continuo
 
 ### Known limitation: Firefox drops scroll-padding-top after a sticky ancestor engages
 
-Putting a fixed header's offset on `scroll-padding-top` (on the scroller), kept separate from this module's own per-target correction on `scroll-margin-top`, runs into a documented, intentional Firefox heuristic (verified via Playwright): once any `position: sticky` element on the page has ever been stuck, Firefox stops applying `scroll-padding-top` on fragment jumps, assuming the stuck sticky ancestor is itself the header. That assumption doesn't hold for this module's nested-sticky structure, where every Scene layer's sticky wrapper becomes an ancestor of everything after it (see "Nested structure of the Scene and cover layers" above) whether or not it has anything to do with a header. Any same-page link past a Scene layer silently loses the header offset, landing short by exactly the header height.
+Putting a fixed header's offset on `scroll-padding-top` (on the scroller), kept separate from this module's own per-target correction on `scroll-margin-top`, runs into a documented, intentional Firefox heuristic (verified via Playwright): once any `position: sticky` element on the page has ever been stuck, Firefox stops applying `scroll-padding-top` on fragment jumps, assuming the stuck sticky ancestor is itself the header. That assumption doesn't hold for this module's nested-sticky structure, where every Scene layer's sticky wrapper becomes an ancestor of everything after it (see "Nested structure of the Scene and Cover layers" above) whether or not it has anything to do with a header. Any same-page link past a Scene layer silently loses the header offset, landing short by exactly the header height.
 
 The fix is to keep the header offset off `scroll-padding-top` entirely: fold it into `--sst-scroll-margin-top-offset`, so only `scroll-margin-top` is ever in play for a same-page jump. The demo does this in `style.css`'s `html` rule, and `e2e/StickyScrollTrigger.spec.ts`'s `--sst-scroll-margin-top-offset combines correctly with the dwell correction on a jump started mid-dwell` test guards the pattern.
 
@@ -95,7 +95,7 @@ A target element for a same-page anchor link isn't guaranteed to belong to the p
 
 Being `static` (called on the class, not an instance) is what makes that check possible at all: private fields are scoped to the class body, not to a particular `this`, so a static method can read `#rootElement` off any instance passed in as an argument, not just its own.
 
-### Why pin: true is discouraged alongside this
+### Why `pin: true` is discouraged alongside this
 
 With default `pinType: 'fixed'`, GSAP extrapolates pin position from scroll state at refresh time (internally: `top: bounds.top + (scroll - start)`). Right after page load (`scroll≈0`), extrapolation toward `start` can be offset by dwell-induced lag between those points. In nested sticky, this can make the element jump when pinning starts, even if `start`/`end` are corrected.
 
@@ -103,13 +103,13 @@ With default `pinType: 'fixed'`, GSAP extrapolates pin position from scroll stat
 
 If you just want to pin part of the shared container without going through GSAP, use `createStickyPin` (in `README.md`). It works purely off `position:sticky`, following the same rules regardless of the nested-sticky ancestor structure, so it needs no correction and doesn't run into this `pin: true` issue either.
 
-## Why createStickyPin is unaffected by nested-sticky lag
+## Why `createStickyPin` is unaffected by nested-sticky lag
 
 `resolveScrollPosition` (in `README.md`) and `createStickyTrigger` need lag correction because they hand absolute scroll positions to GSAP.
 
-`createStickyPin` doesn't: it uses only the static `documentTop` distance between `trigger` and `endTrigger` to size its spacer. Before taking that measurement, `#refreshPins` snapshots and resets every Scene/Cover wrapper's sticky state, the same way pass 1 of [Two-pass position measurement](#two-pass-position-measurement) does for Scene/Cover layers' own positions, so neither `documentTop` call is ever taken while an ancestor is actively stuck. That holds regardless of whether `trigger` and `endTrigger` share ancestors or sit outside the shared container entirely (see `createStickyPin`'s options in `README.md`): there's no stuck-ancestor shift left to correct for.
+`createStickyPin` doesn't: it uses only the static `documentTop` distance between `trigger` and `endTrigger` to size its spacer. Before taking that measurement, `#refreshPins` snapshots and resets every Scene/Cover wrapper's sticky state, the same way pass 1 of [Two-pass position measurement](#two-pass-position-measurement) does for Scene/Cover layers' own positions, so neither `documentTop` call is ever taken while an ancestor is actively stuck. That holds regardless of whether `trigger` and `endTrigger` share ancestors or sit outside the shared container entirely (see `createStickyPin`'s options in `README.md`). There's no stuck-ancestor shift left to correct for.
 
-### Why trigger needs to be wrapped
+### Why `trigger` needs to be wrapped
 
 To extend pinning through `endTrigger`, `trigger` needs a containing block that spans that range without pushing later layout down.
 

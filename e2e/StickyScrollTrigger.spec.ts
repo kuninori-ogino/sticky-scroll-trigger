@@ -918,7 +918,7 @@ test('destroy() restores the cover\'s lifted position/z-index and unwinds the DO
   expect(await triggerIsDirectRootChild()).toBe(true);
 });
 
-// scroll-margin-top synchronisation (see src/scrollMargin.ts). Nested sticky decouples an
+// scroll-margin-top synchronization (see src/scrollMargin.ts). Nested sticky decouples an
 // element's document position from the scroll position at which it reaches the viewport top, so
 // the browser's own one-shot scroll-into-view calculation lands short. refresh() declares that
 // difference through scroll-margin-top instead of asking the caller to intercept anything. None
@@ -1070,14 +1070,14 @@ test('destroy() hands scroll-margin-top back and removes the injected stylesheet
   );
 });
 
-// Regression test for a real bug: on a browser that doesn't support
-// `animation-timeline: scroll(...)` (Firefox, as of this writing), that whole declaration is
-// dropped as invalid, leaving `animation-timeline` at its initial value `auto`. Under `auto`,
-// the `animation` shorthand this module also writes is an ordinary time-based animation with no
-// explicit duration, i.e. 0s, and a 0-duration animation with fill-mode `both` still runs,
-// instantly: every custom property jumped straight to its keyframe's `to` value (the layer's
-// full dwell) the moment the page loaded, rather than staying at 0px the way an unset var()
-// should. scrollMargin.ts now gates the whole animation rule behind
+// Regression test for a real bug in this module's stylesheet: on a browser that doesn't
+// support `animation-timeline: scroll(...)` (Firefox, as of this writing), that whole
+// declaration is dropped as invalid, leaving `animation-timeline` at its initial value `auto`.
+// Under `auto`, the `animation` shorthand this module also writes is an ordinary time-based
+// animation with no explicit duration, i.e. 0s, and a 0-duration animation with fill-mode
+// `both` still runs, instantly: every custom property jumped straight to its keyframe's `to`
+// value (the layer's full dwell) the moment the page loaded, rather than staying at 0px the way
+// an unset var() should. scrollMargin.ts now gates the whole animation rule behind
 // `@supports (animation-timeline: scroll())`, so an unsupporting browser never runs it at all:
 // every var() genuinely falls back to 0px, and a `scroll` listener (verified elsewhere by the
 // "lands exactly" test above, which now runs unconditionally) supplies the same values instead.
@@ -1247,7 +1247,7 @@ test('--sst-scroll-margin-top-offset applies to every target when set once on an
 // Regression coverage for the pattern demo/src/style.css actually uses for its fixed header: a
 // site-wide offset folded into --sst-scroll-margin-top-offset has to keep working from a jump
 // started mid-dwell, not just from page top (the two tests above only jump from 0). This is also
-// what sidesteps a real native Firefox bug (verified via Playwright, reproduced even with a
+// what sidesteps a documented Firefox behavior (verified via Playwright, reproduced even with a
 // completely static scroll-margin-top with this module's own code destroyed, so it's not
 // something this library's correction causes or can fix directly) where scroll-padding-top on
 // the scroller gets silently dropped from a fragment jump once any position:sticky element on

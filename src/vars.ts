@@ -4,10 +4,11 @@
  * JS/JSON caller handing them through anyway (index.ts's #assertNoExcludedVars).
  */
 
-// Why excluded: (1) trigger/start/end/endTrigger: this module derives these itself;
-// (2) the pin family: meaningless since sticky handles pinning;
-// (3) horizontal/scroller/containerAnimation: this module assumes vertical, window scrolling,
-// so passing them would silently throw things off.
+// Why each is excluded:
+// - trigger/start/end/endTrigger: this module derives these itself.
+// - the pin family: meaningless, since sticky handles pinning.
+// - horizontal/scroller/containerAnimation: this module assumes vertical, window scrolling, so
+//   passing them would silently throw things off.
 export const EXCLUDED_VAR_KEYS = [
   'trigger',
   'start',

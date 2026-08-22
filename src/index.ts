@@ -59,7 +59,7 @@ export type {
 export type { EndInput, EndValue, PositionInput } from './position';
 
 // Converts a resolved end value into an EndSpec. Only a position-clause end needs a decision
-// here, about where endTrigger's position comes from:
+// here: where endTrigger's position comes from.
 // - a registered layer: pass 2 (planLayers) resolves it, including a cover layer's forward
 //   reference, which converges because cover layers add no padding. A Scene layer's forward
 //   reference is rejected outright, since its own dwell precedes anything after it.
@@ -146,9 +146,9 @@ const resolveEndSpec = (
 // Converts a resolved start value into a StartSpec. position.ts's isAbsoluteFormat defines which
 // values GSAP reads as an absolute scroll position rather than a clause.
 // A cover layer's stickyTop is computed relative to its own wrapper's natural position (see
-// freezeWindow.ts), so it needs a clause: an absolute scroll position has no meaning in that
-// local coordinate space, and is rejected rather than turned into a plausible-looking number. A
-// Scene layer's stickyTop is already document-absolute and works with either.
+// freezeWindow.ts), so it needs a clause. An absolute scroll position means nothing in that
+// local coordinate space, so this throws instead of turning it into a plausible-looking number.
+// A Scene layer's stickyTop is already document-absolute and works with either.
 const resolveStartSpec = (
   layer: Layer,
   startResolved: PositionValue,
@@ -912,17 +912,17 @@ export default class StickyScrollTrigger {
     return vars;
   }
 
-  // Pins a small element with plain position:sticky, leaving pinning entirely to CSS: it starts
-  // once trigger naturally arrives at that position and releases once endTrigger's end clause
-  // reaches the viewport. Unlike Scene/Cover layers, this wraps trigger alone in
-  // outer{ inner{ trigger } }, so it's free of nested-sticky lag on either side of the shared
-  // container, whatever the registration or DOM order.
+  // Pins a small element with plain position:sticky. It starts once trigger naturally arrives at
+  // that position and releases once endTrigger's end clause reaches the viewport. Unlike
+  // Scene/Cover layers, this wraps trigger alone in outer{ inner{ trigger } }, so it's free of
+  // nested-sticky lag on either side of the shared container, whatever the registration or DOM
+  // order.
   //
-  // The returned Vars does nothing on the ScrollTrigger side, keeping start/end at their defaults.
-  // It exists so the caller can pass it to ScrollTrigger.create() and get the hooks: onKill cleans
-  // up after an individual kill (dropping the layer from pinLayers and undoing outer), and
-  // onRefreshInit binds refresh() to the refreshInit GSAP fires on resize/load, sparing the caller
-  // a manual ScrollTrigger.addEventListener('refreshInit', refresh).
+  // The returned Vars does nothing on the ScrollTrigger side and keeps start/end at their
+  // defaults. It exists so the caller can pass it to ScrollTrigger.create() and get the hooks:
+  // onKill cleans up after an individual kill (it drops the layer from pinLayers and undoes
+  // outer), and onRefreshInit binds refresh() to the refreshInit GSAP fires on resize/load, so
+  // the caller doesn't write ScrollTrigger.addEventListener('refreshInit', refresh) by hand.
   createStickyPin({
     trigger: triggerInput,
     start,
@@ -995,7 +995,7 @@ export default class StickyScrollTrigger {
 
         // outer is height:0, so unwrapping puts trigger's own height back into the flow and
         // moves everything below it down by that much. That invalidates every later Scene
-        // layer's freeze window. An unwrapped pin moved nothing, so it skips this.
+        // layer's freeze window. A pin that was never wrapped moved nothing.
         if (this.#unwrapPinLayer(layer)) this.#scheduleRebuild();
 
         onKill?.(self);
