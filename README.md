@@ -17,11 +17,13 @@ See the repository's `demo/index.html` + `demo/src/main.ts` for a live example, 
 
 | requirement      | description                                                                                                                                                 |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GSAP             | 3.x, with the `ScrollTrigger` plugin already registered via `gsap.registerPlugin`                                                                           |
+| GSAP             | `^3.15.0`, with the `ScrollTrigger` plugin already registered via `gsap.registerPlugin`                                                                     |
 | TypeScript       | Optional. The published `.d.ts` uses GSAP's global types (`ScrollTrigger.Vars`); plain JavaScript projects can `import` the same `dist/` build without them |
 | Browser          | Must support `position:sticky` (no `overflow:hidden`/`clip` on any ancestor of a pinned element)                                                            |
 | Scroll direction | Vertical scrolling only (`horizontal` is not supported)                                                                                                     |
 | Module system    | ESM only (`import`) or a `<script>` tag via the global build; CommonJS (`require`) is not supported                                                         |
+
+This module is tested against 3.15.0, and the notes below on what raw GSAP itself does were measured there. A later 3.x satisfies the peer range but is untested.
 
 ## Installation
 
