@@ -222,45 +222,52 @@ export const unwrapPin = (
   outer.remove();
 };
 
+type LiftProperty = 'position' | 'zIndex';
+
+const LIFT_VALUES: Record<LiftProperty, string> = { position: 'relative', zIndex: '1' };
+
 // State for an already-lifted element, reference-counted because several cover layers can lift
-// the same one.
+// the same one. `applied` is the properties actually written, which can be none: an element the
+// author has already spoken for on both is tracked all the same, so the count stays right.
 interface LiftState {
   count: number;
-  position: string;
-  zIndex: string;
+  applied: LiftProperty[];
 }
 
 const liftStates = new WeakMap<HTMLElement, LiftState>();
 
 // Raises the covering side above the sticky wrapper (position:sticky creates a stacking context).
-// Only fills in when the computed value is static/auto; author-specified values are respected.
-// Returns a restore function.
+// Only fills in a property whose computed value is static/auto; author-specified values are
+// respected. Both go in through CSSOM rather than a stylesheet of the module's own, which is what
+// keeps a strict Content Security Policy from needing a style-src exception for them.
+// Returns a restore function, which clears a property only while it still holds the value written
+// here: a caller who restyles the covering side to something else (gsap.set, say) keeps that value.
 export const liftAboveStickyWrapper = (cover: HTMLElement): (() => void) => {
   const lifted: HTMLElement[] = [];
 
   for (let node: Element | null = cover; node; node = node.nextElementSibling) {
     if (!(node instanceof HTMLElement)) continue;
 
-    const existing = liftStates.get(node);
+    const element = node;
+    const existing = liftStates.get(element);
 
     if (existing) {
       existing.count += 1;
     } else {
-      const computed = getComputedStyle(node);
-      const state: LiftState = {
-        count: 1,
-        position: node.style.position,
-        zIndex: node.style.zIndex,
-      };
+      const computed = getComputedStyle(element);
+      const applied: LiftProperty[] = [];
 
-      if (computed.position === 'static') node.style.position = 'relative';
+      if (computed.position === 'static') applied.push('position');
 
-      if (computed.zIndex === 'auto') node.style.zIndex = '1';
+      if (computed.zIndex === 'auto') applied.push('zIndex');
 
-      liftStates.set(node, state);
+      applied.forEach((property) => {
+        element.style[property] = LIFT_VALUES[property];
+      });
+      liftStates.set(element, { count: 1, applied });
     }
 
-    lifted.push(node);
+    lifted.push(element);
   }
 
   return () => {
@@ -273,8 +280,9 @@ export const liftAboveStickyWrapper = (cover: HTMLElement): (() => void) => {
 
       if (state.count > 0) return;
 
-      el.style.position = state.position;
-      el.style.zIndex = state.zIndex;
+      state.applied.forEach((property) => {
+        if (el.style[property] === LIFT_VALUES[property]) el.style[property] = '';
+      });
       liftStates.delete(el);
     });
     lifted.length = 0;

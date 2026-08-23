@@ -297,45 +297,37 @@ describe('wrapCover', () => {
 });
 
 describe('liftAboveStickyWrapper', () => {
+  const byId = (id: string) => document.getElementById(id)!;
+  const lifted = (id: string) => `${byId(id).style.position || '-'}/${byId(id).style.zIndex || '-'}`;
+
   it('gives only the siblings from cover onward a position and z-index', () => {
     document.body.innerHTML
       = '<div id="host"><div id="base"></div><div id="cover"></div><div id="tail"></div></div>';
 
-    liftAboveStickyWrapper(document.getElementById('cover')!);
+    liftAboveStickyWrapper(byId('cover'));
 
-    ['cover', 'tail'].forEach((id) => {
-      const el = document.getElementById(id)!;
-
-      expect(el.style.position).toBe('relative');
-      expect(el.style.zIndex).toBe('1');
-    });
+    expect(lifted('cover')).toBe('relative/1');
+    expect(lifted('tail')).toBe('relative/1');
     // base is on the wrapper side, so it's left untouched
-    expect(document.getElementById('base')!.style.position).toBe('');
-    expect(document.getElementById('base')!.style.zIndex).toBe('');
+    expect(lifted('base')).toBe('-/-');
   });
 
   it('respects values the author specified explicitly', () => {
     document.body.innerHTML
       = '<div id="host"><div id="cover" style="position:absolute;z-index:5"></div></div>';
 
-    liftAboveStickyWrapper(document.getElementById('cover')!);
+    liftAboveStickyWrapper(byId('cover'));
 
-    const cover = document.getElementById('cover')!;
-
-    expect(cover.style.position).toBe('absolute');
-    expect(cover.style.zIndex).toBe('5');
+    expect(lifted('cover')).toBe('absolute/5');
   });
 
   it('fills in only the missing half when just one is specified explicitly', () => {
     document.body.innerHTML
       = '<div id="host"><div id="cover" style="position:relative"></div></div>';
 
-    liftAboveStickyWrapper(document.getElementById('cover')!);
+    liftAboveStickyWrapper(byId('cover'));
 
-    const cover = document.getElementById('cover')!;
-
-    expect(cover.style.position).toBe('relative');
-    expect(cover.style.zIndex).toBe('1');
+    expect(lifted('cover')).toBe('relative/1');
   });
 
   // With multiple cover layers, the lifted ranges overlap
@@ -346,18 +338,14 @@ describe('liftAboveStickyWrapper', () => {
       document.body.innerHTML
         = '<div id="root"><div id="b1"></div><div id="c1"></div><div id="b2"></div><div id="c2"></div></div>';
 
-      const byId = (id: string) => document.getElementById(id)!;
-
       return {
-        byId,
         restore1: liftAboveStickyWrapper(byId('c1')),
         restore2: liftAboveStickyWrapper(byId('c2')),
-        lifted: (id: string) => `${byId(id).style.position || '-'}/${byId(id).style.zIndex || '-'}`,
       };
     };
 
     it('killing the earlier cover keeps the still-alive later cover\'s z-order intact', () => {
-      const { restore1, lifted } = setupTwoCovers();
+      const { restore1 } = setupTwoCovers();
 
       restore1();
 
@@ -370,7 +358,7 @@ describe('liftAboveStickyWrapper', () => {
     });
 
     it('killing only the later cover keeps it lifted until the earlier one is killed', () => {
-      const { restore2, lifted } = setupTwoCovers();
+      const { restore2 } = setupTwoCovers();
 
       restore2();
 
@@ -378,7 +366,7 @@ describe('liftAboveStickyWrapper', () => {
     });
 
     it('only reverts once both are killed (no leftover styles)', () => {
-      const { restore1, restore2, lifted } = setupTwoCovers();
+      const { restore1, restore2 } = setupTwoCovers();
 
       restore1();
       restore2();
@@ -389,7 +377,7 @@ describe('liftAboveStickyWrapper', () => {
     });
 
     it('calling the restore function twice does not over-decrement the count', () => {
-      const { restore1, restore2, lifted } = setupTwoCovers();
+      const { restore1, restore2 } = setupTwoCovers();
 
       restore1();
       restore1();
@@ -401,22 +389,42 @@ describe('liftAboveStickyWrapper', () => {
     });
   });
 
-  it('the restore function reverts to the pre-change inline values', () => {
+  it('the restore function clears only what it filled in', () => {
     document.body.innerHTML
       = '<div id="host"><div id="cover" style="position:relative"></div><div id="tail"></div></div>';
 
-    const restore = liftAboveStickyWrapper(document.getElementById('cover')!);
+    liftAboveStickyWrapper(byId('cover'))();
 
+    // The position the author wrote stays; only the z-index this function added is cleared
+    expect(lifted('cover')).toBe('relative/-');
+    expect(lifted('tail')).toBe('-/-');
+  });
+
+  // A caller may restyle the covering side after registration (gsap.set, say), and the restore has
+  // no business taking that value back.
+  it('leaves a value written since the lift alone', () => {
+    document.body.innerHTML = '<div id="host"><div id="cover"></div></div>';
+
+    const restore = liftAboveStickyWrapper(byId('cover'));
+
+    byId('cover').style.zIndex = '7';
     restore();
 
-    const cover = document.getElementById('cover')!;
-    const tail = document.getElementById('tail')!;
+    expect(lifted('cover')).toBe('-/7');
+  });
 
-    // The position it originally had stays; only the z-index this function added is cleared
-    expect(cover.style.position).toBe('relative');
-    expect(cover.style.zIndex).toBe('');
-    expect(tail.style.position).toBe('');
-    expect(tail.style.zIndex).toBe('');
+  // Same case one step further on: the caller's value is what the next lift measures, so the
+  // property is the author's from then on.
+  it('does not fill a property back in once the caller has claimed it', () => {
+    document.body.innerHTML = '<div id="host"><div id="cover"></div></div>';
+
+    const restore = liftAboveStickyWrapper(byId('cover'));
+
+    byId('cover').style.zIndex = '7';
+    restore();
+    liftAboveStickyWrapper(byId('cover'));
+
+    expect(lifted('cover')).toBe('relative/7');
   });
 });
 

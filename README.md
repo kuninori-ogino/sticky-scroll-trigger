@@ -178,7 +178,7 @@ Registers an overlap-scroll effect (`trigger` gets pinned while its siblings fro
 | `end`        | `null` (auto-computed)       | End of the freeze window. When `null`, computed automatically as "the distance until `cover`'s top edge reaches the top of the viewport"                                                                    |
 | `endTrigger` | `trigger`                    | Reference element when `end` uses position-clause syntax                                                                                                                                                    |
 
-`createOverlapScroll` adjusts `position`/`z-index` on the covering side only when needed, never overrides explicit values, and restores its changes on GSAP `kill()`.
+`createOverlapScroll` adjusts `position`/`z-index` on the covering side only when needed, never overrides explicit values, and restores its changes on GSAP `kill()`. The restore clears a property only while it still holds the value the lift wrote, so a different value you set on the covering side afterwards (a `gsap.set()`, say) survives.
 
 #### Room for the rise
 
