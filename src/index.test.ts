@@ -1684,6 +1684,187 @@ describe('createOverlapScroll input validation', () => {
   });
 });
 
+// Every refresh() takes the lift off and puts it back, which is the only thing that can raise a
+// sibling the page has grown since registration. dom.test.ts covers liftAboveStickyWrapper itself;
+// what's checked here is the re-run and what it leaves alone.
+describe('cover z-order lift re-sync', () => {
+  const fakeSelf = makeFakeSelf();
+
+  const setupCover = () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="base"></section>
+        <section class="cover"></section>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const vars = controller.createOverlapScroll({ trigger: query('.base'), cover: query('.cover') });
+
+    return { controller, vars };
+  };
+
+  // Appends to the covering side: a cover layer's wrapper takes everything up to trigger, so
+  // whatever follows cover stays a child of the shared container whether or not it's built.
+  const appendSection = (className: string) => {
+    const el = document.createElement('section');
+
+    el.className = className;
+    query('.root').appendChild(el);
+
+    return el;
+  };
+
+  it('lifts a sibling added after registration', () => {
+    const { controller } = setupCover();
+    const later = appendSection('later');
+
+    expect(later.style.position).toBe('');
+
+    controller.refresh();
+
+    expect(later.style.position).toBe('relative');
+    expect(later.style.zIndex).toBe('1');
+  });
+
+  // Without the re-run, the value written at registration would mask a position a breakpoint
+  // turns on later.
+  it('drops its own position once the caller\'s CSS turns one on', () => {
+    const { controller } = setupCover();
+    const cover = query('.cover');
+
+    expect(cover.style.position).toBe('relative');
+
+    document.body.insertAdjacentHTML('beforeend', '<style>.cover { position: absolute; }</style>');
+    controller.refresh();
+
+    expect(cover.style.position).toBe('');
+    expect(getComputedStyle(cover).position).toBe('absolute');
+    expect(cover.style.zIndex).toBe('1');
+  });
+
+  it('keeps a z-index the caller writes inline after registration', () => {
+    const { controller } = setupCover();
+    const cover = query('.cover');
+
+    cover.style.zIndex = '5';
+    controller.refresh();
+
+    expect(cover.style.zIndex).toBe('5');
+    expect(cover.style.position).toBe('relative');
+  });
+
+  it('still hands back the caller\'s own values after repeated refreshes', () => {
+    const { controller } = setupCover();
+    const cover = query('.cover');
+
+    cover.style.zIndex = '5';
+    controller.refresh();
+    controller.refresh();
+    controller.refresh();
+    controller.destroy();
+
+    expect(cover.style.zIndex).toBe('5');
+    expect(cover.style.position).toBe('');
+  });
+
+  // onKill reads the restore out of the controller rather than closing over the one made at
+  // registration, which knows nothing about .later.
+  it('restores through onKill once a refresh has replaced the restore', () => {
+    const { controller, vars } = setupCover();
+    const later = appendSection('later');
+
+    controller.refresh();
+
+    expect(later.style.zIndex).toBe('1');
+
+    vars.onKill!(fakeSelf);
+
+    expect(query('.cover').style.position).toBe('');
+    expect(later.style.position).toBe('');
+    expect(later.style.zIndex).toBe('');
+  });
+
+  // Building moves the second layer's trigger and everything above it into a wrapper, which cuts
+  // the first layer's sibling chain short at that trigger. The elements it loses that way are the
+  // second layer's own covering side, so between them the two still reach everything.
+  it('keeps every cover raised once building has narrowed what each layer enumerates', () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="base-a"></section>
+        <section class="cover-a"></section>
+        <section class="base-b"></section>
+        <section class="cover-b"></section>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+
+    controller.createOverlapScroll({ trigger: query('.base-a'), cover: query('.cover-a') });
+    controller.createOverlapScroll({ trigger: query('.base-b'), cover: query('.cover-b') });
+    controller.refresh();
+
+    expect(query('.cover-a').style.zIndex).toBe('1');
+    expect(query('.base-b').style.zIndex).toBe('1');
+    expect(query('.cover-b').style.zIndex).toBe('1');
+  });
+
+  // The lift comes off before #wrapUnwrappedPins captures the pin's inline position, so the pin
+  // saves what the caller left there rather than the lift's own 'relative'. It goes back on after
+  // the wrapping, so it walks over the wrapper the pin put in trigger's place.
+  it('lifts a pin\'s wrapper rather than the pinned element itself', () => {
+    const { controller } = setupCover();
+    const pinned = appendSection('pinned');
+
+    controller.refresh();
+
+    expect(pinned.style.position).toBe('relative');
+
+    controller.createStickyPin({ trigger: pinned, endTrigger: query('.base') });
+    controller.refresh();
+
+    const outer = pinned.parentElement!.parentElement!;
+
+    expect(outer.style.position).toBe('relative');
+    expect(outer.style.zIndex).toBe('1');
+    expect(pinned.style.zIndex).toBe('');
+
+    controller.destroy();
+
+    expect(pinned.style.position).toBe('');
+  });
+
+  // The lift comes off at the top of refresh(), so anything that throws before it goes back on
+  // would leave the covering side behind the sticky wrapper until the next successful refresh().
+  // wrapPin is the only such throw, and it takes a pin trigger the caller has since removed.
+  it('keeps the covering side raised when the pin wrapping throws', () => {
+    const { controller } = setupCover();
+    const pinned = appendSection('pinned');
+
+    controller.createStickyPin({ trigger: pinned, endTrigger: query('.base') });
+    pinned.remove();
+
+    expect(() => controller.refresh()).toThrow(/is not attached to the document/);
+
+    expect(query('.cover').style.position).toBe('relative');
+    expect(query('.cover').style.zIndex).toBe('1');
+  });
+
+  // Pinning the cover element itself moves it out of the sibling chain it heads, so the walk has
+  // to start from the wrapper that took its place; starting from cover would reach cover alone.
+  it('walks from the pin\'s wrapper when the cover element is itself pinned', () => {
+    const { controller } = setupCover();
+    const after = appendSection('after');
+
+    controller.createStickyPin({ trigger: query('.cover'), endTrigger: query('.base') });
+    controller.refresh();
+
+    const outer = query('.cover').parentElement!.parentElement!;
+
+    expect(outer.style.position).toBe('relative');
+    expect(outer.style.zIndex).toBe('1');
+    expect(after.style.zIndex).toBe('1');
+  });
+});
+
 // GSAP's 'max' keyword (the scroller's max scroll position) is only mathematically solvable
 // where the layer itself never contributes to document height: createOverlapScroll (cover layers
 // never add padding) and resolveScrollPosition/createResolvedTrigger (they never register into

@@ -637,9 +637,22 @@ export default class StickyScrollTrigger {
       this.#build();
     }
 
-    // Must happen before #refreshScenesAndCovers measures Scene/Cover positions (see
-    // #wrapUnwrappedPins's own comment for why).
-    this.#wrapUnwrappedPins();
+    // The lift comes off before the pin wrapping below captures a pin trigger's own inline
+    // position, so a value the lift wrote there is never mistaken for the caller's.
+    this.#restoreCoverLifts();
+
+    try {
+      // Must happen before #refreshScenesAndCovers measures Scene/Cover positions (see
+      // #wrapUnwrappedPins's own comment for why).
+      this.#wrapUnwrappedPins();
+    } finally {
+      // It goes back on after the build and the pin wrapping, so it walks the sibling chain those
+      // leave behind rather than the elements they moved out of it. In a finally because wrapPin
+      // throws for a trigger detached since registration, and the covering side would sit behind
+      // the sticky wrapper until the next successful refresh() (see #resetPinState for the same
+      // rollback on the pin side).
+      this.#liftCovers();
+    }
 
     // Measured once here so Scene/Cover layers and pin layers share a single reading rather than
     // forcing two layout reflows, and skipped entirely when nothing is registered.
@@ -655,6 +668,34 @@ export default class StickyScrollTrigger {
     // Last, because these values derive from the freeze windows the passes above settle, and
     // nothing measures layout afterwards for the style written here to disturb.
     this.#syncScrollMargins();
+  }
+
+  #coverLayers(): CoverLayer[] {
+    return this.#layers.filter((layer): layer is CoverLayer => layer.kind === 'cover');
+  }
+
+  // Takes every cover layer's z-order lift off. Registration alone can't be the last word: a
+  // sibling added since has never been raised, and a property the author's own CSS has turned on
+  // since is still held down by the value the lift wrote while it was unset.
+  //
+  // All of them come off before any goes back on. Interleaved, a layer sharing siblings with one
+  // already re-lifted would read that write back as an author value and leave them low.
+  #restoreCoverLifts(): void {
+    this.#coverLayers().forEach((layer) => this.#coverRestoreByLayer.get(layer)?.());
+  }
+
+  // #restoreCoverLifts's counterpart, and the only thing that raises a sibling the page has grown
+  // since the last refresh.
+  //
+  // The walk starts from whatever holds cover's own place among the siblings, which is the pin's
+  // wrapper when cover is itself a pin trigger: cover sits inside outer{ inner{ cover } } by then,
+  // so starting from cover would reach cover alone.
+  #liftCovers(): void {
+    this.#coverLayers().forEach((layer) => {
+      const pin = this.#pinLayers.find(({ trigger }) => trigger === layer.cover);
+
+      this.#coverRestoreByLayer.set(layer, liftAboveStickyWrapper(pin?.outer ?? layer.cover));
+    });
   }
 
   // Hands the current Scene layer freeze windows to the scroll-margin bookkeeping, along with the
@@ -898,16 +939,17 @@ export default class StickyScrollTrigger {
     const vars = this.#registerLayer(
       layer,
       (self) => {
-        restoreCoverStyles();
+        // Read out of the map rather than closed over: #liftCovers replaces the restore on every
+        // refresh, and the one made here stops matching the elements actually lifted.
+        this.#coverRestoreByLayer.get(layer)?.();
         onKill?.(self);
       },
       rest,
     );
-    const restoreCoverStyles = liftAboveStickyWrapper(coverElement);
 
     // Usage that skips ScrollTrigger.create() never fires GSAP's onKill, so destroy() needs its
     // own handle on the restore.
-    this.#coverRestoreByLayer.set(layer, restoreCoverStyles);
+    this.#coverRestoreByLayer.set(layer, liftAboveStickyWrapper(coverElement));
 
     return vars;
   }
@@ -1108,9 +1150,7 @@ export default class StickyScrollTrigger {
     this.#destroyed = true;
     // Before #unbuild removes the outermost container, which hosts the scroll-driven ramps.
     this.#scrollMarginSync.restore();
-    this.#layers.forEach((layer) => {
-      if (layer.kind === 'cover') this.#coverRestoreByLayer.get(layer)?.();
-    });
+    this.#restoreCoverLifts();
     this.#unbuild();
     this.#layers.length = 0;
     this.#builtLayers = [];

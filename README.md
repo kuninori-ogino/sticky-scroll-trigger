@@ -180,6 +180,8 @@ Registers an overlap-scroll effect (`trigger` gets pinned while its siblings fro
 
 `createOverlapScroll` adjusts `position`/`z-index` on the covering side only when needed, never overrides explicit values, and restores its changes on GSAP `kill()`. The restore clears a property only while it still holds the value the lift wrote, so a different value you set on the covering side afterwards (a `gsap.set()`, say) survives.
 
+Every [`refresh()`](#refresh) runs that check again over the covering side as it stands: it raises an element added since, and hands back a property your own CSS has turned on in the meantime. Where the covering side holds a `createStickyPin` `trigger`, the pin's own wrapper rises in its place and the pinned element is left alone.
+
 #### Room for the rise
 
 Pinning here is plain `position:sticky`, and the browser keeps a sticky element stuck only until its containing block's bottom edge catches up with it. That containing block is `trigger`'s own parent, not the shared container:
