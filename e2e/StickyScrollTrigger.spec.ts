@@ -883,10 +883,10 @@ test('a real window resize re-runs refresh() before GSAP recomputes trigger posi
   expect(after - before).toBe(490); // filler grew from 10px to 500px
 });
 
-// None of the other e2e fixtures ever call destroy(), and all of them give the cover explicit
-// position/z-index CSS, so liftAboveStickyWrapper's "only fill in when computed is static/auto"
-// branch has never run in a real browser. destroyRestoresLayout.html's cover has no
-// such CSS, so this exercises both that branch and destroy()'s restore/unbuild together.
+// The scenario-style fixtures all give the cover explicit position/z-index CSS and never call
+// destroy(), so liftAboveStickyWrapper's "only fill in what the author left static/auto" branch
+// runs in a real browser only here and in strictCsp.html below. destroyRestoresLayout.html's cover
+// has no such CSS, so this exercises both that branch and destroy()'s restore/unbuild together.
 test('destroy() restores the cover\'s lifted position/z-index and unwinds the DOM', async ({ page }) => {
   await page.goto('/fixtures/destroyRestoresLayout.html');
 
@@ -916,6 +916,57 @@ test('destroy() restores the cover\'s lifted position/z-index and unwinds the DO
   expect(styleAfterDestroy.position).toBe('static');
   expect(styleAfterDestroy.zIndex).toBe('auto');
   expect(await triggerIsDirectRootChild()).toBe(true);
+});
+
+// Everything this module adds to a page goes in through CSSOM: inline writes for the cover lift,
+// a constructed stylesheet for the scroll-margin ramps. A Content Security Policy's style-src
+// governs neither, so a page with a strict policy needs no exception. The fixture carries a <style>
+// element of its own as the control: it stays inert under this policy, so the module's own results
+// are evidence about CSSOM rather than about the policy.
+interface CspReport {
+  cover: { position: string; zIndex: string };
+  probePosition: string;
+  moduleSheetCount: number;
+  rampProperty: string;
+  scrollMarginTop: string;
+}
+
+test('both halves still work under a style-src policy without \'unsafe-inline\'', async ({ page }) => {
+  await page.goto('/fixtures/strictCsp.html');
+
+  const read = () =>
+    page.evaluate(() => (window as unknown as { __report: () => CspReport }).__report());
+  const report = await read();
+  const usesCssRamp = await page.evaluate(() =>
+    (window as never as { __scrollDrivenAnimationsSupported: () => boolean })
+      .__scrollDrivenAnimationsSupported());
+
+  expect(report.probePosition).toBe('static');
+  expect(report.cover).toEqual({ position: 'relative', zIndex: '1' });
+  expect(report.scrollMarginTop).not.toBe('');
+  // No scroll timelines, no stylesheet: the ramps come from the scroll listener instead.
+  expect(report.moduleSheetCount).toBe(usesCssRamp ? 1 : 0);
+  expect(report.rampProperty.trim()).toBe('0px');
+
+  // Scrolling into the scene's freeze window (0..800, the scene being at the top of the document)
+  // advances the ramp. On the CSS path nothing else could have moved it: that path registers no
+  // scroll listener, so a value here is the adopted stylesheet's animation actually running.
+  await page.evaluate(() => window.scrollTo(0, 400));
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+
+  const midDwell = await read();
+
+  expect(parseFloat(midDwell.rampProperty)).toBeCloseTo(400, 0);
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+
+  await page.evaluate(() => (window as unknown as { __destroy: () => void }).__destroy());
+
+  const afterDestroy = await read();
+
+  expect(afterDestroy.cover).toEqual({ position: 'static', zIndex: 'auto' });
+  expect(afterDestroy.moduleSheetCount).toBe(0);
+  expect(afterDestroy.scrollMarginTop).toBe('');
 });
 
 // scroll-margin-top synchronization (see src/scrollMargin.ts). Nested sticky decouples an
@@ -1036,6 +1087,37 @@ test('an author\'s own scroll-margin-top still applies on top of the correction'
   expect(landed.rectTop).toBe(40);
 });
 
+// The emitted rules themselves, checked against the same freeze window the fixture reports. jsdom
+// never reaches this path, reporting no scroll-timeline support, so it never sees a stylesheet to
+// check.
+test('the adopted stylesheet ramps one custom property across each layer\'s own freeze window', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/scrollMargin.html');
+
+  const usesCssRamp = await page.evaluate(() =>
+    (window as never as { __scrollDrivenAnimationsSupported: () => boolean })
+      .__scrollDrivenAnimationsSupported());
+
+  test.skip(!usesCssRamp, 'only meaningful where the ramps are driven by CSS');
+
+  const scene1 = await page.evaluate(() =>
+    (window as never as { __scene1FreezeWindow: () => { start: number; end: number } })
+      .__scene1FreezeWindow());
+  const css = await page.evaluate(() =>
+    (window as never as { __moduleSheetText: () => string }).__moduleSheetText());
+
+  // Read back through the CSSOM, so these are the engine's own serializations rather than the
+  // strings the module wrote: the block axis is dropped as the default, and the `animation`
+  // shorthand comes back as longhands.
+  expect(css).toMatch(/animation-timeline:\s*scroll\(root/);
+  expect(css).toContain(`${scene1.start}px ${scene1.end}px`); // scene1's slice of animation-range
+  // Two Scene layers, so two ramped properties, each with its own registration and keyframes.
+  expect(css).toContain('@property --sst0-c0');
+  expect(css).toContain('@property --sst0-c1');
+  expect(css).toMatch(new RegExp(`--sst0-c0:\\s*${scene1.end - scene1.start}px`));
+});
+
 test('destroy() hands scroll-margin-top back and removes the injected stylesheet', async ({
   page,
 }) => {
@@ -1048,7 +1130,15 @@ test('destroy() hands scroll-margin-top back and removes the injected stylesheet
     ),
   ).not.toBe('');
 
-  const styleCountBefore = await page.evaluate(() => document.head.querySelectorAll('style').length);
+  const sheetsBefore = await page.evaluate(() =>
+    (window as never as { __moduleSheetCount: () => number }).__moduleSheetCount());
+  const usesCssRamp = await page.evaluate(() =>
+    (window as never as { __scrollDrivenAnimationsSupported: () => boolean })
+      .__scrollDrivenAnimationsSupported());
+
+  // Without scroll timelines the ramps are driven by the scroll listener instead, and no
+  // stylesheet is built at all.
+  expect(sheetsBefore).toBe(usesCssRamp ? 1 : 0);
 
   await page.evaluate(() => (window as never as { __destroy: () => void }).__destroy());
 
@@ -1065,9 +1155,10 @@ test('destroy() hands scroll-margin-top back and removes the injected stylesheet
         .__computedScrollMarginTop('withAuthorMargin'),
     ),
   ).toBe('40px');
-  expect(await page.evaluate(() => document.head.querySelectorAll('style').length)).toBe(
-    styleCountBefore - 1,
-  );
+  expect(
+    await page.evaluate(() =>
+      (window as never as { __moduleSheetCount: () => number }).__moduleSheetCount()),
+  ).toBe(0);
 });
 
 // Regression test for a real bug in this module's stylesheet: on a browser that doesn't
@@ -1098,9 +1189,18 @@ test('an engine without animation-timeline: scroll() never runs the animation sh
     ),
   ).toBe(false);
 
+  // What keeps the bug this test is named for out of reach: an engine that can't parse the
+  // declaration never receives the stylesheet at all, so the animation it would have mangled is
+  // never emitted. buildStylesheet's @supports gate still wraps the rule, as a second line for a
+  // CSS.supports() that disagrees with the parser, but nothing here depends on it.
+  expect(
+    await page.evaluate(() =>
+      (window as never as { __moduleSheetCount: () => number }).__moduleSheetCount()),
+  ).toBe(0);
+
   // At load, before any 'scroll' event has fired, every consumed-dwell custom property must
-  // already read back as 0px (the correct value at scroll 0, and also the regression guard: the
-  // bug this test is named for produced the layer's full dwell here instead).
+  // already read back as 0px (the correct value at scroll 0, and what the named bug got wrong by
+  // jumping straight to the layer's full dwell).
   const ramps = await page.evaluate(() => {
     const cs = getComputedStyle(document.getElementById('afterScene1') as HTMLElement);
 
@@ -1122,22 +1222,12 @@ test('the scroll listener fallback tracks a mid-freeze-window scroll position, n
 
   await page.goto('/fixtures/scrollMargin.html');
 
-  // scrollMargin.ts writes its animation-range (real, absolute scroll positions) into the
-  // injected stylesheet regardless of engine support, and reading it back is the same reliable way
-  // the scratch investigation used, rather than guessing a scroll position from the fixture's own
-  // layout (lead/block/scene heights) and risking landing outside scene1's actual freeze window.
-  const scene1 = await page.evaluate(() => {
-    const styleEl = Array.from(document.head.querySelectorAll('style'))
-      .find((s) => s.textContent?.includes('--sst0-c0'));
-    const match = styleEl?.textContent?.match(/animation-range:([\d.]+)px ([\d.]+)px/);
-
-    if (!match) return null;
-
-    return { start: parseFloat(match[1]), end: parseFloat(match[2]) };
-  });
-
-  if (scene1 === null) throw new Error('could not read scene1\'s animation-range');
-
+  // The fixture hands over scene1's own freeze window (real, absolute scroll positions), which is
+  // the reliable way to pick a scroll position inside it, rather than guessing from the fixture's
+  // layout (lead/block/scene heights) and risking landing outside it.
+  const scene1 = await page.evaluate(() =>
+    (window as never as { __scene1FreezeWindow: () => { start: number; end: number } })
+      .__scene1FreezeWindow());
   const dwell = scene1.end - scene1.start;
   const midDwell = Math.round((scene1.start + scene1.end) / 2);
 
@@ -1263,18 +1353,9 @@ test('--sst-scroll-margin-top-offset combines correctly with the dwell correctio
     document.documentElement.style.setProperty('--sst-scroll-margin-top-offset', '20px');
   });
 
-  const scene1 = await page.evaluate(() => {
-    const styleEl = Array.from(document.head.querySelectorAll('style'))
-      .find((s) => s.textContent?.includes('--sst0-c0'));
-    const match = styleEl?.textContent?.match(/animation-range:([\d.]+)px ([\d.]+)px/);
-
-    if (!match) return null;
-
-    return { start: parseFloat(match[1]), end: parseFloat(match[2]) };
-  });
-
-  if (scene1 === null) throw new Error('could not read scene1\'s animation-range');
-
+  const scene1 = await page.evaluate(() =>
+    (window as never as { __scene1FreezeWindow: () => { start: number; end: number } })
+      .__scene1FreezeWindow());
   const midDwell = Math.round((scene1.start + scene1.end) / 2);
   const arrival = await findArrivalScroll(page, 'afterScene1');
   const landed = await jumpTo(page, 'afterScene1', midDwell, 'anchorClick');

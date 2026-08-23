@@ -2039,15 +2039,6 @@ describe('scroll-margin-top synchronization', () => {
       `^calc\\(${authorPx}px \\+ var\\(--sst-scroll-margin-top-offset, 0px\\) \\+ var\\(--sst\\d+-c0, 0px\\) `
       + `- ${lagPx}px\\)$`,
     );
-  // document.body is swapped per test but document.head isn't, so stylesheets injected by
-  // controllers from earlier tests would otherwise pile up and be counted here.
-  const ownStyles = () =>
-    Array.from(document.head.querySelectorAll('style'))
-      .filter((style) => style.textContent?.includes('--sst'));
-
-  beforeEach(() => {
-    document.head.querySelectorAll('style').forEach((style) => style.remove());
-  });
 
   const setupAnchors = (options?: { scrollMarginTargets?: string | null }) => {
     document.body.innerHTML = `
@@ -2151,20 +2142,7 @@ describe('scroll-margin-top synchronization', () => {
     expect(query('#after').style.scrollMarginTop).toContain('var(--sst-scroll-margin-top-offset, 0px)');
   });
 
-  it('injects one stylesheet carrying the scroll-driven ramp per Scene layer', () => {
-    const { controller } = setupAnchors();
-
-    controller.refresh();
-
-    const styles = ownStyles();
-
-    expect(styles).toHaveLength(1);
-    expect(styles[0].textContent).toContain('animation-timeline:scroll(root block)');
-    // The ramp spans the layer's own freeze window, in absolute scroll px.
-    expect(styles[0].textContent).toContain('animation-range:0px 800px');
-  });
-
-  it('hands every target back and removes the stylesheet on destroy', () => {
+  it('hands every target back on destroy', () => {
     const { query, controller } = setupAnchors();
 
     query('#after').style.scrollMarginTop = '40px';
@@ -2173,7 +2151,6 @@ describe('scroll-margin-top synchronization', () => {
 
     expect(query('#before').style.scrollMarginTop).toBe('');
     expect(query('#after').style.scrollMarginTop).toBe('40px');
-    expect(ownStyles()).toHaveLength(0);
   });
 
   it('writes nothing when scrollMarginTargets is null', () => {
@@ -2182,7 +2159,6 @@ describe('scroll-margin-top synchronization', () => {
     controller.refresh();
 
     expect(query('#after').style.scrollMarginTop).toBe('');
-    expect(ownStyles()).toHaveLength(0);
   });
 
   it('honors a custom scrollMarginTargets selector', () => {
@@ -2227,6 +2203,5 @@ describe('scroll-margin-top synchronization', () => {
     controller.refresh();
 
     expect(query('#a').style.scrollMarginTop).toBe('');
-    expect(ownStyles()).toHaveLength(0);
   });
 });

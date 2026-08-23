@@ -70,7 +70,7 @@
       const scrollMarginTargets = params.get('scrollMarginTargets') === 'none' ? null : undefined;
       const sticky = new StickyScrollTrigger('.container__inner', { scrollMarginTargets });
 
-      sticky.createStickyTrigger({ trigger: '#scene1', start: 'top top', end: '+=800' });
+      const scene1Vars = sticky.createStickyTrigger({ trigger: '#scene1', start: 'top top', end: '+=800' });
       sticky.createStickyTrigger({ trigger: '#scene2', start: 'top top', end: '+=800' });
 
       sticky.refresh();
@@ -82,6 +82,20 @@
         getComputedStyle(document.getElementById(id)).scrollMarginTop;
       window.__scrollDrivenAnimationsSupported = () =>
         CSS.supports('animation-timeline', 'scroll()');
+      // scene1's own absolute freeze window, the same numbers the module hands GSAP, so the spec
+      // can pick a scroll position guaranteed to fall inside it without guessing from layout.
+      window.__scene1FreezeWindow = () => ({ start: scene1Vars.start(), end: scene1Vars.end() });
+      // The ramps ride a constructed stylesheet the document adopts, not a <style> element.
+      const moduleSheets = () =>
+        Array.from(document.adoptedStyleSheets).filter((sheet) =>
+          Array.from(sheet.cssRules).some((rule) => rule.cssText.includes('--sst0-')),
+        );
+
+      window.__moduleSheetCount = () => moduleSheets().length;
+      window.__moduleSheetText = () =>
+        moduleSheets()
+          .flatMap((sheet) => Array.from(sheet.cssRules).map((rule) => rule.cssText))
+          .join('');
       window.__destroy = () => sticky.destroy();
       // Simulates a responsive header height change (or JS updating the same variable), then
       // re-syncs. sticky.refresh() (not just a re-read) is what's under test: the correction has

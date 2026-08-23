@@ -42,11 +42,15 @@
  * ramps itself, off the main thread, which is what keeps this module's promise of running no code
  * on scroll.
  *
- * Where `animation-timeline: scroll()` isn't supported, a `scroll` listener on `window` writes the
- * same `h_i` values instead. A plain `−lag` constant is wrong here for the same reason it's wrong
- * in general (above). This fallback doesn't share Chromium's limitation below, since Chromium
- * always takes the CSS path: every engine that lacks scroll timelines was verified to tolerate a
- * `scroll-margin-top` that keeps changing through an in-flight smooth scroll.
+ * That stylesheet is a constructed one the document adopts, so a Content Security Policy needs no
+ * `style-src` exception for it.
+ *
+ * Where `animation-timeline: scroll()` or a constructed stylesheet isn't supported, a `scroll`
+ * listener on `window` writes the same `h_i` values instead, and no stylesheet is built at all. A
+ * plain `−lag` constant is wrong here for the same reason it's wrong in general (above). This
+ * fallback doesn't share Chromium's limitation below, since Chromium always takes the CSS path:
+ * every engine that lacks scroll timelines was verified to tolerate a `scroll-margin-top` that
+ * keeps changing through an in-flight smooth scroll.
  *
  * The animation, and the `scroll` listener's writes, target the outermost container this module
  * builds, never an element the caller owns, and the custom properties reach the targets by
@@ -104,6 +108,15 @@ let nextInstanceSuffix = 0;
 const supportsScrollDrivenAnimations = typeof CSS !== 'undefined'
   && typeof CSS.supports === 'function'
   && CSS.supports('animation-timeline', 'scroll()');
+// The ramps need a stylesheet to carry them, and only a constructed one stays out of style-src's
+// reach: a <style> element would need the policy exception this module promises not to require.
+// Where constructed stylesheets aren't available, the JS ramp below stands in, needing no
+// stylesheet at all.
+const supportsConstructedStyleSheets = typeof CSSStyleSheet === 'function'
+  && typeof CSSStyleSheet.prototype.replaceSync === 'function'
+  && typeof document !== 'undefined'
+  && Array.isArray(document.adoptedStyleSheets);
+const usesCssRamp = supportsScrollDrivenAnimations && supportsConstructedStyleSheets;
 
 // Builds the stylesheet that ramps one registered custom property per Scene layer across that
 // layer's own freeze window. Written as text (rather than through the Web Animations API) so the
@@ -163,11 +176,11 @@ export const createScrollMarginSync = (rootElement: HTMLElement) => {
   // Elements currently carrying a value written here, so a target that stops matching the
   // selector (its id removed, say) gets handed back rather than left with a stale correction.
   let written = new Set<HTMLElement>();
-  let styleElement: HTMLStyleElement | null = null;
+  let sheet: CSSStyleSheet | null = null;
   let animationHost: HTMLElement | null = null;
-  // Read by applyJsRamp below; kept current by every sync() call. Only meaningful when
-  // supportsScrollDrivenAnimations is false, since that's the one case nothing else keeps these
-  // custom properties current (see the module doc comment's "scroll-dependent half" section).
+  // Read by applyJsRamp below; kept current by every sync() call. Only meaningful when usesCssRamp
+  // is false, since that's the one case nothing else keeps these custom properties current (see
+  // the module doc comment's "scroll-dependent half" section).
   let jsRamps: readonly SceneDwell[] = [];
   let jsHost: HTMLElement | null = null;
 
@@ -186,7 +199,7 @@ export const createScrollMarginSync = (rootElement: HTMLElement) => {
     });
   };
 
-  if (!supportsScrollDrivenAnimations) window.addEventListener('scroll', applyJsRamp, { passive: true });
+  if (!usesCssRamp) window.addEventListener('scroll', applyJsRamp, { passive: true });
 
   const restoreTarget = (target: HTMLElement) => {
     const snapshot = snapshots.get(target);
@@ -195,8 +208,11 @@ export const createScrollMarginSync = (rootElement: HTMLElement) => {
   };
 
   const clearAnimation = () => {
-    styleElement?.remove();
-    styleElement = null;
+    if (sheet) {
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((one) => one !== sheet);
+      sheet = null;
+    }
+
     animationHost?.removeAttribute(`data-${instanceId}`);
     animationHost = null;
     jsRamps = [];
@@ -231,18 +247,18 @@ export const createScrollMarginSync = (rootElement: HTMLElement) => {
       // scroll event that may never come before the next scroll-into-view. Skipped where the CSS
       // animation already handles it: writing there wouldn't be wrong, since the animation wins
       // the cascade over an inline value either way, just a pointless write on every refresh().
-      if (!supportsScrollDrivenAnimations) {
+      if (!usesCssRamp) {
         jsRamps = ramps;
         jsHost = host;
         applyJsRamp();
-      }
+      } else {
+        if (!sheet) {
+          sheet = new CSSStyleSheet();
+          document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+        }
 
-      if (!styleElement) {
-        styleElement = document.createElement('style');
-        document.head.appendChild(styleElement);
+        sheet.replaceSync(buildStylesheet(instanceId, ramps));
       }
-
-      styleElement.textContent = buildStylesheet(instanceId, ramps);
 
       const targets = Array.from(rootElement.querySelectorAll<HTMLElement>(targetSelector));
 
@@ -288,7 +304,7 @@ export const createScrollMarginSync = (rootElement: HTMLElement) => {
     },
 
     restore(): void {
-      if (!supportsScrollDrivenAnimations) window.removeEventListener('scroll', applyJsRamp);
+      if (!usesCssRamp) window.removeEventListener('scroll', applyJsRamp);
 
       written.forEach(restoreTarget);
       written = new Set();

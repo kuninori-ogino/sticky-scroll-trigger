@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- No 'unsafe-inline', so both a <style> element and a style attribute this page carries are
+         inert. Everything the module writes goes through CSSOM, which style-src doesn't govern. -->
+    <meta http-equiv="Content-Security-Policy" content="style-src 'self'" />
+    <title>strictCsp fixture</title>
+  </head>
+  <body>
+    <div class="root">
+      <section id="scene"></section>
+      <div id="afterScene"></div>
+      <div id="trigger"></div>
+      <div id="cover"></div>
+    </div>
+    <div id="tail"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      // The page has no author CSS at all, in either form the policy blocks, so every element
+      // reaches the module with a static position and an auto z-index. These heights go in through
+      // CSSOM, which is also the channel the module itself uses.
+      document.body.style.margin = '0';
+      Object.entries({ scene: '50vh', afterScene: '50vh', trigger: '50vh', cover: '100vh', tail: '150vh' })
+        .forEach(([id, height]) => {
+          document.getElementById(id).style.height = height;
+        });
+
+      // The control: a <style> element carrying the same declaration the cover lift makes. If the
+      // policy were not in force, this would raise .probe on its own and the test below could pass
+      // without proving anything about CSSOM.
+      const probe = document.createElement('div');
+
+      probe.className = 'probe';
+      document.body.appendChild(probe);
+
+      const blocked = document.createElement('style');
+
+      blocked.textContent = '.probe{position:relative}';
+      document.head.appendChild(blocked);
+
+      const root = document.querySelector('.root');
+      const cover = document.getElementById('cover');
+      const sticky = new StickyScrollTrigger(root);
+
+      sticky.createStickyTrigger({ trigger: '#scene', start: 'top top', end: '+=800' });
+      sticky.createOverlapScroll({ trigger: '#trigger', cover });
+      sticky.refresh();
+
+      const moduleSheets = () =>
+        Array.from(document.adoptedStyleSheets).filter((sheet) =>
+          Array.from(sheet.cssRules).some((rule) => rule.cssText.includes('--sst0-')),
+        );
+
+      window.__report = () => ({
+        cover: {
+          position: getComputedStyle(cover).position,
+          zIndex: getComputedStyle(cover).zIndex,
+        },
+        // 'static' confirms the <style> element above never applied, i.e. the policy is in force.
+        probePosition: getComputedStyle(probe).position,
+        moduleSheetCount: moduleSheets().length,
+        // Empty unless the ramp's @property rule reached the document; '0px' at rest once it has.
+        rampProperty: getComputedStyle(document.getElementById('afterScene'))
+          .getPropertyValue('--sst0-c0'),
+        scrollMarginTop: document.getElementById('afterScene').style.scrollMarginTop,
+      });
+      window.__scrollDrivenAnimationsSupported = () =>
+        CSS.supports('animation-timeline', 'scroll()');
+      window.__destroy = () => sticky.destroy();
+    </script>
+  </body>
+</html>
