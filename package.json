@@ -1,6 +1,6 @@
 {
   "name": "sticky-scroll-trigger",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "A ScrollTrigger helper that uses native CSS position:sticky instead of GSAP pinning",
   "license": "MIT",
   "author": "Kuninori Ogino",
