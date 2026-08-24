@@ -274,6 +274,8 @@ That's why `start` throws on an [absolute scroll position](#absolute-scroll-posi
 
 Clauses resolve exactly as they do elsewhere, including the one-token forms that name the element's own side: `'top 20px'` puts the element's top 20px below the viewport's top edge, while `'20px'` puts it 20px above.
 
+`trigger` keeps its own space in the page: every [`refresh()`](#refresh) sizes its wrapper to `trigger`'s margin box, so registering a pin doesn't shorten the document or move what follows. The wrapping does change margin collapsing, though. `trigger`'s vertical margins stop at that wrapper instead of collapsing with its siblings', and no sizing can give that back, since the collapsing partner sits outside it. A `margin-bottom: 30px` above a `trigger` with `margin-top: 20px` occupies 30px unpinned and 50px pinned.
+
 Internally, the element wrapping `trigger` renders beyond its own section's bounds, into the visual area of following elements. Make sure the ancestor section containing `trigger` isn't hidden behind a later section in DOM order (e.g. via `position: relative; z-index: ...`).
 
 See the repository's `ARCHITECTURE.md` ("Why `createStickyPin` is unaffected by nested-sticky lag") for why the lag never applies here, and why `trigger` needs two nested wrapper divs.
@@ -500,7 +502,7 @@ sticky.createOverlapScroll({
 - `createOverlapScroll`'s `trigger` and `cover` must be siblings sharing the same parent
 - That shared parent also caps how far `cover` can rise: it needs `end - start` worth of content below `trigger`, or the browser releases the wrapper mid-rise, at a point that shifts with the window size (see [Room for the rise](#room-for-the-rise))
 - `createStickyTrigger` and `createOverlapScroll` throw if `trigger` isn't inside the shared container. Both build their structure inside it, so a `trigger` elsewhere would wrap, move and style elements the instance doesn't own
-- `createStickyPin` works on either side of the container, and throws only for a `trigger` that encloses it (the container itself, or an ancestor). A pin wraps `trigger` in a `height:0`, `contain:layout` box, which would pull the container and the layers' dwell padding out of the flow
+- `createStickyPin` works on either side of the container, and throws only for a `trigger` that encloses it (the container itself, or an ancestor). A pin makes `trigger` itself `position:sticky` inside a box holding the pin range, which would pin the container and the layers' dwell padding along with it
 - Selector strings for `trigger`/`endTrigger`/`cover`/`element` resolve against the whole document, as GSAP's own `trigger` does, rather than within the shared container; only the `trigger` rules above restrict where a match may land. Validate or scope these values yourself if they come from content you don't control
 - ScrollTrigger's `pin`/`pinSpacing`/`anticipatePin` can't be used (pinning is handled by sticky; these are already excluded at the type level)
 - GSAP's `clamp()` position wrapper isn't accepted, and a function-valued `start`/`end` is called with no arguments rather than with the `ScrollTrigger` instance GSAP passes (see [Position syntax](#position-syntax))

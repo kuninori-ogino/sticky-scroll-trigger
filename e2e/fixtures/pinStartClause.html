@@ -54,8 +54,9 @@
 
       sticky.refresh();
 
-      // These read the layout after refresh(), where wrapping has taken .pin out of flow (outer
-      // is height 0), so everything below it sits 60px higher than the plain CSS above suggests.
+      // These read the layout after refresh(), rather than deriving it from the CSS above, so
+      // the expectations hold off the wrappers' own boxes: outer stands in for .pin's place in
+      // the flow, and inner carries the pin range.
       window.__pinInnerHeight = () =>
         document.querySelector('.pin').parentElement.getBoundingClientRect().height;
       window.__pinNaturalTop = () =>

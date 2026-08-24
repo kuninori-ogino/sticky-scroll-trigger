@@ -33,6 +33,9 @@ const makeFakeSelf = () => Object.create(FakeScrollTrigger.prototype) as ScrollT
 
 beforeEach(() => {
   FakeScrollTrigger.refresh.mockClear();
+  // Cleared alongside the body each setup() swaps out, so a stylesheet one test installs can't
+  // reach the next one.
+  document.head.innerHTML = '';
 });
 
 // A query helper reused across tests. Since document.body.innerHTML is swapped out each time,
@@ -178,7 +181,8 @@ describe('trigger containment', () => {
   });
 
   // A pin stays free to sit on either side of the container (see "createStickyPin()" below). The
-  // exception: wrapPin's height:0 box would swallow a container nested inside the trigger.
+  // exception: a pin makes trigger itself position:sticky, so a trigger enclosing the container
+  // would pin every layer inside it as one block.
   describe('a pin trigger that encloses the shared container', () => {
     it('throws when the pin trigger is the shared container itself', () => {
       const { query, controller } = setup();
@@ -207,8 +211,9 @@ describe('trigger containment', () => {
       })).toThrow(/createStickyPin: trigger <div\.outerWrap> is an ancestor of the shared container/);
     });
 
-    // Without the check, refresh() nests the container and the layer's 500px of padding in the box.
-    it('leaves the container in the flow after the rejected pin', () => {
+    // Without the check, the refresh below would wrap the container and make it sticky, carrying
+    // the layer and its 500px of dwell padding along with it.
+    it('leaves the container unpinned after the rejected pin', () => {
       const { query, controller } = setup();
 
       controller.createStickyTrigger({ trigger: query('.scene'), end: '+=500' });
@@ -218,8 +223,12 @@ describe('trigger containment', () => {
       })).toThrow();
       controller.refresh();
 
+      expect(query('.root').style.position).not.toBe('sticky');
+
+      // The wrapping too, not just the sticky: outer is two levels up from a wrapped trigger, so
+      // this walks the chain rather than naming a level.
       for (let node = query('.root').parentElement; node; node = node.parentElement) {
-        expect(node.style.height).not.toBe('0px');
+        expect(node.style.contain).toBe('');
       }
     });
   });
@@ -1168,6 +1177,62 @@ describe('createStickyPin()', () => {
     expect(inner).not.toBe(outer);
   });
 
+  // The reserved height is outer's own natural height, which jsdom has no layout to produce. A
+  // stylesheet rule on outer stands in for one, leaving the plumbing as what these two can check:
+  // that the measured height reaches outer's inline style intact, fractional part and all, and
+  // that it's taken again on each refresh().
+  const styleOuter = (height: string) => {
+    // The pin's outer is the only div directly inside .root: .scene and .inside are sections, and
+    // .inside has moved inside the wrappers by the time this matters.
+    document.head.innerHTML = `<style>.root > div { height: ${height} }</style>`;
+  };
+
+  it('writes the height it measures on outer, keeping the fractional part', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+
+    styleOuter('112.5px');
+    controller.createStickyPin({ trigger, endTrigger: query('.scene') });
+    controller.refresh();
+
+    expect(trigger.parentElement!.parentElement!.style.height).toBe('112.5px');
+  });
+
+  it('re-measures the reserved space on every refresh()', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+
+    styleOuter('20px');
+    controller.createStickyPin({ trigger, endTrigger: query('.scene') });
+    controller.refresh();
+
+    const outer = trigger.parentElement!.parentElement!;
+
+    expect(outer.style.height).toBe('20px');
+
+    styleOuter('60px');
+    controller.refresh();
+
+    expect(outer.style.height).toBe('60px');
+  });
+
+  // trigger's own top margin collapses through inner and stops at outer, which contain:layout
+  // makes a formatting context, so a pinned trigger rests at exactly the top its start clause
+  // names. An overflow or contain on inner would make it a formatting context too, and the margin
+  // would push trigger down inside the reserved box instead.
+  it('leaves inner without a formatting context of its own', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+
+    controller.createStickyPin({ trigger, endTrigger: query('.scene') });
+    controller.refresh();
+
+    const inner = trigger.parentElement!;
+
+    expect(inner.style.overflow).toBe('');
+    expect(inner.style.contain).toBe('');
+  });
+
   it('makes trigger position:sticky once refresh() runs', () => {
     const { query, controller } = setup();
     const trigger = query('.inside');
@@ -2018,6 +2083,35 @@ describe('\'max\' end keyword', () => {
 
     expect(() => controller.refresh()).toThrow(/'max' keyword/);
     expect(good.style.top).toBe('39px');
+  });
+
+  // The reserved space is the one pin value the rollback doesn't restore, and doesn't need to:
+  // it's re-measured before pass 2 runs, so a failing refresh leaves it matching what the page
+  // renders rather than stripped or half applied. Stripped is the live risk, since the measuring
+  // starts by clearing it.
+  it('keeps the reserved space current through a pin option that throws mid-refresh', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+    let rejected = false;
+
+    document.head.innerHTML = '<style>.root > div { height: 30px }</style>';
+    controller.createStickyPin({ trigger: good, endTrigger: query('.scene') });
+    controller.createStickyPin({
+      trigger: query('.outside'),
+      endTrigger: query('.scene'),
+      end: () => (rejected ? 'max' : 'top top'),
+    });
+    controller.refresh();
+
+    const outer = good.parentElement!.parentElement!;
+
+    expect(outer.style.height).toBe('30px');
+
+    document.head.innerHTML = '<style>.root > div { height: 50px }</style>';
+    rejected = true;
+
+    expect(() => controller.refresh()).toThrow(/'max' keyword/);
+    expect(outer.style.height).toBe('50px');
   });
 
   it('resolveScrollPosition resolves \'max\' without throwing, ignoring element entirely', () => {

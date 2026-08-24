@@ -92,6 +92,15 @@ export const measureDocumentMaxScroll = (viewportHeight: number): number => {
   return Math.max(0, (doc.scrollHeight || document.body.scrollHeight) - viewportHeight);
 };
 
+// The height an element is currently using, at full precision, where offsetHeight rounds to whole
+// pixels. Reading it off the computed style also keeps a transform out of the number, unlike
+// getBoundingClientRect: a scaled element still occupies its untransformed height in the flow, the
+// same layout-not-paint measurement documentTop takes. An element inside a display:none subtree
+// has no used value to report, so an auto height stays the keyword 'auto' there; it occupies
+// nothing either way, hence the 0.
+export const measureUsedHeight = (el: HTMLElement): number =>
+  parseFloat(getComputedStyle(el).height) || 0;
+
 export const compareDocumentOrder = (a: HTMLElement, b: HTMLElement): number => {
   const position = a.compareDocumentPosition(b);
 
@@ -187,8 +196,10 @@ export const unwrapCover = (wrapper: HTMLDivElement) => {
   wrapper.remove();
 };
 
-// Pin layer: wraps trigger in two levels, outer{ inner{ trigger } }. outer has height 0 and
-// contain:layout, so inner's actual height doesn't affect layout outside outer.
+// Pin layer: wraps trigger in two levels, outer{ inner{ trigger } }. inner holds the pin range,
+// which runs far past trigger's own height, and contain:layout keeps that out of the layout
+// outside outer. outer's own height is left to #reservePinSpace, which rewrites it on every
+// refresh.
 export const wrapPin = (trigger: HTMLElement) => {
   if (!trigger.parentNode) {
     throw new Error(
@@ -199,7 +210,6 @@ export const wrapPin = (trigger: HTMLElement) => {
   const outer = document.createElement('div');
   const inner = document.createElement('div');
 
-  outer.style.height = '0';
   outer.style.contain = 'layout';
   trigger.parentNode.insertBefore(outer, trigger);
   outer.appendChild(inner);

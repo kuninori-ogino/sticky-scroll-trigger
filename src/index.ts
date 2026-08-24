@@ -12,6 +12,7 @@ import {
   documentTop,
   liftAboveStickyWrapper,
   measureDocumentMaxScroll,
+  measureUsedHeight,
   measureViewportHeight,
   resetStickyPosition,
   resolveElement,
@@ -353,9 +354,9 @@ export default class StickyScrollTrigger {
   }
 
   // Wraps any not-yet-built pin layer. Must run before #refreshScenesAndCovers measures Scene and
-  // Cover positions: wrapping takes trigger out of the flow (into outer{height:0}), so measuring
-  // first would count trigger's own height on the first refresh() only, throwing off every Scene
-  // layer below it.
+  // Cover positions: the wrappers stop trigger's margins from collapsing with its siblings', so
+  // wrapping still moves whatever sits below it, even though #reservePinSpace gives the height
+  // itself back.
   #wrapUnwrappedPins() {
     this.#pinLayers.forEach((layer) => {
       if (layer.outer) return;
@@ -369,6 +370,48 @@ export default class StickyScrollTrigger {
 
       layer.outer = wrapped.outer;
       layer.inner = wrapped.inner;
+    });
+  }
+
+  // Sizes every wrapped pin's outer to trigger's own margin box, so registering a pin leaves the
+  // page the height it had without one. outer can't simply keep its natural height once the
+  // refresh is done: inner holds the pin range, which runs far past trigger itself.
+  //
+  // While inner is cleared, though, that natural height is the margin box already, since outer is
+  // a formatting context and trigger's margins land inside it instead of collapsing out. So the
+  // measurement below clears and reads back instead of adding up trigger's own height and margins,
+  // and the browser resolves the box at full precision, through whatever box-sizing, borders,
+  // floats or line boxes trigger happens to have.
+  //
+  // This has to run before #refreshScenesAndCovers measures, since the height it writes is part of
+  // the flow. Left to #refreshPinLayers, it would measure every Scene layer against the previous
+  // refresh's height whenever a trigger's own height had changed, with no later pass to correct
+  // it.
+  #reservePinSpace() {
+    const wrapped = this.#pinLayers.flatMap(({ outer, inner }) =>
+      outer && inner ? [{ outer, inner, range: inner.style.height }] : [],
+    );
+
+    // Every pin is cleared before any is measured, so a pin nested inside another's trigger
+    // doesn't hold that trigger open at the range it's about to replace. Clearing inner as well
+    // keeps a percentage-height trigger resolving against its natural container.
+    wrapped.forEach(({ outer, inner }) => {
+      outer.style.height = '';
+      inner.style.height = '';
+    });
+
+    // Read in full before anything is written back, so all the writes share one reflow instead of
+    // forcing one per pin.
+    const reserved = wrapped.map(({ outer }) => measureUsedHeight(outer));
+
+    wrapped.forEach(({ outer }, index) => {
+      outer.style.height = `${reserved[index]}px`;
+    });
+    // The ranges go back rather than staying cleared, so #resetPinState still snapshots the last
+    // successful refresh's values and its rollback has something to restore. They're sealed inside
+    // outer either way, so #refreshScenesAndCovers measures the same layout with them present.
+    wrapped.forEach(({ inner, range }) => {
+      inner.style.height = range;
     });
   }
 
@@ -419,6 +462,10 @@ export default class StickyScrollTrigger {
   // Pass 1 of the pin refresh: snapshots and strips every pin's own sticky top and spacer height,
   // returning a function that puts them back. #refreshPinLayers then measures a natural position
   // rather than the previous refresh's result.
+  //
+  // outer's reserved height is left alone. It's what the page actually renders, so it's what
+  // documentTop should see, and #reservePinSpace rewrites it from a fresh measurement every
+  // refresh, so a throw in pass 2 can't strand a stale one.
   #resetPinState(): () => void {
     const snapshots = this.#pinLayers.map((layer) => ({
       layer,
@@ -642,9 +689,10 @@ export default class StickyScrollTrigger {
     this.#restoreCoverLifts();
 
     try {
-      // Must happen before #refreshScenesAndCovers measures Scene/Cover positions (see
-      // #wrapUnwrappedPins's own comment for why).
+      // Both must happen before #refreshScenesAndCovers measures Scene/Cover positions (see each
+      // one's own comment for why).
       this.#wrapUnwrappedPins();
+      this.#reservePinSpace();
     } finally {
       // It goes back on after the build and the pin wrapping, so it walks the sibling chain those
       // leave behind rather than the elements they moved out of it. In a finally because wrapPin
@@ -768,9 +816,10 @@ export default class StickyScrollTrigger {
       : 'is an ancestor of the shared container';
 
     throw new Error(
-      `${context}: trigger ${describeElement(trigger)} ${relation}. A pin wraps trigger in a `
-      + 'height:0, contain:layout box, which would pull the container and every layer\'s dwell '
-      + 'padding out of the flow. Pin an element that doesn\'t contain the container.',
+      `${context}: trigger ${describeElement(trigger)} ${relation}. A pin makes trigger itself `
+      + 'position:sticky inside a box holding the pin range, so the container and every layer\'s '
+      + 'dwell padding would be pinned along with it. Pin an element that doesn\'t contain the '
+      + 'container.',
     );
   }
 
@@ -1035,9 +1084,10 @@ export default class StickyScrollTrigger {
 
         if (index !== -1) this.#pinLayers.splice(index, 1);
 
-        // outer is height:0, so unwrapping puts trigger's own height back into the flow and
-        // moves everything below it down by that much. That invalidates every later Scene
-        // layer's freeze window. A pin that was never wrapped moved nothing.
+        // outer reserves trigger's own height, so unwrapping gives back no height, but it does
+        // restore the margin collapsing between trigger and its siblings that the wrappers
+        // blocked. That still moves everything below, invalidating every later Scene layer's
+        // freeze window. A pin that was never wrapped moved nothing.
         if (this.#unwrapPinLayer(layer)) this.#scheduleRebuild();
 
         onKill?.(self);

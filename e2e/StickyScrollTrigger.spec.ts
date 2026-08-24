@@ -444,6 +444,48 @@ test('createStickyPin\'s absolute end (a plain number) sizes the spacer from the
   expect(result.pinInnerHeight).toBeCloseTo(expectedHeight, 0);
 });
 
+// Without the height outer reserves, the page would shorten by trigger's own height and
+// everything below it would move up. jsdom reports every height as 0, so none of this can be
+// checked in the unit tests.
+test('registering a pin leaves the page the height and the layout it had without one', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/pinReservesSpace.html');
+
+  type Snapshot = { afterTop: number; endTriggerTop: number; documentHeight: number };
+
+  const measured = await page.evaluate(() => {
+    const win = window as unknown as {
+      __unregistered: () => Snapshot;
+      __registered: () => Snapshot;
+    };
+
+    return { unregistered: win.__unregistered(), registered: win.__registered() };
+  });
+
+  // sanity check the fixture laid out as written: 400 lead + 20.25 + 200.5 pin + 20.25
+  expect(measured.unregistered.afterTop).toBeCloseTo(641, 4);
+  // Exact rather than approximate, since the reserved height has to carry the fractional part of
+  // the margin box too: a rounded offsetHeight would put .after half a pixel lower. The pin range
+  // inner holds also runs far past the document's end, so this covers contain:layout keeping that
+  // overflow off the scrollable area.
+  expect(measured.registered).toEqual(measured.unregistered);
+});
+
+// The reserved height doesn't cover trigger's own margin. That has to collapse through inner and
+// stop at outer, or the pin would rest 20px below the position its start clause names.
+test('a pinned trigger with vertical margins rests at exactly the top its start names', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/pinReservesSpace.html');
+
+  const heldTop = await page.evaluate(() =>
+    (window as unknown as { __pinTopAt: (y: number) => number }).__pinTopAt(600),
+  );
+
+  expect(heldTop).toBeCloseTo(0, 0);
+});
+
 // The element side of createStickyPin's start clause resolves against trigger's own height:
 // 'bottom bottom' has to become a sticky top of viewportHeight - 60, a number the clause never
 // states. jsdom reports every height as 0, so that term only shows up in a real browser.
@@ -679,9 +721,9 @@ test('.plainSection--fade\'s fade stays in sync with the element becoming visibl
 // .partialSticky__pin is plain position:sticky, using neither JS nor GSAP.
 // It sits inside the sticky nesting (within .container__inner), but plain sticky's own rule
 // still applies unmodified regardless of the ancestor nesting structure: it pins only within the
-// bounds of the block wrapping it (partialSticky__pinContainerInner, which is height:0+contain
-// and stretched by exactly its real height without affecting the following layout). So this
-// library needs no correction at all here.
+// bounds of the block wrapping it (the pin's inner, stretched to the pin range inside a
+// contain:layout outer that keeps the flow at the pin's own margin box). So this library needs no
+// correction at all here.
 // It keeps pinning across not just partialSticky__content
 // but the following 2 sections too (filler and block--outro).
 test('.partialSticky__pin stays sticky across multiple sections and later releases', async ({ page }) => {
@@ -829,9 +871,9 @@ test('a Scene layer after a not-yet-wrapped pin gets a stable freeze window on t
   expect(afterFirstRefresh).toEqual(afterSecondRefresh);
 });
 
-// A pin's kill moves the layers below it by the pin's own height, and jsdom has no layout to
-// move, so the unit tests can only check that the re-measure is scheduled. This checks the
-// 300px.
+// A pin's kill restores the margin collapsing its wrappers blocked, moving the layers below it,
+// and jsdom has no layout to move, so the unit tests can only check that the re-measure is
+// scheduled. This checks the 40px.
 test('killing a pin moves the freeze window of the Scene layer below it, in the module and in GSAP', async ({
   page,
 }) => {
@@ -848,11 +890,10 @@ test('killing a pin moves the freeze window of the Scene layer below it, in the 
     ).__runPinKill(),
   );
 
-  // the pin was covering .scene's whole offset from the top of the document, so 'top top'
-  // resolves to 0 while it's wrapped
-  expect(result.before.module).toBe(0);
-  // .pin's 300px is back in the flow, and .scene starts that much later
-  expect(result.after.module).toBe(300);
+  // 100 lead + 60 margin + 40 margin + 300 pin, with the two margins kept apart by the wrappers
+  expect(result.before.module).toBe(500);
+  // unwrapped they collapse into one 60px gap, so .scene starts 40px earlier
+  expect(result.after.module).toBe(460);
   // GSAP's cached start tracks it, rather than staying on the pre-kill measurement
   expect(result.after.gsap).toBe(result.after.module);
 });

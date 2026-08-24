@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A `createStickyPin` `trigger` now keeps its own space in the page. It used to sit in a zero-height box, so registering a pin shortened the document by `trigger`'s own height and moved everything below up with it, including any `endTrigger` further down. Every `refresh()` now sizes its wrapper to `trigger`'s margin box, ahead of all other measurement. What the wrapping still changes is margin collapsing: `trigger`'s vertical margins stop at that wrapper instead of collapsing with its siblings', which no sizing can give back (see [`createStickyPin`](README.md#createstickypinoptions))
+
 ## [0.7.0] - 2026-08-23
 
 - Every layer's `onRefreshInit` now runs before this module's own `refresh()`. Only the layer dispatched first used to trigger that refresh, so the callbacks after it ran too late for their layout changes to reach the freeze window. Which layer that was depended on registration order. GSAP dispatches `refreshInit` to every listener before it measures anything, so each callback now gets a `refresh()` of its own. That costs one `refresh()` per layer on the resize and load refreshes GSAP fires, and leaves the settled layout unchanged

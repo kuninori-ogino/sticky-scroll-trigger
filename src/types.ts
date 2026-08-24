@@ -92,7 +92,7 @@ export interface PinLayer {
   trigger: HTMLElement;
   // Captured by #wrapUnwrappedPins, and put back by unwrapPin (see InlinePosition in dom.ts).
   savedPosition: InlinePosition;
-  // Nesting assigned during build() (outer: height 0, inner: actual height).
+  // Nesting assigned during build() (outer: trigger's own margin box, inner: the pin range).
   outer: HTMLDivElement | null;
   inner: HTMLDivElement | null;
   // Always a position clause: createStickyPin normalizes a `top` option into one at registration

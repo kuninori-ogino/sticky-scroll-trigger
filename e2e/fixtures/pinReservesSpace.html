@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinReservesSpace fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .lead {
+        height: 400px;
+      }
+      /* Vertical margins on both sides, so the reserved height has to be the whole margin box.
+         Nothing above .pin carries a margin, so none of these collapse with a sibling's and the
+         wrapping can't change what they occupy.
+         Every part of the box is fractional, and the total (241px) is a whole number the halves
+         only reach together: reserving a rounded offsetHeight would spend 241.5px here. */
+      .pin {
+        height: 200.5px;
+        margin: 20.25px 0;
+        background: #c33;
+      }
+      .after {
+        height: 300px;
+      }
+      .endTrigger {
+        height: 10px;
+      }
+      .tail {
+        height: 150vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="lead"></div>
+      <div class="pin"></div>
+      <div class="after"></div>
+      <div class="endTrigger"></div>
+      <div class="tail"></div>
+    </div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const documentTop = (selector) =>
+        document.querySelector(selector).getBoundingClientRect().top + window.scrollY;
+
+      // Snapshotted before anything is registered, so the assertions compare the pinned page
+      // against the plain one rather than against arithmetic on the CSS above.
+      const unregistered = {
+        afterTop: documentTop('.after'),
+        endTriggerTop: documentTop('.endTrigger'),
+        documentHeight: document.documentElement.scrollHeight,
+      };
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      sticky.createStickyPin({ trigger: '.pin', endTrigger: '.endTrigger', end: 'top top' });
+      sticky.refresh();
+
+      window.__unregistered = () => unregistered;
+      window.__registered = () => ({
+        afterTop: documentTop('.after'),
+        endTriggerTop: documentTop('.endTrigger'),
+        documentHeight: document.documentElement.scrollHeight,
+      });
+      // The pin's own top edge while it's held, which the margin must not push down.
+      window.__pinTopAt = (y) => {
+        window.scrollTo(0, y);
+
+        return document.querySelector('.pin').getBoundingClientRect().top;
+      };
+    </script>
+  </body>
+</html>
