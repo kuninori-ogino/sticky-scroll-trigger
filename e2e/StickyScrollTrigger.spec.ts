@@ -522,6 +522,58 @@ test('createStickyPin\'s end default releases at endTrigger\'s bottom edge', asy
   expect(measured.released).toBeCloseTo(measured.endTriggerTop + measured.endTriggerHeight, 0);
 });
 
+// jsdom reports every position as 0, so the unit tests can check the distance but not that the
+// named endTrigger (1500 in this fixture) was passed over, which is how GSAP reads a dwell too.
+test('createStickyPin\'s dwell end holds for its distance and ignores endTrigger', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/pinDwellEnd.html');
+
+  const measured = await page.evaluate(() => {
+    const win = window as unknown as {
+      __documentTopAt: (selector: string, y: number) => number;
+    };
+
+    return {
+      atRest: win.__documentTopAt('.pin', 0),
+      endTriggerTop: win.__documentTopAt('.endTrigger', 0),
+      // Well past both the dwell's release point and the endTrigger a clause end would have used.
+      afterRelease: win.__documentTopAt('.pin', 2200),
+    };
+  });
+
+  expect(measured.atRest).toBeCloseTo(400, 0); // sanity check: the fixture's own lead
+  expect(measured.endTriggerTop).toBeCloseTo(1500, 0); // 400 + 200 + 900
+  // A pinned element's rest position moves by exactly the distance it was held, so this is the
+  // '+=500' itself. Resolved against the endTrigger it would have been 1100.
+  expect(measured.afterRelease - measured.atRest).toBeCloseTo(500, 0);
+});
+
+// The unit tests see only the spacer height this writes, not how long the browser then holds. The
+// top offset moves where the pin engages without lengthening that hold.
+test('createStickyPin\'s dwell end holds for its distance under a top offset', async ({ page }) => {
+  await page.goto('/fixtures/pinDwellEnd.html');
+
+  const measured = await page.evaluate(() => {
+    const win = window as unknown as {
+      __documentTopAt: (selector: string, y: number) => number;
+      __viewportTopAt: (selector: string, y: number) => number;
+    };
+
+    return {
+      atRest: win.__documentTopAt('.offsetPin', 0),
+      // Between the engagement point (1510 - 30) and the release (that plus 400).
+      heldTop: win.__viewportTopAt('.offsetPin', 1700),
+      afterRelease: win.__documentTopAt('.offsetPin', 2200),
+    };
+  });
+
+  expect(measured.atRest).toBeCloseTo(1510, 0); // 400 + 200 + 900 + 10
+  expect(measured.heldTop).toBeCloseTo(30, 0); // the top option really applied
+  // 400 rather than 430: the offset moved where the pin engaged, not how long it held.
+  expect(measured.afterRelease - measured.atRest).toBeCloseTo(400, 0);
+});
+
 // The reserved height doesn't cover trigger's own margin. That has to collapse through inner and
 // stop at outer, or the pin would rest 20px below the position its start clause names.
 test('a pinned trigger with vertical margins rests at exactly the top its start names', async ({

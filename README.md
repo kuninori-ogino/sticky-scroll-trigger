@@ -456,7 +456,7 @@ If the entire value is just a number (a plain JS number, or a string that's noth
 
 A bare number (or numeric string with no sign/`%`/`px`) is an absolute scroll position; see [Absolute scroll position](#absolute-scroll-position) above. `end` follows the same rule `start` uses, matching GSAP.
 
-"Dwell distance": how many px to keep pinning after the freeze starts. Matching GSAP, only a string starting with the literal `'+='` prefix counts (or a `%`-suffixed `'+=...'`, resolved against the viewport height). A leading `-=`/`+`/`-` without `=`, or a `%` without `+=`, is a position clause instead (see below).
+"Dwell distance": how many px to keep pinning after the freeze starts. Matching GSAP, only a string starting with the literal `'+='` prefix counts (or a `%`-suffixed `'+=...'`, resolved against the viewport height). A leading `-=`/`+`/`-` without `=`, or a `%` without `+=`, is a position clause instead (see below). A dwell `end` never consults `endTrigger`, again matching GSAP: the distance runs from wherever the freeze starts.
 
 | example                          | meaning                               |
 | -------------------------------- | ------------------------------------- |

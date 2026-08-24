@@ -228,6 +228,30 @@ const topToStartClause = (top: number | (() => number)): PositionInput => {
   return typeof top === 'function' ? () => toClause(top()) : toClause(top);
 };
 
+// Converts createStickyPin's resolved end into the absolute scroll position where the pin lets go.
+// engageTop is where position:sticky takes hold, trigger's own top less the sticky top. That is
+// what a dwell counts from, the same as a Scene layer's freezeStart (freezeWindow.ts's EndSpec).
+// Each form is read the way GSAP reads it:
+// - a dwell ('+=400', '+=100%', the latter against the viewport): that distance past engageTop,
+//   with endTrigger ignored. Only a value that both starts with '+=' and holds no space is one,
+//   so an ordinary clause carrying an offset ('bottom top+=40') resolves against endTrigger below.
+// - an absolute scroll position (a bare number): that position, independent of engageTop and
+//   endTrigger alike. Same idea as an absolute start for Scene/Cover layers (see resolveStartSpec).
+// - a position clause: where endTrigger's own side reaches the viewport's.
+const resolvePinReleaseTop = (
+  endTrigger: HTMLElement,
+  resolvedEnd: EndValue,
+  engageTop: number,
+  viewportHeight: number,
+): number => {
+  if (isDwellFormat(resolvedEnd)) return engageTop + resolveDwell(resolvedEnd, viewportHeight);
+
+  if (isAbsoluteFormat(resolvedEnd)) return resolveAbsolute(resolvedEnd);
+
+  return documentTop(endTrigger)
+    - resolveAnchorTop(resolvedEnd as string, endTrigger.offsetHeight, viewportHeight);
+};
+
 // Shared by the layer and pin registration paths, which both reject an already-registered trigger.
 const hasDuplicateTrigger = (
   list: readonly { trigger: HTMLElement }[],
@@ -519,9 +543,9 @@ export default class StickyScrollTrigger {
   // Pass 2 of the pin refresh, run once #resetPinState has stripped the previous values.
   // Recomputes pin layers' sticky top and spacer height. Pinning here is plain position:sticky, so
   // unlike Scene/Cover layers this never hands GSAP an absolute scroll position. The spacer height
-  // spans from the natural position where pinning begins to the absolute position where
-  // endTrigger's clause reaches the viewport's, plus the sticky top and trigger's own height (a
-  // sticky element unpins once it catches up to the bottom of its containing block).
+  // spans from the natural position where pinning begins to the release position
+  // resolvePinReleaseTop returns, plus the sticky top and trigger's own height (a sticky element
+  // unpins once it catches up to the bottom of its containing block).
   #refreshPinLayers(viewportHeight: number) {
     this.#pinLayers.forEach((layer) => {
       if (!layer.inner) return;
@@ -561,16 +585,12 @@ export default class StickyScrollTrigger {
       }
 
       const topPx = resolveAnchorTop(resolvedStart as string, triggerHeight, viewportHeight);
-      // An absolute end (a bare number, matching GSAP) releases the pin at that fixed scroll
-      // position directly, independent of endTrigger entirely. Same idea as an absolute start
-      // for Scene/Cover layers (see resolveStartSpec above).
-      const releaseTop = isAbsoluteFormat(resolvedEnd)
-        ? resolveAbsolute(resolvedEnd)
-        : documentTop(layer.endTrigger) - resolveAnchorTop(
-          resolvedEnd as string,
-          layer.endTrigger.offsetHeight,
-          viewportHeight,
-        );
+      const releaseTop = resolvePinReleaseTop(
+        layer.endTrigger,
+        resolvedEnd,
+        triggerTop - topPx,
+        viewportHeight,
+      );
       const height = releaseTop - triggerTop + topPx + triggerHeight;
 
       applyStickyPosition(layer.trigger, topPx);

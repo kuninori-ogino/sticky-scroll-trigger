@@ -1233,6 +1233,46 @@ describe('createStickyPin()', () => {
     expect(inner.style.contain).toBe('');
   });
 
+  // A dwell end is the one pin arithmetic jsdom can check in full: the distance comes from the
+  // value and the viewport, never from an element's height or position, all of which it reports
+  // as 0. The spacer is that distance plus trigger's own height (0 here).
+  describe('a dwell end', () => {
+    it('resolves \'+=100%\' against the viewport, not the endTrigger', () => {
+      const { query, controller } = setup();
+      const trigger = query('.inside');
+
+      controller.createStickyPin({ trigger, endTrigger: query('.scene'), end: '+=100%' });
+      controller.refresh();
+
+      // Read as a position clause instead, the '%' would resolve against the endTrigger's own
+      // height, which is 0 here, collapsing the spacer.
+      expect(trigger.parentElement!.style.height).toBe(`${window.innerHeight}px`);
+    });
+
+    it('resolves \'+=400\' as a plain px distance', () => {
+      const { query, controller } = setup();
+      const trigger = query('.inside');
+
+      controller.createStickyPin({ trigger, endTrigger: query('.scene'), end: '+=400' });
+      controller.refresh();
+
+      expect(trigger.parentElement!.style.height).toBe('400px');
+    });
+
+    // The distance counts from where the pin engages, which the top option moves, so it stays a
+    // hold of exactly 400px rather than 400 plus the offset.
+    it('counts the distance from where the pin engages, not from trigger\'s own top', () => {
+      const { query, controller } = setup();
+      const trigger = query('.inside');
+
+      controller.createStickyPin({ trigger, endTrigger: query('.scene'), top: 30, end: '+=400' });
+      controller.refresh();
+
+      expect(trigger.style.top).toBe('30px');
+      expect(trigger.parentElement!.style.height).toBe('400px');
+    });
+  });
+
   // How long a pin against itself holds depends on layout, so the duration is e2e's job.
   it('accepts a pin with neither endTrigger nor end', () => {
     const { query, controller } = setup();

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinDwellEnd fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      /* No margins anywhere, so every document position is the plain sum of the heights above. */
+      .lead {
+        height: 400px;
+      }
+      .pin {
+        height: 200px;
+        background: #c33;
+      }
+      .middle {
+        height: 900px;
+      }
+      /* Named as the pin's endTrigger and then ignored, since a dwell end never consults it. A
+         clause end would have released the pin somewhere around here instead of at 400 + 500. */
+      .endTrigger {
+        height: 10px;
+      }
+      /* Pinned 30px down the viewport, which moves where it engages without lengthening the
+         hold. */
+      .offsetPin {
+        height: 100px;
+        background: #36c;
+      }
+      .tail {
+        height: 250vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="lead"></div>
+      <div class="pin"></div>
+      <div class="middle"></div>
+      <div class="endTrigger"></div>
+      <div class="offsetPin"></div>
+      <div class="tail"></div>
+    </div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      sticky.createStickyPin({ trigger: '.pin', endTrigger: '.endTrigger', end: '+=500' });
+      // No endTrigger at all, since a dwell consults none anyway.
+      sticky.createStickyPin({ trigger: '.offsetPin', top: 30, end: '+=400' });
+      sticky.refresh();
+
+      const documentTop = (selector) =>
+        document.querySelector(selector).getBoundingClientRect().top + window.scrollY;
+
+      window.__documentTopAt = (selector, y) => {
+        window.scrollTo(0, y);
+
+        return documentTop(selector);
+      };
+      window.__viewportTopAt = (selector, y) => {
+        window.scrollTo(0, y);
+
+        return document.querySelector(selector).getBoundingClientRect().top;
+      };
+    </script>
+  </body>
+</html>
