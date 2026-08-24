@@ -472,6 +472,56 @@ test('registering a pin leaves the page the height and the layout it had without
   expect(measured.registered).toEqual(measured.unregistered);
 });
 
+// Omitting both leaves trigger resolving 'bottom top' against itself, which holds it for its own
+// height, the duration GSAP's pin: true gives. A pinned element's rest position moves by exactly
+// the distance it was held, so the two numbers below are the same measurement.
+test('createStickyPin with no endTrigger and no end holds trigger for its own height', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/pinDefaults.html');
+
+  const measured = await page.evaluate(() => {
+    const win = window as unknown as {
+      __documentTopAt: (selector: string, y: number) => number;
+      __height: (selector: string) => number;
+    };
+
+    return {
+      atRest: win.__documentTopAt('.selfPin', 0),
+      // Past the release point (600) but short of the second pin's own engagement (1200).
+      afterRelease: win.__documentTopAt('.selfPin', 900),
+      height: win.__height('.selfPin'),
+    };
+  });
+
+  expect(measured.atRest).toBeCloseTo(400, 0); // sanity check: the fixture's own lead
+  expect(measured.height).toBeCloseTo(200, 0);
+  expect(measured.afterRelease - measured.atRest).toBeCloseTo(measured.height, 0);
+});
+
+// The end default resolves against endTrigger's bottom edge, not its top, so naming an endTrigger
+// and leaving end alone holds the pin for endTrigger's own height longer than 'top top' would.
+test('createStickyPin\'s end default releases at endTrigger\'s bottom edge', async ({ page }) => {
+  await page.goto('/fixtures/pinDefaults.html');
+
+  const measured = await page.evaluate(() => {
+    const win = window as unknown as {
+      __documentTopAt: (selector: string, y: number) => number;
+      __height: (selector: string) => number;
+    };
+
+    return {
+      released: win.__documentTopAt('.refPin', 2400),
+      endTriggerTop: win.__documentTopAt('.refEnd', 0),
+      endTriggerHeight: win.__height('.refEnd'),
+    };
+  });
+
+  expect(measured.endTriggerTop).toBeCloseTo(1800, 0); // sanity check: 400 + 200 + 600 + 100 + 500
+  // 'top top' would have released it at 1800, the endTrigger's own top edge.
+  expect(measured.released).toBeCloseTo(measured.endTriggerTop + measured.endTriggerHeight, 0);
+});
+
 // The reserved height doesn't cover trigger's own margin. That has to collapse through inner and
 // stop at outer, or the pin would rest 20px below the position its start clause names.
 test('a pinned trigger with vertical margins rests at exactly the top its start names', async ({

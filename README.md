@@ -260,19 +260,21 @@ ScrollTrigger.create(
 sticky.refresh();
 ```
 
-| option       | default     | description                                                                                                                                                                                      |
-| ------------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `trigger`    | (required)  | The element to pin and show                                                                                                                                                                      |
-| `start`      | `'top top'` | Where `trigger` lands in the viewport while pinned, in [position syntax](#position-syntax), so the element's own side counts too (`'bottom bottom'` rests it against the viewport's bottom edge) |
-| `top`        | `0`         | A px distance from the viewport's top edge, as a plain number. `top: 20` is `start: 'top 20px'`                                                                                                  |
-| `endTrigger` | (required)  | Reference element for releasing the pin                                                                                                                                                          |
-| `end`        | `'top top'` | Which clause of `endTrigger` releases the pin (standard GSAP [position syntax](#position-syntax))                                                                                                |
+| option       | default        | description                                                                                                                                                                                      |
+| ------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `trigger`    | (required)     | The element to pin and show                                                                                                                                                                      |
+| `start`      | `'top top'`    | Where `trigger` lands in the viewport while pinned, in [position syntax](#position-syntax), so the element's own side counts too (`'bottom bottom'` rests it against the viewport's bottom edge) |
+| `top`        | `0`            | A px distance from the viewport's top edge, as a plain number. `top: 20` is `start: 'top 20px'`                                                                                                  |
+| `endTrigger` | `trigger`      | Reference element for releasing the pin                                                                                                                                                          |
+| `end`        | `'bottom top'` | Which clause of `endTrigger` releases the pin (standard GSAP [position syntax](#position-syntax))                                                                                                |
 
 Here `start` means only where the element sits while pinned, not when pinning begins, as it does for the other methods. Pinning begins the moment `trigger` reaches that position naturally, which is CSS's decision rather than a separate number to set, so a pin's position and the scroll position it engages at are one setting.
 
 That's why `start` throws on an [absolute scroll position](#absolute-scroll-position) (`start: 20`, which GSAP reads as scroll position 20) instead of silently treating it as a px distance. `top` is its own option for the same reason: with the bare-number slot reserved for GSAP's meaning, `'top 20px'` would otherwise be a pin's only way to say "20px below the top of the viewport". `end` does take an absolute scroll position (`end: 3000` releases at scroll 3000), since a release point is a real thing to ask for on the scroll axis.
 
 Clauses resolve exactly as they do elsewhere, including the one-token forms that name the element's own side: `'top 20px'` puts the element's top 20px below the viewport's top edge, while `'20px'` puts it 20px above.
+
+`endTrigger` and `end` both default to GSAP's own values. `'bottom top'` releases the pin once `endTrigger`'s bottom edge reaches the viewport's top edge, so naming an `endTrigger` and leaving `end` alone holds the pin for that element's own height past its top. Omit both and `trigger` pins against itself, held for its own height, the duration GSAP's `pin: true` gives.
 
 `trigger` keeps its own space in the page: every [`refresh()`](#refresh) sizes its wrapper to `trigger`'s margin box, so registering a pin doesn't shorten the document or move what follows. The wrapping does change margin collapsing, though. `trigger`'s vertical margins stop at that wrapper instead of collapsing with its siblings', and no sizing can give that back, since the collapsing partner sits outside it. A `margin-bottom: 30px` above a `trigger` with `margin-top: 20px` occupies 30px unpinned and 50px pinned.
 

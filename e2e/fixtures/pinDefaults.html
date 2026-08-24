@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinDefaults fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      /* No margins anywhere, so every document position below is the plain sum of the heights
+         above it and the spec can state them outright. */
+      .lead {
+        height: 400px;
+      }
+      .selfPin {
+        height: 200px;
+        background: #c33;
+      }
+      .gap {
+        height: 600px;
+      }
+      .refPin {
+        height: 100px;
+        background: #36c;
+      }
+      .middle {
+        height: 500px;
+      }
+      /* The pin releases at this element's bottom edge, these 300px later than 'top top' would. */
+      .refEnd {
+        height: 300px;
+      }
+      .tail {
+        height: 200vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="lead"></div>
+      <div class="selfPin"></div>
+      <div class="gap"></div>
+      <div class="refPin"></div>
+      <div class="middle"></div>
+      <div class="refEnd"></div>
+      <div class="tail"></div>
+    </div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      // Both defaults left in place: endTrigger falls back to .selfPin, end to 'bottom top'.
+      sticky.createStickyPin({ trigger: '.selfPin' });
+      // endTrigger named, end left at its default.
+      sticky.createStickyPin({ trigger: '.refPin', endTrigger: '.refEnd' });
+      sticky.refresh();
+
+      const documentTop = (selector) =>
+        document.querySelector(selector).getBoundingClientRect().top + window.scrollY;
+
+      window.__documentTopAt = (selector, y) => {
+        window.scrollTo(0, y);
+
+        return documentTop(selector);
+      };
+      window.__height = (selector) =>
+        document.querySelector(selector).getBoundingClientRect().height;
+    </script>
+  </body>
+</html>

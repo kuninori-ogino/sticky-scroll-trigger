@@ -1014,12 +1014,20 @@ export default class StickyScrollTrigger {
   // onKill cleans up after an individual kill (it drops the layer from pinLayers and undoes
   // outer), and onRefreshInit binds refresh() to the refreshInit GSAP fires on resize/load, so
   // the caller doesn't write ScrollTrigger.addEventListener('refreshInit', refresh) by hand.
+  //
+  // endTrigger and end default to GSAP's own, as createStickyTrigger's do:
+  // endTrigger falls back to trigger (ScrollTrigger.js:1338, `vars.endTrigger || trigger`) and end
+  // to 'bottom top' (ScrollTrigger.js:1401, `parsedEnd || (parsedEndTrigger ? "100% 0" : max)`,
+  // where parsedEndTrigger is always truthy). Omitting both holds the pin for trigger's own
+  // height, matching GSAP's pin: true.
+  // 'top top' can't be the end default: resolved against trigger itself it names the pin's own
+  // engagement point, so the pin would release the moment it engages.
   createStickyPin({
     trigger: triggerInput,
     start,
     top,
     endTrigger: endTriggerInput,
-    end = 'top top',
+    end = 'bottom top',
     onKill,
     ...rest
   }: CreateStickyPinOptions): ScrollTrigger.Vars {
@@ -1041,7 +1049,7 @@ export default class StickyScrollTrigger {
     }
 
     const trigger = resolveElement(triggerInput, 'createStickyPin');
-    const endTrigger = resolveElement(endTriggerInput, 'createStickyPin');
+    const endTrigger = resolveEndTrigger(trigger, endTriggerInput, 'createStickyPin');
 
     this.#assertTriggerNotEnclosingRoot(trigger, 'createStickyPin');
 

@@ -84,8 +84,10 @@ export interface CreateStickyPinOptions extends PassThroughVars {
   // the one thing the syntax above can't spell. top: 20 is start: 'top 20px'. Defaults to 0.
   // Passing both start and top is an error.
   top?: number | (() => number);
-  endTrigger: string | HTMLElement;
-  end?: PositionInput; // Which position of endTrigger releases the pin. Defaults to 'top top'.
+  endTrigger?: string | HTMLElement; // Defaults to trigger itself.
+  // Which position of endTrigger releases the pin. Defaults to 'bottom top', which holds the pin
+  // for endTrigger's own height.
+  end?: PositionInput;
 }
 
 export interface PinLayer {

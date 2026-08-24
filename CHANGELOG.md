@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - A `createStickyPin` `trigger` now keeps its own space in the page. It used to sit in a zero-height box, so registering a pin shortened the document by `trigger`'s own height and moved everything below up with it, including any `endTrigger` further down. Every `refresh()` now sizes its wrapper to `trigger`'s margin box, ahead of all other measurement. What the wrapping still changes is margin collapsing: `trigger`'s vertical margins stop at that wrapper instead of collapsing with its siblings', which no sizing can give back (see [`createStickyPin`](README.md#createstickypinoptions))
+- `createStickyPin`'s `endTrigger` is now optional and defaults to `trigger`, and its `end` defaults to `'bottom top'` in place of `'top top'`. Both match GSAP's own defaults, so omitting them holds the pin for `trigger`'s own height, the duration `pin: true` gives. This moves the release point for existing callers that pass an `endTrigger` and omit `end`: `'bottom top'` waits for that element's bottom edge rather than its top. Pass `end: 'top top'` to keep the old release point (see [`createStickyPin`](README.md#createstickypinoptions))
 
 ## [0.7.0] - 2026-08-23
 

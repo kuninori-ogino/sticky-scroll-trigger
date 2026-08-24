@@ -1233,6 +1233,16 @@ describe('createStickyPin()', () => {
     expect(inner.style.contain).toBe('');
   });
 
+  // How long a pin against itself holds depends on layout, so the duration is e2e's job.
+  it('accepts a pin with neither endTrigger nor end', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+
+    expect(() => controller.createStickyPin({ trigger })).not.toThrow();
+    expect(() => controller.refresh()).not.toThrow();
+    expect(trigger.style.position).toBe('sticky');
+  });
+
   it('makes trigger position:sticky once refresh() runs', () => {
     const { query, controller } = setup();
     const trigger = query('.inside');
