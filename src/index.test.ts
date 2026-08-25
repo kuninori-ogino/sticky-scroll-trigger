@@ -1094,6 +1094,16 @@ describe('createResolvedTrigger()', () => {
     expect((vars.end as () => number)()).toBe(controller.resolveScrollPosition(trigger, 'top 30%'));
   });
 
+  // GSAP's own defaults for a trigger that doesn't pin, which is every trigger here.
+  it('defaults start to \'top bottom\' and end to \'bottom top\'', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+    const vars = controller.createResolvedTrigger({ trigger });
+
+    expect((vars.start as () => number)()).toBe(controller.resolveScrollPosition(trigger, 'top bottom'));
+    expect((vars.end as () => number)()).toBe(controller.resolveScrollPosition(trigger, 'bottom top'));
+  });
+
   // Since jsdom has no layout, documentTop always returns 0, so passing either trigger
   // or endTrigger would produce the same value (0) under a naive comparison, making it
   // impossible to verify resolution is actually relative to endTrigger.
@@ -1131,6 +1141,29 @@ describe('createResolvedTrigger()', () => {
     const endValue = (vars.end as () => number)();
 
     expect(endValue - startValue).toBe(500);
+  });
+
+  // The default end belongs to endTrigger too, so it picks up the same dwell the test above
+  // measures.
+  it('resolves the default end relative to endTrigger', () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="trigger"></section>
+        <section class="between"></section>
+        <section class="endTrigger"></section>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const trigger = query('.trigger');
+    const endTrigger = query('.endTrigger');
+
+    controller.createStickyTrigger({ trigger: query('.between'), end: '+=500' });
+    controller.refresh();
+
+    const vars = controller.createResolvedTrigger({ trigger, endTrigger });
+
+    expect((vars.end as () => number)()).toBe(500);
+    expect(controller.resolveScrollPosition(trigger, 'bottom top')).toBe(0);
   });
 
   it('the call itself does not throw even after destroy() (it never depends on refresh or layers registration)', () => {

@@ -1199,10 +1199,14 @@ export default class StickyScrollTrigger {
   // A thin wrapper that calls resolveScrollPosition for trigger/start and endTrigger/end together,
   // building Vars for plain GSAP ScrollTrigger. Registers no layer: it has no freeze window and
   // sits outside refresh()'s scope.
+  // start/end take GSAP's defaults for a trigger that doesn't pin, the only ones that can apply
+  // here: pin is excluded from PassThroughVars, so these Vars never pin. GSAP spells them "0 100%"
+  // (ScrollTrigger.js:1339) and "100% 0" (1401, see createStickyTrigger above); the keyword form
+  // below says the same thing.
   createResolvedTrigger({
     trigger: triggerInput,
-    start,
-    end,
+    start = 'top bottom',
+    end = 'bottom top',
     endTrigger: endTriggerInput,
     ...rest
   }: CreateResolvedTriggerOptions): ScrollTrigger.Vars {

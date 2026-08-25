@@ -31,8 +31,8 @@ export interface CreateStickyTriggerOptions extends PassThroughVars {
 
 export interface CreateResolvedTriggerOptions extends PassThroughVars {
   trigger: string | HTMLElement;
-  start: PositionInput;
-  end: PositionInput;
+  start?: PositionInput; // Defaults to 'top bottom'.
+  end?: PositionInput; // Defaults to 'bottom top'.
   // start is relative to trigger, end to this element. Defaults to trigger itself.
   endTrigger?: string | HTMLElement;
 }

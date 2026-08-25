@@ -300,12 +300,14 @@ gsap.to(plainBox, {
 });
 ```
 
-| option       | default    | description                                                                                |
-| ------------ | ---------- | ------------------------------------------------------------------------------------------ |
-| `trigger`    | (required) | Reference element for `start`. Also passed through as-is to GSAP's `scrollTrigger.trigger` |
-| `start`      | (required) | [Position syntax](#position-syntax), resolved relative to `trigger`                        |
-| `end`        | (required) | [Position syntax](#position-syntax), resolved relative to `endTrigger`                     |
-| `endTrigger` | `trigger`  | Reference element for `end` (same idea as GSAP's standard `trigger`/`endTrigger` split)    |
+| option       | default        | description                                                                                |
+| ------------ | -------------- | ------------------------------------------------------------------------------------------ |
+| `trigger`    | (required)     | Reference element for `start`. Also passed through as-is to GSAP's `scrollTrigger.trigger` |
+| `start`      | `'top bottom'` | [Position syntax](#position-syntax), resolved relative to `trigger`                        |
+| `end`        | `'bottom top'` | [Position syntax](#position-syntax), resolved relative to `endTrigger`                     |
+| `endTrigger` | `trigger`      | Reference element for `end` (same idea as GSAP's standard `trigger`/`endTrigger` split)    |
+
+Omit `start` and `end` and the range runs from `trigger`'s top edge entering the viewport at the bottom to `endTrigger`'s bottom edge leaving it at the top, GSAP's own defaults for a trigger that doesn't pin.
 
 This does not register a layer, so `refresh()` does not manage it. It shares the same rejected-option table as [`createStickyTrigger`](#createstickytriggeroptions) (no pin-family options, no `horizontal`/`scroller`/`containerAnimation`).
 
