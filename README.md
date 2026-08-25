@@ -147,6 +147,8 @@ Call them on the instance (`sticky.createStickyTrigger(...)`) rather than destru
 
 Like `root`, every `trigger`/`endTrigger`/`cover` option below also accepts a CSS selector string (in addition to an `HTMLElement`), resolved via `document.querySelector`, the same as GSAP ScrollTrigger's own `trigger`/`endTrigger`. Throws an error if the selector matches no elements.
 
+`trigger` is required by every method here, unlike GSAP's own: a plain ScrollTrigger can leave it out and take its range from `start`/`end` alone. Every method here either wraps `trigger` or measures from it, so there is nothing to work from without one.
+
 ### `createStickyTrigger(options)`
 
 Registers a layer that pins a scene and advances its effect, and returns `ScrollTrigger.Vars`. Pass the return value as a tween's `scrollTrigger`. ScrollTrigger options (`scrub`, `markers`, `onUpdate`, etc.) pass through as-is, except for the exclusions in the table below.
@@ -177,6 +179,8 @@ Registers an overlap-scroll effect (`trigger` gets pinned while its siblings fro
 | `start`      | `'bottom bottom'`            | Pinned position of `trigger`. See [position syntax](#position-syntax). Unlike `createStickyTrigger`'s `start`, this doesn't support an absolute scroll position (a bare number): it throws instead          |
 | `end`        | `null` (auto-computed)       | End of the freeze window. When `null`, computed automatically as "the distance until `cover`'s top edge reaches the top of the viewport"                                                                    |
 | `endTrigger` | `trigger`                    | Reference element when `end` uses position-clause syntax                                                                                                                                                    |
+
+`start` and `end` are the two defaults this module doesn't take from GSAP, which pins at `'top top'` and ends at `'bottom top'`. The rise needs `cover` to begin off screen: pinned at the viewport's top, a `trigger` shorter than the viewport leaves the covering side already showing underneath it. `'bottom bottom'` rests `trigger` against the viewport's bottom edge instead, and the auto `end` measures the rise from there.
 
 `createOverlapScroll` adjusts `position`/`z-index` on the covering side only when needed, never overrides explicit values, and restores its changes on GSAP `kill()`. The restore clears a property only while it still holds the value the lift wrote, so a different value you set on the covering side afterwards (a `gsap.set()`, say) survives.
 
