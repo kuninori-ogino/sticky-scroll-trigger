@@ -556,6 +556,20 @@ describe('registerLayer\'s onRefreshInit', () => {
     expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(1);
   });
 
+  // The user's callback runs outside the guard, so its error still reaches GSAP's dispatch.
+  it('lets an error from the user callback through', () => {
+    const { query, controller } = setup();
+    const vars = controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: '+=100',
+      onRefreshInit: () => {
+        throw new Error('from the user callback');
+      },
+    });
+
+    expect(() => vars.onRefreshInit?.(fakeSelf)).toThrow('from the user callback');
+  });
+
   // jsdom measures everything as 0, so a callback can't check the DOM to see whether its own
   // layer was measured yet. It records how many refreshes ran before it instead. Each layer
   // should see only the refreshes of the layers dispatched earlier, hence [0, 1, 2]. If one
@@ -586,6 +600,94 @@ describe('registerLayer\'s onRefreshInit', () => {
 
     expect(refreshesBefore).toEqual([0, 1, 2]);
     expect(refresh).toHaveBeenCalledTimes(3);
+  });
+});
+
+// The guard in #createAutoRefreshHandler keeps a throw out of GSAP's unguarded refreshInit
+// dispatch. The end here only turns bad after setup, which pre-validation can't catch.
+describe('a refresh() that throws from GSAP\'s refreshInit dispatch', () => {
+  const setupBreakingPin = () => {
+    document.body.innerHTML = `
+      <div class="root"><section class="scene"></section></div>
+      <section class="pin"></section>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    let broken = false;
+    const vars = controller.createStickyPin({
+      trigger: query('.pin'),
+      endTrigger: query('.scene'),
+      end: () => (broken ? 'max' : '+=100'),
+    });
+
+    controller.refresh();
+    broken = true;
+
+    return vars;
+  };
+
+  // Collects the deliberate uncaught exception each dispatch leaves behind, which Vitest would
+  // otherwise report against whichever test was running. The finally keeps a failing dispatch
+  // from leaking the listener into every later test.
+  const runDispatch = async (dispatch: () => void) => {
+    const uncaught: unknown[] = [];
+    const onUncaught = (error: unknown) => uncaught.push(error);
+
+    process.on('uncaughtException', onUncaught);
+
+    try {
+      dispatch();
+      await Promise.resolve();
+      await Promise.resolve(); // make sure the microtask has fully completed
+    } finally {
+      process.off('uncaughtException', onUncaught);
+    }
+
+    return uncaught;
+  };
+
+  it('lets the listeners dispatched after it still run', async () => {
+    const vars = setupBreakingPin();
+    let laterListenerRan = false;
+
+    // Stands in for another controller's listener, or a plain ScrollTrigger's.
+    const laterListener = () => {
+      laterListenerRan = true;
+    };
+
+    await runDispatch(() => {
+      [() => vars.onRefreshInit?.(makeFakeSelf()), laterListener].map((f) => f());
+    });
+
+    expect(laterListenerRan).toBe(true);
+  });
+
+  it('rethrows the error off the stack, so a broken setup still reports itself', async () => {
+    const vars = setupBreakingPin();
+    const uncaught = await runDispatch(() => {
+      vars.onRefreshInit?.(makeFakeSelf());
+    });
+
+    expect(uncaught).toHaveLength(1);
+    expect((uncaught[0] as Error).message).toMatch(/uses GSAP's 'max' keyword/);
+  });
+
+  // The public method is the caller's own call, where a synchronous throw is the whole point.
+  it('leaves an explicit refresh() call throwing synchronously', () => {
+    document.body.innerHTML = `
+      <div class="root"><section class="scene"></section></div>
+      <section class="pin"></section>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+
+    controller.createStickyPin({
+      trigger: query('.pin'),
+      endTrigger: query('.scene'),
+      end: 'max',
+    });
+
+    expect(() => controller.refresh()).toThrow(/uses GSAP's 'max' keyword/);
   });
 });
 

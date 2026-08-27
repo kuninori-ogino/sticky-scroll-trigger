@@ -366,10 +366,20 @@ export default class StickyScrollTrigger {
       this.#captureScrollTriggerClass(self);
 
       // GSAP dispatches refreshInit before any measurement, so a callback that puts something in
-      // place to be measured expects to run before refresh() too.
+      // place to be measured expects to run before refresh() too. This call stays outside the
+      // guard below: a plain ScrollTrigger's onRefreshInit gets the same unguarded dispatch.
       const result = userOnRefreshInit?.(self);
 
-      this.refresh();
+      // GSAP's dispatch is `_listeners[type].map(f => f())` with no try/catch, so an error escaping
+      // here would stop every later listener and every trigger's own refresh. The catch rethrows
+      // off the stack instead of swallowing, since a stale freeze window with no signal is worse.
+      try {
+        this.refresh();
+      } catch (error) {
+        queueMicrotask(() => {
+          throw error;
+        });
+      }
 
       // GSAP reverts an animation a refreshInit listener returns, once the refresh is done
       // (ScrollTrigger.js's `refreshInits.forEach(...render(-1))`).

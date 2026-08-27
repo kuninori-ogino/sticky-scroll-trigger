@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A rejected option value no longer stops every other `ScrollTrigger` on the page from refreshing. This module's `refresh()` runs from GSAP's own `refreshInit` dispatch, which guards nothing, so an error leaving it there used to abort the rest of that refresh. That mattered when a function-valued `start`/`end`/`top` began returning a rejected value long after setup, on a refresh GSAP itself triggers. The error still surfaces, now off the stack as an uncaught one, and an explicit `refresh()` call still throws to the caller
+
 ## [0.8.0] - 2026-08-25
 
 - A `createStickyPin` `trigger` now keeps its own space in the page. It used to sit in a zero-height box, so registering a pin shortened the document by `trigger`'s own height and moved everything below up with it, including any `endTrigger` further down. Every `refresh()` now sizes its wrapper to `trigger`'s margin box, ahead of all other measurement. What the wrapping still changes is margin collapsing: `trigger`'s vertical margins stop at that wrapper instead of collapsing with its siblings', which no sizing can give back (see [`createStickyPin`](README.md#createstickypinoptions))
