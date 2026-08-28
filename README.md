@@ -425,7 +425,7 @@ Pinning decouples an element's position in the document from the scroll position
 | token       | example                     | meaning                                                       |
 | ----------- | --------------------------- | ------------------------------------------------------------- |
 | keyword     | `top` / `center` / `bottom` | 0% / 50% / 100%                                               |
-| bare number | `80` / `80px`               | 80px from the reference point (matches GSAP: only `%` scales) |
+| bare number | `80` / `80px` / `-50`       | ± px from the reference point (matches GSAP: only `%` scales) |
 | percentage  | `80%`                       | 80% of the target's height                                    |
 | px offset   | `center+=50` / `top-=20`    | ± px from the reference point                                 |
 | % offset    | `top+=10%`                  | ± (relative to the target's height)                           |
@@ -436,7 +436,9 @@ Pinning decouples an element's position in the document from the scroll position
 start: () => `center center+=${getHeaderHeight() / 2}`,
 ```
 
-A px/% offset needs the `=` when it follows a keyword or number (`top+=50`, `80-=10%`), because GSAP uses the `=` itself to split the base from the offset. `top+50` isn't recognized syntax: GSAP silently resolves it to 0, treating the whole string as unparseable, while this module throws instead. Without a base, the `=` is optional (`+=500` and `+500` are equivalent), since there's nothing to split it from.
+A px/% offset needs the `=` when it follows a keyword or number (`top+=50`, `80-=10%`), because GSAP uses the `=` itself to split the base from the offset. `top+50` isn't recognized syntax: GSAP silently resolves it to 0, treating the whole string as unparseable, while this module throws instead. Without a base, the `=` is optional (`+=500` and `+500` are equivalent), since there's nothing to split it from. A signed number is a base like any other and can carry an offset of its own: `-50+=100` is 50px from the reference point, because GSAP splits at the `=` and reads everything before it with `parseFloat`.
+
+A token carrying `%` on both the base and the offset (`'50%+=10%'`) is one deliberate divergence. GSAP scales the offset only when the token's first `%` sits after the `=`, so a `%` base hides the offset's own and leaves it a plain px value: against a 400px element, GSAP reads `'50%+=10%'` as 210 where this module reads 240. Both units are honored here rather than reproducing that.
 
 A trailing `px` (`top 100px`, `center+=50px`) is accepted and ignored, the same idea as GSAP's own `_offsetToPx`, which only special-cases `%` and otherwise passes the value through `parseFloat`. This module isn't as lenient as GSAP toward other unrecognized suffixes, though: an actually-unsupported unit like `top 100vh` still throws, rather than silently behaving like `top 100`.
 
@@ -462,7 +464,9 @@ If the entire value is just a number (a plain JS number, or a string that's noth
 
 A bare number (or numeric string with no sign/`%`/`px`) is an absolute scroll position; see [Absolute scroll position](#absolute-scroll-position) above. `end` follows the same rule `start` uses, matching GSAP.
 
-"Dwell distance": how many px to keep pinning after the freeze starts. Matching GSAP, only a string starting with the literal `'+='` prefix counts (or a `%`-suffixed `'+=...'`, resolved against the viewport height). A leading `-=`/`+`/`-` without `=`, or a `%` without `+=`, is a position clause instead (see below). A dwell `end` never consults `endTrigger`, again matching GSAP: the distance runs from wherever the freeze starts.
+"Dwell distance": how many px to keep pinning after the freeze starts. Matching GSAP, only a string starting with the literal `'+='` prefix and holding no space counts (or a `%`-suffixed `'+=...'`, resolved against the viewport height). A leading `-=`/`+`/`-` without `=`, or a `%` without `+=`, is a position clause instead (see below), as is a `'+='` value with a space in it. A dwell `end` never consults `endTrigger`, again matching GSAP: the distance runs from wherever the freeze starts.
+
+> [`createResolvedTrigger`](#createresolvedtriggeroptions) is the exception: it resolves `end` against `endTrigger` on its own, with no notion of a distance from `start`, so `'+='` notation isn't read as a dwell there at all. It falls through to the position clause below, landing at `endTrigger`'s top edge plus the offset, and a `%` scales against `endTrigger`'s own height rather than the viewport's: `'+=100%'` means one `endTrigger` height past its top edge. Use an explicit position clause, or `resolveScrollPosition` plus your own arithmetic.
 
 | example                          | meaning                               |
 | -------------------------------- | ------------------------------------- |
@@ -480,6 +484,10 @@ sticky.createStickyTrigger({
   endTrigger: ".nextSection",
 });
 ```
+
+A `'+='` value with a space in it (`'+=100 bottom'`) is a position clause too, and GSAP gives it a base before resolving it: the element token from `start`. So `start: 'bottom bottom'` with `end: '+=100 bottom'` reads as `'bottom+=100 bottom'`, 100px past `endTrigger`'s own bottom edge. A `'top'` or `'0'` element token contributes nothing, which covers the `start` defaults of [`createStickyTrigger`](#createstickytriggeroptions) (`'0 0'`), [`createStickyPin`](#createstickypinoptions) (`'top top'`) and [`createResolvedTrigger`](#createresolvedtriggeroptions) (`'top bottom'`). [`createOverlapScroll`](#createoverlapscrolloptions) is the exception: its `'bottom bottom'` default puts a full `endTrigger` height into this `end` form even when the caller never passes `start`. `createResolvedTrigger` does this prefixing itself, since it resolves both sides into numbers before GSAP ever sees them.
+
+One pair can't compose: a `start` whose element token already carries an offset (`'top+=50 bottom'`) throws. GSAP splits a token at its first `=`, so it would keep the `50` and silently discard the `end`'s own offset. A signed number (`'-50 top'`) composes normally, matching GSAP.
 
 If `endTrigger` points to another registered layer, its position is resolved using the same computation this module already does for that layer. A forward reference (pointing to a layer later in DOM order) only works from `createOverlapScroll`'s cover layer, which adds no padding and so doesn't depend on its own dwell. A `createStickyTrigger` Scene layer throws immediately instead: its own dwell padding pushes down everything after it, so the reference would depend on that dwell and never converge.
 

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>spacedRelativeEndPin fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .lead {
+        height: 100vh;
+      }
+      .pin {
+        height: 60px;
+        background: #c33;
+      }
+      .middle {
+        height: 150vh;
+      }
+      /* The whole difference the start clause's element token makes is a fraction of this height,
+         so it's deliberately large and not a fraction of anything else on the page. */
+      .endTrigger {
+        height: 400px;
+      }
+      .tail {
+        height: 150vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="lead"></div>
+      <div class="pin"></div>
+      <div class="middle"></div>
+      <div class="endTrigger"></div>
+      <div class="tail"></div>
+    </div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      // No Scene layer, so nothing adds dwell padding and every position below is plain arithmetic
+      // on the natural layout. An end that starts with '+=' and holds a space is a position clause
+      // against endTrigger, not a dwell, and GSAP resolves it after prefixing the start clause's
+      // element token: 'center' + '+=100 bottom'.
+      sticky.createStickyPin({
+        trigger: '.pin',
+        start: 'center center',
+        endTrigger: '.endTrigger',
+        end: '+=100 bottom',
+      });
+
+      sticky.refresh();
+
+      // inner carries the pin range; outer stands in for .pin's place in the flow. Neither moves
+      // .endTrigger, since outer is contain:layout and keeps .pin's own height.
+      window.__pinInnerHeight = () =>
+        document.querySelector('.pin').parentElement.getBoundingClientRect().height;
+      window.__pinNaturalTop = () =>
+        document.querySelector('.pin').parentElement.parentElement.getBoundingClientRect().top
+        + window.scrollY;
+      window.__endTriggerTop = () =>
+        document.querySelector('.endTrigger').getBoundingClientRect().top + window.scrollY;
+    </script>
+  </body>
+</html>

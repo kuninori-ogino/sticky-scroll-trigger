@@ -2163,9 +2163,97 @@ describe('\'max\' end keyword', () => {
     );
   });
 
-  // refreshPins measures with every Scene/Cover layer's sticky state temporarily reset, and the
-  // rejection above throws from inside that window. Restoring on the way out keeps one bad option
-  // value from stripping the sticky CSS off every layer on the page and leaving it that way.
+  // An end that both starts with '+=' and holds a space takes the start clause's element token as
+  // its base, so a start token carrying an offset of its own can't compose (see
+  // prefixSpacedRelativeEnd). Both resolution paths reach it: the layer path through measureLayer,
+  // the pin path through #refreshPinLayers. What the composed value resolves to needs a real
+  // layout, since the whole difference is the start clause's fraction of endTrigger's height, and
+  // jsdom reports every height as 0, so that half is e2e's job.
+  it('createStickyTrigger rejects a spaced \'+=\' end against a start clause carrying an offset', () => {
+    const { query, controller } = setup();
+
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      start: 'top+=50 bottom',
+      end: '+=100 bottom',
+    });
+
+    expect(() => controller.refresh()).toThrow(
+      /end "\+=100 bottom" can't be resolved against start "top\+=50 bottom".*"top\+=50" carries an offset/,
+    );
+  });
+
+  it('createStickyPin rejects a spaced \'+=\' end against a start clause carrying an offset', () => {
+    const { query, controller } = setup();
+
+    controller.createStickyPin({
+      trigger: query('.inside'),
+      endTrigger: query('.scene'),
+      start: 'top+=50 bottom',
+      end: '+=100 bottom',
+    });
+
+    expect(() => controller.refresh()).toThrow(
+      /end "\+=100 bottom" can't be resolved against start "top\+=50 bottom"/,
+    );
+  });
+
+  // The third path. createResolvedTrigger hands GSAP resolved numbers, so GSAP's own prefixing
+  // never sees this end and the module has to compose it instead.
+  it('createResolvedTrigger rejects a spaced \'+=\' end against a start clause carrying an offset', () => {
+    const { query, controller } = setup();
+    const vars = controller.createResolvedTrigger({
+      trigger: query('.scene'),
+      start: 'top+=50 bottom',
+      end: '+=100 bottom',
+    });
+
+    expect(() => (vars.end as () => number)()).toThrow(
+      /end "\+=100 bottom" can't be resolved against start "top\+=50 bottom"/,
+    );
+  });
+
+  // A start callback is GSAP's to invoke, so composing the end must not call it a second time for
+  // an end form that never reads it.
+  it('leaves a function-valued start uncalled for an end that takes no prefix', () => {
+    const { query, controller } = setup();
+    let calls = 0;
+    const vars = controller.createResolvedTrigger({
+      trigger: query('.scene'),
+      start: () => {
+        calls += 1;
+
+        return 'top bottom';
+      },
+      end: '+=500',
+    });
+
+    (vars.end as () => number)();
+
+    expect(calls).toBe(0);
+  });
+
+  // The composition itself stays off the dwell path: a '+=' end without a space is still a dwell
+  // distance, which ignores endTrigger and start alike whatever the start clause says.
+  it('leaves a space-free \'+=\' end a dwell distance under a non-top start clause', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+
+    controller.createStickyPin({
+      trigger,
+      endTrigger: query('.scene'),
+      start: 'center center',
+      end: '+=400',
+    });
+    controller.refresh();
+
+    expect(trigger.parentElement!.style.height).toBe('400px');
+  });
+
+  // refreshPins measures with every Scene/Cover layer's sticky state temporarily reset, and a
+  // pin's own end rejection (the 'max' case above) throws from inside that window. Restoring on the
+  // way out keeps one bad option value from stripping the sticky CSS off every layer on the page
+  // and leaving it that way.
   it('leaves Scene layer sticky state intact when a pin option throws mid-refresh', () => {
     const { query, controller } = setup();
     const stuckWrappers = () =>

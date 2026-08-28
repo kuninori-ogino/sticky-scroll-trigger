@@ -33,9 +33,12 @@ const signedPx = (
 // number and an explicit percentage mean different things to GSAP. 'px' is accepted because
 // GSAP's parseFloat silently drops it, but it's the only suffix accepted: anything else ('top
 // 100vh') is a typo worth rejecting. The base is optional, matching GSAP's _offsetToPx, so an
-// offset-only token like '-=500' is valid with an implicit base of 0.
+// offset-only token like '-=500' is valid with an implicit base of 0. The base may carry a sign of
+// its own, which only matters once an offset follows it: GSAP reads '-50+=100' as 50, since it
+// splits at the '=' and runs parseFloat over everything before it. A bare '-50' parses either way,
+// as a signed base or as the offset, and to the same number.
 const CLAUSE_TOKEN_RE
-  = /^(top|center|bottom|(?:\d+(?:\.\d*)?|\.\d+))?(%|px)?(?:([+-]=?)(\d+(?:\.\d*)?|\.\d+)(%|px)?)?$/;
+  = /^(top|center|bottom|[+-]?(?:\d+(?:\.\d*)?|\.\d+))?(%|px)?(?:([+-]=?)(\d+(?:\.\d*)?|\.\d+)(%|px)?)?$/;
 
 export const parseClauseToken = (
   token: string,
@@ -76,6 +79,10 @@ export const parseClauseToken = (
 
   const isKeyword = base !== undefined && base in KEYWORD_FRACTIONS;
   const basePercent = baseUnit === '%';
+  // One deliberate divergence, in a token that carries '%' on both the base and the offset
+  // ('50%+=10%'). GSAP scales the offset by testing `value.indexOf("%") > eqIndex`, which finds the
+  // base's own '%' and stops, leaving the offset a px value: _offsetToPx('50%+=10%', 400) is 210,
+  // where this reads 240. Both units are honored here rather than reproducing that.
   // A bare number (or one suffixed 'px') is a literal px offset, not a fraction; a missing base
   // contributes neither.
   const fraction = isKeyword
@@ -111,6 +118,20 @@ export const resolveAbsolute = (resolved: PositionValue): number =>
 // the meaningless fragment 'clamp(top'.
 const CLAMP_PREFIX = 'clamp(';
 
+// Takes an already-trimmed whole position value. Every caller has to run this before splitting the
+// value into tokens, since after the split there's only the fragment 'clamp(top' left to name.
+const assertNotClamped = (trimmed: string) => {
+  if (!trimmed.startsWith(CLAMP_PREFIX)) return;
+
+  const inner = trimmed.slice(CLAMP_PREFIX.length).replace(/\)$/, '').trim();
+
+  throw new Error(
+    `StickyScrollTrigger: unsupported position clause "${trimmed}": GSAP's clamp() wrapper `
+    + 'isn\'t supported here.'
+    + (inner ? ` Did you mean "${inner}"?` : ''),
+  );
+};
+
 // Back-calculates the top position (px) at which the element's anchor point lines up with
 // the viewport's anchor point, from a GSAP-standard position clause (e.g. 'center center').
 // When only one clause is given, the viewport side defaults to 'top' (matching GSAP).
@@ -121,15 +142,7 @@ export const resolveAnchorTop = (
 ): number => {
   const trimmed = position.trim();
 
-  if (trimmed.startsWith(CLAMP_PREFIX)) {
-    const inner = trimmed.slice(CLAMP_PREFIX.length).replace(/\)$/, '').trim();
-
-    throw new Error(
-      `StickyScrollTrigger: unsupported position clause "${trimmed}": GSAP's clamp() wrapper `
-      + 'isn\'t supported here.'
-      + (inner ? ` Did you mean "${inner}"?` : ''),
-    );
-  }
+  assertNotClamped(trimmed);
 
   const [elementToken, viewportToken = 'top'] = trimmed.split(/\s+/);
   const elementClause = parseClauseToken(elementToken, elementHeight);
@@ -151,6 +164,77 @@ const DWELL_RELATIVE_RE = /^\+=(\d+(?:\.\d*)?|\.\d+)(%|px)?$/;
 
 export const isDwellFormat = (resolved: EndValue): boolean =>
   typeof resolved === 'string' && DWELL_RELATIVE_RE.test(resolved.trim());
+
+// GSAP splits the two '+=' end forms at ScrollTrigger.js:1389. One that also holds a space is a
+// position clause in both libraries, but GSAP first prepends the start clause's element token
+// (`parsedStart.split(" ")[0] + parsedEnd`), so start: 'bottom bottom' with end: '+=100 bottom'
+// resolves as 'bottom+=100 bottom' against endTrigger. Without that prefix, parseClauseToken reads
+// the absent base as fraction 0, landing short by the start clause's own fraction of endTrigger's
+// height. A non-string start prepends nothing, matching GSAP's own `_isString(parsedStart)` guard.
+export const prefixSpacedRelativeEnd = (
+  start: PositionInput,
+  endResolved: EndValue,
+): EndValue => {
+  if (typeof endResolved !== 'string') return endResolved;
+
+  const trimmedEnd = endResolved.trim();
+
+  if (!trimmedEnd.startsWith('+=') || !/\s/.test(trimmedEnd)) return endResolved;
+
+  // start is resolved only now, so a function-valued one runs just for the end form that reads it:
+  // createResolvedTrigger's start has a callback GSAP already invokes once per refresh.
+  const startResolved = resolveMaybeFn(start);
+
+  if (typeof startResolved !== 'string') return endResolved;
+
+  const trimmedStart = startResolved.trim();
+
+  // This check runs before the split below, which would otherwise leave only 'clamp(top' to report.
+  // resolveAnchorTop catches a clamp() value on its own, but only after this function has composed
+  // the end.
+  assertNotClamped(trimmedStart);
+
+  const [elementToken] = trimmedStart.split(/\s+/);
+
+  // Both tokens go through parseClauseToken as written, before anything is glued together.
+  // Composing first would make it quote a token the caller never wrote: 'center+=100vh' for a start
+  // of 'center center' and an end of '+=100vh bottom'. refSize is irrelevant to whether a token
+  // parses, so 0 stands in.
+  try {
+    parseClauseToken(elementToken, 0);
+  } catch (error) {
+    // isAbsoluteFormat accepts whatever Number() does, so a start can be a bare number in a
+    // spelling CLAUSE_TOKEN_RE has no way to express ('1e3', 'Infinity'). That start is sound
+    // everywhere else it's used, so this leaves the end as it stands rather than rejecting it over
+    // a prefix the module can't write.
+    if (!isAbsoluteFormat(startResolved)) throw error;
+
+    return endResolved;
+  }
+
+  parseClauseToken(trimmedEnd.split(/\s+/)[0], 0);
+
+  // The one pair that can't compose. GSAP's _offsetToPx splits a token at its first '=', so a start
+  // token already carrying an offset leaves the end's offset in the discarded tail: 'top+=50' with
+  // '+=100' resolves to just 50. Unlike the unparseable start above there is no fallback, so this
+  // throws, as the module already does for GSAP's other silent-drop forms ('top+50', 'max-100').
+  // Those reach GSAP's unguarded refresh loop from a Vars callback the same way this one can.
+  // A signed base ('-50+=100') composes cleanly in both libraries, so this leaves it alone, and a
+  // '%' base too: it meets a '%' end offset in the one token parseClauseToken reads differently
+  // from GSAP (see its note on '50%+=10%'), but that divergence is the token's, not this
+  // function's.
+  if (elementToken.includes('=')) {
+    throw new Error(
+      `StickyScrollTrigger: end "${endResolved}" can't be resolved against start `
+      + `"${startResolved}": GSAP reads an end that starts with '+=' and holds a space by `
+      + `prefixing it with the start clause's element token, and "${elementToken}" carries an `
+      + 'offset of its own, which GSAP resolves by discarding the end\'s. Give end a complete '
+      + 'position clause instead, such as \'top+=100 bottom\'.',
+    );
+  }
+
+  return elementToken + trimmedEnd;
+};
 
 // Converts an already-resolved end value into a dwell distance (px). Only reached once
 // isDwellFormat has confirmed the '+=' notation, so resolved is always a string at runtime.

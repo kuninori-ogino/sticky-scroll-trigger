@@ -30,6 +30,7 @@ import {
   isAbsoluteFormat,
   isDwellFormat,
   isMaxFormat,
+  prefixSpacedRelativeEnd,
   resolveAbsolute,
   resolveAnchorTop,
   resolveDwell,
@@ -185,7 +186,9 @@ const measureLayer = (
   indexByTrigger: ReadonlyMap<HTMLElement, number>,
 ): LayerMeasurement => {
   const startResolved = resolveMaybeFn(layer.start);
-  const endResolved = layer.end === null ? null : resolveMaybeFn(layer.end);
+  const endResolved = layer.end === null
+    ? null
+    : prefixSpacedRelativeEnd(startResolved, resolveMaybeFn(layer.end));
   const elementHeight = layer.trigger.offsetHeight;
   const endTriggerIsSelf = layer.endTrigger === layer.trigger;
   const endTriggerIndex = indexByTrigger.get(layer.endTrigger) ?? null;
@@ -233,8 +236,9 @@ const topToStartClause = (top: number | (() => number)): PositionInput => {
 // what a dwell counts from, the same as a Scene layer's freezeStart (freezeWindow.ts's EndSpec).
 // Each form is read the way GSAP reads it:
 // - a dwell ('+=400', '+=100%', the latter against the viewport): that distance past engageTop,
-//   with endTrigger ignored. Only a value that both starts with '+=' and holds no space is one,
-//   so an ordinary clause carrying an offset ('bottom top+=40') resolves against endTrigger below.
+//   with endTrigger ignored. Only a value that both starts with '+=' and holds no space is one, so
+//   an ordinary clause carrying an offset ('bottom top+=40') resolves against endTrigger below, as
+//   does the spaced '+=' form once prefixSpacedRelativeEnd has given it the start's element token.
 // - an absolute scroll position (a bare number): that position, independent of engageTop and
 //   endTrigger alike. Same idea as an absolute start for Scene/Cover layers (see resolveStartSpec).
 // - a position clause: where endTrigger's own side reaches the viewport's.
@@ -560,7 +564,10 @@ export default class StickyScrollTrigger {
     this.#pinLayers.forEach((layer) => {
       if (!layer.inner) return;
 
-      const resolvedEnd = resolveMaybeFn(layer.end);
+      // start comes first so a spaced '+=' end can take its element token, which is also the order
+      // GSAP resolves the two in (ScrollTrigger.js:1384-1391).
+      const resolvedStart = resolveMaybeFn(layer.start);
+      const resolvedEnd = prefixSpacedRelativeEnd(resolvedStart, resolveMaybeFn(layer.end));
 
       // The same self-reference resolveEndSpec rejects for Scene layers: the pin's own spacer
       // (layer.inner) adds to the document's max scroll position.
@@ -573,7 +580,6 @@ export default class StickyScrollTrigger {
         );
       }
 
-      const resolvedStart = resolveMaybeFn(layer.start);
       const triggerTop = documentTop(layer.trigger);
       const triggerHeight = layer.trigger.offsetHeight;
 
@@ -1229,7 +1235,17 @@ export default class StickyScrollTrigger {
       ...rest,
       trigger,
       start: () => this.resolveScrollPosition(trigger, start),
-      end: () => this.resolveScrollPosition(endTrigger, end),
+      // resolveScrollPosition takes one position at a time and knows nothing of a start clause, so
+      // the spaced '+=' end form has to take its base here, the one place both are in hand. Vars
+      // hand GSAP resolved numbers, so GSAP's own prefixing never sees this end.
+      // GSAP calls the two callbacks with no scope either could share, so a function-valued start
+      // runs a second time for that one end form. Caching across them would mean guessing where one
+      // refresh ends, so this leans on what GSAP already assumes of start: that it is a pure
+      // function of layout.
+      end: () => this.resolveScrollPosition(
+        endTrigger,
+        prefixSpacedRelativeEnd(start, resolveMaybeFn(end)),
+      ),
     };
   }
 

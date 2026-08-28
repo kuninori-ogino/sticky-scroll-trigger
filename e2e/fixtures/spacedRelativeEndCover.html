@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>spacedRelativeEndCover fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .lead,
+      .gap,
+      .tail {
+        height: 100vh;
+      }
+      .trigger {
+        height: 200px;
+        background: #c33;
+      }
+      .cover {
+        height: 100vh;
+        background: #39c;
+      }
+      /* The whole difference the start clause's element token makes is this height. */
+      .endTrigger {
+        height: 444px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="lead"></div>
+      <div class="trigger trigger--spaced"></div>
+      <div class="cover cover--spaced"></div>
+      <div class="endTrigger endTrigger--spaced"></div>
+      <div class="gap"></div>
+      <div class="trigger trigger--explicit"></div>
+      <div class="cover cover--explicit"></div>
+      <div class="endTrigger endTrigger--explicit"></div>
+      <div class="tail"></div>
+    </div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      // Neither call passes start, so both take createOverlapScroll's own 'bottom bottom' default:
+      // the one default in this module whose element token isn't 'top'/'0', and so the one that
+      // makes this end form move without the caller opting into anything. Cover layers add no dwell
+      // padding, so the two sit in identical geometry and their freeze windows are comparable.
+      const spacedVars = sticky.createOverlapScroll({
+        trigger: '.trigger--spaced',
+        cover: '.cover--spaced',
+        endTrigger: '.endTrigger--spaced',
+        end: '+=100 bottom',
+      });
+      // The clause the one above should compose into, written out.
+      const explicitVars = sticky.createOverlapScroll({
+        trigger: '.trigger--explicit',
+        cover: '.cover--explicit',
+        endTrigger: '.endTrigger--explicit',
+        end: 'bottom+=100 bottom',
+      });
+
+      sticky.refresh();
+
+      window.__spacedCoverWindows = () => ({
+        spaced: { start: spacedVars.start(), end: spacedVars.end() },
+        explicit: { start: explicitVars.start(), end: explicitVars.end() },
+      });
+    </script>
+  </body>
+</html>

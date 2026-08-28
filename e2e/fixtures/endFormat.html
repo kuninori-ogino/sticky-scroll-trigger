@@ -32,6 +32,13 @@
       .customEndTriggerScene {
         height: 111px;
       }
+      /* Distinct again, for the same reason: the spaced '+=' end resolves against this height. */
+      .spacedEndTrigger {
+        height: 444px;
+      }
+      .spacedScene {
+        height: 222px;
+      }
     </style>
   </head>
   <body>
@@ -43,6 +50,8 @@
         <section class="defaultScene"></section>
         <section class="customEndTriggerScene"></section>
         <section class="customEndTrigger"></section>
+        <section class="spacedScene"></section>
+        <section class="spacedEndTrigger"></section>
         <section class="filler"></section>
       </div>
     </div>
@@ -83,9 +92,39 @@
         endTrigger: '.customEndTrigger',
       });
 
+      // An end that starts with '+=' and holds a space is a position clause, not a dwell, and GSAP
+      // resolves it after prefixing the start clause's element token: 'bottom' + '+=100 bottom'.
+      // Both element sides then resolve against .spacedEndTrigger's own height, so the dwell
+      // reduces to 444 + 100 and the trigger's own 222px cancels out. Without the prefix the end
+      // clause loses its base and the dwell collapses to the bare 100px offset.
+      const spacedVars = sticky.createStickyTrigger({
+        trigger: '.spacedScene',
+        start: 'bottom bottom',
+        endTrigger: '.spacedEndTrigger',
+        end: '+=100 bottom',
+      });
+
+      // The same pair through createResolvedTrigger, which registers no layer and so leaves every
+      // position above untouched. It resolves start and end into numbers for plain GSAP, so GSAP
+      // never gets the chance to prefix this end itself.
+      const spacedResolvedVars = sticky.createResolvedTrigger({
+        trigger: '.spacedScene',
+        start: 'bottom bottom',
+        endTrigger: '.spacedEndTrigger',
+        end: '+=100 bottom',
+      });
+
       sticky.refresh();
 
       window.__clauseWindow = () => ({ start: clauseVars.start(), end: clauseVars.end() });
+      window.__spacedWindow = () => ({ start: spacedVars.start(), end: spacedVars.end() });
+      // The spaced form should land exactly where the clause it composes into does, and a full
+      // endTrigger height away from the same end with no base.
+      window.__spacedResolvedEnds = () => ({
+        spaced: spacedResolvedVars.end(),
+        explicit: sticky.resolveScrollPosition('.spacedEndTrigger', 'bottom+=100 bottom'),
+        baseless: sticky.resolveScrollPosition('.spacedEndTrigger', '+=100 bottom'),
+      });
       window.__dwellWindow = () => ({ start: dwellVars.start(), end: dwellVars.end() });
       window.__defaultWindow = () => ({ start: defaultVars.start(), end: defaultVars.end() });
       window.__customEndTriggerWindow = () =>

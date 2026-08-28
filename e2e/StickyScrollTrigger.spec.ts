@@ -385,6 +385,130 @@ test('createStickyTrigger\'s default end resolves against an explicit endTrigger
     .toBeCloseTo(result.triggerHeight + result.endTriggerHeight, 0);
 });
 
+// GSAP splits the two '+=' end forms at ScrollTrigger.js:1389: one holding a space is a position
+// clause against endTrigger, which GSAP resolves after prefixing the start clause's element token
+// onto it ('bottom' + '+=100 bottom'). The prefix is only visible in a real browser, since the
+// whole difference it makes is that token's fraction of endTrigger's own height. With start
+// 'bottom bottom' against a 444px endTrigger, both element sides resolve against that height and
+// .spacedScene's own 222px cancels out of the dwell, leaving 444 + 100.
+test('a spaced \'+=\' end resolves against endTrigger with the start clause\'s element token prefixed', async ({ page }) => {
+  await page.goto('/fixtures/endFormat.html');
+
+  const result = await page.evaluate(() => {
+    const win = window as unknown as {
+      __spacedWindow: () => { start: number; end: number };
+    };
+    const spaced = win.__spacedWindow();
+
+    return {
+      spacedDwell: spaced.end - spaced.start,
+      triggerHeight: document.querySelector('.spacedScene')!.getBoundingClientRect().height,
+      endTriggerHeight:
+        document.querySelector('.spacedEndTrigger')!.getBoundingClientRect().height,
+    };
+  });
+
+  // sanity check they're distinguishable
+  expect(result.triggerHeight).not.toBe(result.endTriggerHeight);
+  expect(result.spacedDwell).toBeCloseTo(result.endTriggerHeight + 100, 0);
+  // Without its element token, this end resolves to the bare 100px offset.
+  expect(result.spacedDwell).not.toBeCloseTo(100, 0);
+});
+
+// createOverlapScroll's 'bottom bottom' is the one start default in this module whose element
+// token isn't 'top'/'0', so it's the case that moves for a caller who never passed start.
+test('createOverlapScroll\'s default start feeds a spaced \'+=\' end its own element token', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/spacedRelativeEndCover.html');
+
+  const result = await page.evaluate(() => {
+    const win = window as unknown as {
+      __spacedCoverWindows: () => {
+        spaced: { start: number; end: number };
+        explicit: { start: number; end: number };
+      };
+    };
+    const windows = win.__spacedCoverWindows();
+
+    return {
+      spacedDwell: windows.spaced.end - windows.spaced.start,
+      explicitDwell: windows.explicit.end - windows.explicit.start,
+      viewportHeight: window.innerHeight,
+      endTriggerHeight:
+        document.querySelector('.endTrigger--spaced')!.getBoundingClientRect().height,
+    };
+  });
+
+  // trigger's own 200px cancels out of the dwell, leaving the cover's own viewport height plus the
+  // end clause's 444 + 100 against endTrigger.
+  expect(result.spacedDwell)
+    .toBeCloseTo(result.viewportHeight + result.endTriggerHeight + 100, 0);
+  expect(result.spacedDwell).toBeCloseTo(result.explicitDwell, 0);
+  // Strip the base and endTrigger's height drops out of the dwell entirely.
+  expect(result.spacedDwell).not.toBeCloseTo(result.viewportHeight + 100, 0);
+});
+
+// createResolvedTrigger is the third path to the same prefix, and the one GSAP can't cover for
+// itself: it hands GSAP a resolved number, so the end never reaches GSAP as a string.
+test('createResolvedTrigger\'s spaced \'+=\' end lands where the clause it composes into does', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/endFormat.html');
+
+  const result = await page.evaluate(() => {
+    const win = window as unknown as {
+      __spacedResolvedEnds: () => { spaced: number; explicit: number; baseless: number };
+    };
+
+    return {
+      ...win.__spacedResolvedEnds(),
+      endTriggerHeight:
+        document.querySelector('.spacedEndTrigger')!.getBoundingClientRect().height,
+    };
+  });
+
+  expect(result.spaced).toBeCloseTo(result.explicit, 0);
+  // The gap between the two forms is exactly the base: one full endTrigger height.
+  expect(result.spaced - result.baseless).toBeCloseTo(result.endTriggerHeight, 0);
+});
+
+// The pin resolves its own end through resolvePinReleaseTop rather than resolveEndSpec, so this
+// covers the same prefix on a separate path from the clause one above.
+test('createStickyPin\'s spaced \'+=\' end takes the start clause\'s element token too', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/spacedRelativeEndPin.html');
+
+  const layout = await page.evaluate(() => {
+    const win = window as unknown as {
+      __pinInnerHeight: () => number;
+      __pinNaturalTop: () => number;
+      __endTriggerTop: () => number;
+    };
+
+    return {
+      innerHeight: win.__pinInnerHeight(),
+      naturalTop: win.__pinNaturalTop(),
+      endTriggerTop: win.__endTriggerTop(),
+      viewportHeight: window.innerHeight,
+      pinHeight: document.querySelector('.pin')!.getBoundingClientRect().height,
+      endTriggerHeight: document.querySelector('.endTrigger')!.getBoundingClientRect().height,
+    };
+  });
+  // top = viewportHeight/2 - pinHeight/2 from start 'center center'; the release point is where
+  // endTrigger's own center, pushed 100px further, reaches the viewport's bottom edge. Then
+  // height = releaseTop - naturalTop + top + pinHeight, as in the start-clause test above.
+  const releaseTop
+    = layout.endTriggerTop - layout.viewportHeight + layout.endTriggerHeight / 2 + 100;
+  const expected
+    = releaseTop - layout.naturalTop + layout.viewportHeight / 2 + layout.pinHeight / 2;
+
+  expect(layout.innerHeight).toBeCloseTo(expected, 0);
+  // A release point without endTrigger's half-height would make the pin range 200px shorter.
+  expect(layout.innerHeight).not.toBeCloseTo(expected - layout.endTriggerHeight / 2, 0);
+});
+
 // GSAP's own _parsePosition treats a value as an absolute scroll position whenever it coerces
 // cleanly to a number (a plain number, or a numeric-only string), matching that for `start` too
 // (previously only `end` had an equivalent, intentionally different, dwell-distance exception).

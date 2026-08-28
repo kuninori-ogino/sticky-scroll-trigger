@@ -4,6 +4,7 @@ import {
   isDwellFormat,
   isMaxFormat,
   parseClauseToken,
+  prefixSpacedRelativeEnd,
   resolveAbsolute,
   resolveAnchorTop,
   resolveDwell,
@@ -135,12 +136,23 @@ describe('parseClauseToken', () => {
   // A token that's only a signed offset, with no keyword or number before it, is valid. GSAP's
   // own _offsetToPx treats the implicit base as 0 (this is what lets an end like '-=500' resolve
   // as a position clause against endTrigger instead of dwell).
+  // A '%'-suffixed one is read as a signed base rather than as an offset, since the base may carry
+  // a sign of its own. Which half of the pair holds it makes no difference to any caller: both are
+  // scaled by the same refSize and summed (see resolveAnchorTop), so '+100%' is 1000 either way.
   it('accepts a signed offset with no base at all (implicit base of 0)', () => {
     expect(parseClauseToken('-=500', 1000)).toEqual({ fraction: 0, offsetPx: -500 });
     expect(parseClauseToken('+=500', 1000)).toEqual({ fraction: 0, offsetPx: 500 });
-    expect(parseClauseToken('+100%', 1000)).toEqual({ fraction: 0, offsetPx: 1000 });
-    expect(parseClauseToken('-50%', 1000)).toEqual({ fraction: 0, offsetPx: -500 });
+    expect(parseClauseToken('+100%', 1000)).toEqual({ fraction: 1, offsetPx: 0 });
+    expect(parseClauseToken('-50%', 1000)).toEqual({ fraction: -0.5, offsetPx: 0 });
     expect(parseClauseToken('-=500px', 1000)).toEqual({ fraction: 0, offsetPx: -500 });
+  });
+
+  // The sign on a base only changes the result once an offset follows it, which is the pair GSAP
+  // resolves by splitting at the '=' and running parseFloat over everything before it.
+  it('accepts a signed number base carrying an offset', () => {
+    expect(parseClauseToken('-50', 1000)).toEqual({ fraction: 0, offsetPx: -50 });
+    expect(parseClauseToken('-50+=100', 1000)).toEqual({ fraction: 0, offsetPx: 50 });
+    expect(parseClauseToken('+50-=100', 1000)).toEqual({ fraction: 0, offsetPx: -50 });
   });
 
   // Without a base, there's nothing for '=' to separate the sign from, and parseFloat handles a
@@ -299,6 +311,106 @@ describe('isDwellFormat', () => {
     expect(isDwellFormat('bottom top')).toBe(false);
     expect(isDwellFormat('bottom')).toBe(false);
     expect(isDwellFormat('center center+=50')).toBe(false);
+  });
+});
+
+describe('prefixSpacedRelativeEnd', () => {
+  // GSAP's `parsedStart.split(" ")[0] + parsedEnd` (ScrollTrigger.js:1391), which is what makes
+  // start: 'bottom bottom' with end: '+=100 bottom' resolve as 'bottom+=100 bottom'.
+  it('prepends the start clause\'s element token to a spaced "+=" end', () => {
+    expect(prefixSpacedRelativeEnd('bottom bottom', '+=100 bottom')).toBe('bottom+=100 bottom');
+    expect(prefixSpacedRelativeEnd('center center', '+=100 bottom')).toBe('center+=100 bottom');
+    expect(prefixSpacedRelativeEnd('50% top', '+=10% bottom')).toBe('50%+=10% bottom');
+  });
+
+  // The composed token resolves to the same value GSAP's _offsetToPx gives it: the start token's
+  // own fraction of endTrigger's height, plus the end's offset.
+  it('composes a token that resolves against endTrigger the way GSAP resolves it', () => {
+    const composed = prefixSpacedRelativeEnd('bottom bottom', '+=100 bottom') as string;
+
+    // 800 * 1 (viewport 'bottom') - (200 * 1 + 100) = 500, where GSAP's _offsetToPx reads
+    // 'bottom+=100' as 100 + 1 * 200.
+    expect(resolveAnchorTop(composed, 200, 800)).toBe(500);
+  });
+
+  // Every default start in this module has a 'top'/'0' element token, so nothing moves for a
+  // caller who leaves start alone.
+  it('leaves the resolved value unchanged for a zero-fraction start token', () => {
+    const composed = prefixSpacedRelativeEnd('top top', '+=100 bottom') as string;
+
+    expect(composed).toBe('top+=100 bottom');
+    expect(resolveAnchorTop(composed, 200, 800)).toBe(resolveAnchorTop('+=100 bottom', 200, 800));
+    expect(prefixSpacedRelativeEnd('0 0', '+=100 bottom')).toBe('0+=100 bottom');
+  });
+
+  it('leaves an end that is not a spaced "+=" value alone', () => {
+    expect(prefixSpacedRelativeEnd('bottom bottom', '+=500')).toBe('+=500');
+    expect(prefixSpacedRelativeEnd('bottom bottom', 'bottom top+=40')).toBe('bottom top+=40');
+    expect(prefixSpacedRelativeEnd('bottom bottom', '-=200 bottom')).toBe('-=200 bottom');
+    expect(prefixSpacedRelativeEnd('bottom bottom', 'max')).toBe('max');
+    expect(prefixSpacedRelativeEnd('bottom bottom', 500)).toBe(500);
+  });
+
+  // GSAP's own `_isString(parsedStart) ? parsedStart.split(" ")[0] : ""`: an absolute start
+  // contributes no element token, so the end keeps its implicit fraction of 0.
+  it('prepends nothing when start is an absolute scroll position', () => {
+    expect(prefixSpacedRelativeEnd(500, '+=100 bottom')).toBe('+=100 bottom');
+    expect(prefixSpacedRelativeEnd('500', '+=100 bottom')).toBe('500+=100 bottom');
+  });
+
+  // GSAP's _offsetToPx splits at the first '=', so 'top+=50+=100' silently resolves to 50 with the
+  // end's own offset discarded. This module rejects the pair rather than reproducing that, and
+  // quotes what the caller wrote rather than the composed token.
+  it('throws when the start\'s element token carries an offset of its own', () => {
+    expect(() => prefixSpacedRelativeEnd('top+=50 bottom', '+=100 bottom'))
+      .toThrow(/end "\+=100 bottom" can't be resolved against start "top\+=50 bottom"/);
+    expect(() => prefixSpacedRelativeEnd('top+=50 bottom', '+=100 bottom'))
+      .toThrow(/"top\+=50" carries an offset of its own/);
+  });
+
+  // A signed base is the near miss: GSAP composes '-50+=100' into 50 with nothing discarded, so
+  // this composes it too rather than rejecting a pair GSAP accepts.
+  it('composes a signed element token, which GSAP resolves cleanly', () => {
+    const composed = prefixSpacedRelativeEnd('-50 top', '+=100 bottom') as string;
+
+    expect(composed).toBe('-50+=100 bottom');
+    // 800 * 1 (viewport 'bottom') - (-50 + 100) = 750, matching _offsetToPx('-50+=100', 200) = 50.
+    expect(resolveAnchorTop(composed, 200, 800)).toBe(750);
+  });
+
+  // The start side gets the same as-written check the end side does, so a malformed start token is
+  // quoted the way the caller wrote it rather than as part of a composed string.
+  it('reports a malformed start element token against the token as written', () => {
+    expect(() => prefixSpacedRelativeEnd('top+50 bottom', '+=100 bottom'))
+      .toThrow(/unsupported position clause "top\+50"/);
+  });
+
+  // A bare-number start in a spelling the clause parser can't express is left alone rather than
+  // rejected: it resolves fine as an absolute start everywhere else, so throwing would break a
+  // config that works. The plain spellings still compose (see the absolute-start case above).
+  it('leaves an unparseable but absolute-format start alone instead of throwing', () => {
+    expect(prefixSpacedRelativeEnd('1e3', '+=100 bottom')).toBe('+=100 bottom');
+    expect(prefixSpacedRelativeEnd('Infinity', '+=100 bottom')).toBe('+=100 bottom');
+  });
+
+  // A clamp() start has to be caught on the whole value, since the split this function does would
+  // otherwise reduce it to 'clamp(top'. Same message resolveAnchorTop gives it on its own.
+  it('reports a clamp() start on the whole value, not the split fragment', () => {
+    expect(() => prefixSpacedRelativeEnd('clamp(top center)', '+=100 bottom'))
+      .toThrow(/unsupported position clause "clamp\(top center\)".*Did you mean "top center"\?/);
+  });
+
+  // The mirror of the rejection above: the end's own offset is checked before the prefix is glued
+  // on, so the message quotes '+=100vh' rather than the composed 'center+=100vh'.
+  it('reports a malformed offset in the end against the token as written', () => {
+    expect(() => prefixSpacedRelativeEnd('center center', '+=100vh bottom'))
+      .toThrow(/unsupported position clause "\+=100vh"/);
+  });
+
+  it('tolerates surrounding whitespace on both values', () => {
+    expect(prefixSpacedRelativeEnd('  bottom  bottom ', ' +=100 bottom ')).toBe(
+      'bottom+=100 bottom',
+    );
   });
 });
 
