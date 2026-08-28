@@ -1268,6 +1268,46 @@ describe('createResolvedTrigger()', () => {
     expect(controller.resolveScrollPosition(trigger, 'bottom top')).toBe(0);
   });
 
+  // A dwell end counts from the resolved start and ignores endTrigger, matching GSAP and the
+  // pin path. resolveScrollPosition has no dwell branch, so this used to resolve against
+  // endTrigger, landing at its top edge plus the offset.
+  it('resolves a dwell end as that distance past start, ignoring endTrigger', () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="trigger"></section>
+        <section class="between"></section>
+        <section class="endTrigger"></section>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const trigger = query('.trigger');
+    const endTrigger = query('.endTrigger');
+
+    // A dwelling Scene layer between trigger and endTrigger moves a position-clause end
+    // resolved against endTrigger by 500 (see the tests above); a dwell end must not shift.
+    controller.createStickyTrigger({ trigger: query('.between'), end: '+=500' });
+    controller.refresh();
+
+    const vars = controller.createResolvedTrigger({
+      trigger,
+      start: 'top top',
+      end: '+=300',
+      endTrigger,
+    });
+
+    expect((vars.end as () => number)() - (vars.start as () => number)()).toBe(300);
+  });
+
+  // A '%' dwell scales against the viewport, not endTrigger's own height, which jsdom reports as
+  // 0. resolveScrollPosition's position-clause path would have used that height instead.
+  it('scales a percent dwell end against the viewport', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+    const vars = controller.createResolvedTrigger({ trigger, start: 'top top', end: '+=100%' });
+
+    expect((vars.end as () => number)() - (vars.start as () => number)()).toBe(window.innerHeight);
+  });
+
   it('the call itself does not throw even after destroy() (it never depends on refresh or layers registration)', () => {
     const { query, controller } = setup();
 
@@ -2214,8 +2254,28 @@ describe('\'max\' end keyword', () => {
   });
 
   // A start callback is GSAP's to invoke, so composing the end must not call it a second time for
-  // an end form that never reads it.
-  it('leaves a function-valued start uncalled for an end that takes no prefix', () => {
+  // a plain position clause, which resolves against endTrigger and never reads start.
+  it('leaves a function-valued start uncalled for a plain position clause end', () => {
+    const { query, controller } = setup();
+    let calls = 0;
+    const vars = controller.createResolvedTrigger({
+      trigger: query('.scene'),
+      start: () => {
+        calls += 1;
+
+        return 'top bottom';
+      },
+      end: 'top center',
+    });
+
+    (vars.end as () => number)();
+
+    expect(calls).toBe(0);
+  });
+
+  // A dwell end counts from the resolved start, so it re-runs a function-valued start, the same
+  // tradeoff the spaced '+=' prefix makes.
+  it('re-runs a function-valued start for a dwell end', () => {
     const { query, controller } = setup();
     let calls = 0;
     const vars = controller.createResolvedTrigger({
@@ -2230,7 +2290,7 @@ describe('\'max\' end keyword', () => {
 
     (vars.end as () => number)();
 
-    expect(calls).toBe(0);
+    expect(calls).toBe(1);
   });
 
   // The composition itself stays off the dwell path: a '+=' end without a space is still a dwell

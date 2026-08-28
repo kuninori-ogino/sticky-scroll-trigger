@@ -464,9 +464,7 @@ If the entire value is just a number (a plain JS number, or a string that's noth
 
 A bare number (or numeric string with no sign/`%`/`px`) is an absolute scroll position; see [Absolute scroll position](#absolute-scroll-position) above. `end` follows the same rule `start` uses, matching GSAP.
 
-"Dwell distance": how many px to keep pinning after the freeze starts. Matching GSAP, only a string starting with the literal `'+='` prefix and holding no space counts (or a `%`-suffixed `'+=...'`, resolved against the viewport height). A leading `-=`/`+`/`-` without `=`, or a `%` without `+=`, is a position clause instead (see below), as is a `'+='` value with a space in it. A dwell `end` never consults `endTrigger`, again matching GSAP: the distance runs from wherever the freeze starts.
-
-> [`createResolvedTrigger`](#createresolvedtriggeroptions) is the exception: it resolves `end` against `endTrigger` on its own, with no notion of a distance from `start`, so `'+='` notation isn't read as a dwell there at all. It falls through to the position clause below, landing at `endTrigger`'s top edge plus the offset, and a `%` scales against `endTrigger`'s own height rather than the viewport's: `'+=100%'` means one `endTrigger` height past its top edge. Use an explicit position clause, or `resolveScrollPosition` plus your own arithmetic.
+"Dwell distance": how many px to keep pinning after the freeze starts. Matching GSAP, only a string starting with the literal `'+='` prefix and holding no space counts (or a `%`-suffixed `'+=...'`, resolved against the viewport height). A leading `-=`/`+`/`-` without `=`, or a `%` without `+=`, is a position clause instead (see below), as is a `'+='` value with a space in it. A dwell `end` never consults `endTrigger`, again matching GSAP: the distance runs from wherever the freeze starts, or from the resolved `start` in [`createResolvedTrigger`](#createresolvedtriggeroptions), which has no freeze window.
 
 | example                          | meaning                               |
 | -------------------------------- | ------------------------------------- |

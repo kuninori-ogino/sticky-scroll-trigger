@@ -1235,17 +1235,29 @@ export default class StickyScrollTrigger {
       ...rest,
       trigger,
       start: () => this.resolveScrollPosition(trigger, start),
-      // resolveScrollPosition takes one position at a time and knows nothing of a start clause, so
-      // the spaced '+=' end form has to take its base here, the one place both are in hand. Vars
-      // hand GSAP resolved numbers, so GSAP's own prefixing never sees this end.
-      // GSAP calls the two callbacks with no scope either could share, so a function-valued start
-      // runs a second time for that one end form. Caching across them would mean guessing where one
-      // refresh ends, so this leans on what GSAP already assumes of start: that it is a pure
-      // function of layout.
-      end: () => this.resolveScrollPosition(
-        endTrigger,
-        prefixSpacedRelativeEnd(start, resolveMaybeFn(end)),
-      ),
+      end: () => {
+        const resolvedEnd = resolveMaybeFn(end);
+
+        // A dwell counts its distance from the resolved start with endTrigger ignored, the way
+        // GSAP and every other end path here read it (resolvePinReleaseTop, resolveEndSpec).
+        // resolveScrollPosition has no dwell branch, so without this a '+=' end resolves against
+        // endTrigger, and a '%' one scales against its height rather than the viewport.
+        if (isDwellFormat(resolvedEnd)) {
+          return this.resolveScrollPosition(trigger, start)
+            + resolveDwell(resolvedEnd, measureViewportHeight());
+        }
+
+        // Both branches read start: the dwell above for its base, the spaced '+=' form below to
+        // prefix its element token, which resolveScrollPosition can't do since it takes one
+        // position at a time and never sees a start clause (Vars hand GSAP resolved numbers, so
+        // GSAP's own prefixing never runs). GSAP shares no scope between the two callbacks, so a
+        // function-valued start runs again here; caching would mean guessing where one refresh
+        // ends, so this leans on what GSAP already assumes of start: a pure function of layout.
+        return this.resolveScrollPosition(
+          endTrigger,
+          prefixSpacedRelativeEnd(start, resolvedEnd),
+        );
+      },
     };
   }
 
