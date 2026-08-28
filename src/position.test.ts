@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  classifyPosition,
   isAbsoluteFormat,
   isDwellFormat,
   isMaxFormat,
@@ -506,5 +507,70 @@ describe('resolveMaxOffset', () => {
     expect(() => resolveMaxOffset('bottom top', 800)).toThrow(
       /unsupported max-position format "bottom top"/,
     );
+  });
+});
+
+// classifyPosition composes the three predicates above into the single value every call path in
+// index.ts branches on.
+describe('classifyPosition', () => {
+  it('classifies dwell notation', () => {
+    expect(classifyPosition('+=500')).toEqual({ kind: 'dwell', value: '+=500' });
+    expect(classifyPosition('+=100%')).toEqual({ kind: 'dwell', value: '+=100%' });
+  });
+
+  it('classifies absolute notation, resolved to a number', () => {
+    expect(classifyPosition(500)).toEqual({ kind: 'absolute', value: 500 });
+    expect(classifyPosition('500')).toEqual({ kind: 'absolute', value: 500 });
+    expect(classifyPosition('Infinity')).toEqual({ kind: 'absolute', value: Infinity });
+  });
+
+  it('classifies max notation', () => {
+    expect(classifyPosition('max')).toEqual({ kind: 'max', value: 'max' });
+    expect(classifyPosition('max-=100')).toEqual({ kind: 'max', value: 'max-=100' });
+  });
+
+  it('classifies an ordinary position clause', () => {
+    expect(classifyPosition('top top')).toEqual({ kind: 'clause', value: 'top top' });
+    expect(classifyPosition('bottom')).toEqual({ kind: 'clause', value: 'bottom' });
+  });
+
+  // The space keeps it out of dwell format (see isDwellFormat/DWELL_RELATIVE_RE above), so this
+  // is a clause like any other, not a dwell.
+  it('classifies a spaced \'+=\' end as a clause, not a dwell', () => {
+    expect(classifyPosition('+=100 bottom')).toEqual({ kind: 'clause', value: '+=100 bottom' });
+  });
+
+  // classifyPosition's ordering rests on these three staying disjoint, so the samples run through
+  // each notation the module accepts, including the variants the predicates parse separately:
+  // signs, units, offsets and surrounding whitespace. Clause samples are there for the zero-match
+  // case, which is what the 'clause' fallback answers. A predicate that widened into another's
+  // territory would fail here rather than send a call path down the wrong branch.
+  it('never lets more than one of the three named predicates match the same input', () => {
+    const samples: readonly (string | number)[] = [
+      500, 0, -500, 0.5, Infinity, -Infinity,
+      '500', '-500', '500.5', '  500  ', 'Infinity', '-Infinity',
+      '+=500', '+=100%', '+=500px', ' +=500 ',
+      'max', 'max-=100', 'max+=10%', ' max ',
+      'top top', 'bottom', 'center center', '50% top', 'top+=50 bottom', '+=100 bottom',
+    ];
+
+    samples.forEach((sample) => {
+      const hits = [
+        ['dwell', isDwellFormat(sample)] as const,
+        ['absolute', isAbsoluteFormat(sample)] as const,
+        ['max', isMaxFormat(sample)] as const,
+      ].filter(([, matched]) => matched);
+
+      expect(
+        hits.length,
+        `expected at most one predicate to match ${JSON.stringify(sample)}, got ${JSON.stringify(hits)}`,
+      ).toBeLessThanOrEqual(1);
+
+      // classifyPosition agrees with whichever predicate matched, or falls back to 'clause' when
+      // none did.
+      const expectedKind = hits.length === 1 ? hits[0][0] : 'clause';
+
+      expect(classifyPosition(sample).kind).toBe(expectedKind);
+    });
   });
 });

@@ -27,17 +27,14 @@ import { buildStructure, isDomOrderStale, unbuildStructure } from './structure';
 import { planLayers } from './freezeWindow';
 import type { EndSpec, LayerMeasurement, StartSpec } from './freezeWindow';
 import {
-  isAbsoluteFormat,
-  isDwellFormat,
-  isMaxFormat,
+  classifyPosition,
   prefixSpacedRelativeEnd,
-  resolveAbsolute,
   resolveAnchorTop,
   resolveDwell,
   resolveMaxOffset,
   resolveMaybeFn,
 } from './position';
-import type { EndValue, PositionInput, PositionValue } from './position';
+import type { ClassifiedPosition, EndValue, PositionInput, PositionValue } from './position';
 import { EXCLUDED_VAR_KEYS } from './vars';
 import type {
   CoverLayer,
@@ -77,72 +74,75 @@ const resolveEndSpec = (
 ): EndSpec => {
   if (endResolved === null) return { mode: 'auto' };
 
-  if (isDwellFormat(endResolved)) {
-    return {
-      mode: 'dwell',
-      distancePx: Math.max(0, resolveDwell(endResolved, viewportHeight)),
-    };
-  }
+  const classified = classifyPosition(endResolved);
 
-  if (isAbsoluteFormat(endResolved)) {
-    return { mode: 'absolute', value: resolveAbsolute(endResolved) };
-  }
+  switch (classified.kind) {
+    case 'dwell':
+      return {
+        mode: 'dwell',
+        distancePx: Math.max(0, resolveDwell(classified.value, viewportHeight)),
+      };
 
-  // A Scene layer's own dwell padding adds to the document's max scroll position, so a 'max' end
-  // would depend on itself, growing the page a little more on every refresh instead of settling.
-  // Cover layers add no padding.
-  if (isMaxFormat(endResolved)) {
-    if (layer.kind !== 'cover') {
-      throw new Error(
-        `StickyScrollTrigger: createStickyTrigger's trigger ${describeElement(layer.trigger)} `
-        + `has end "${endResolved}". GSAP's 'max' keyword isn't supported here: the layer's own `
-        + 'dwell padding adds to the document\'s max scroll position, so the freeze window would '
-        + 'depend on itself. Use createOverlapScroll, which adds no padding, or a dwell distance '
-        + 'such as \'+=500\'.',
-      );
+    case 'absolute':
+      return { mode: 'absolute', value: classified.value };
+
+    // A Scene layer's own dwell padding adds to the document's max scroll position, so a 'max'
+    // end would depend on itself, growing the page a little more on every refresh instead of
+    // settling. Cover layers add no padding.
+    case 'max':
+      if (layer.kind !== 'cover') {
+        throw new Error(
+          `StickyScrollTrigger: createStickyTrigger's trigger ${describeElement(layer.trigger)} `
+          + `has end "${endResolved}". GSAP's 'max' keyword isn't supported here: the layer's `
+          + 'own dwell padding adds to the document\'s max scroll position, so the freeze window '
+          + 'would depend on itself. Use createOverlapScroll, which adds no padding, or a dwell '
+          + 'distance such as \'+=500\'.',
+        );
+      }
+
+      return { mode: 'max', offsetPx: resolveMaxOffset(classified.value, viewportHeight) };
+
+    case 'clause': {
+      // The same self-reference the 'max' case above rejects, reached through a registered layer
+      // instead: a Scene layer's dwell padding pushes down everything after it in DOM order, so
+      // referencing a later layer's position means depending on its own dwell. Iteration can't
+      // fix this one, since the layer's own paddingHeight cancels out of its defining equation,
+      // leaving a contradiction or an arbitrary value. Cover layers add no padding, so planLayers
+      // resolves their forward references normally.
+      if (layer.kind !== 'cover' && endTriggerIndex !== null && endTriggerIndex > ownIndex) {
+        throw new Error(
+          `StickyScrollTrigger: createStickyTrigger's trigger ${describeElement(layer.trigger)}'s `
+          + `endTrigger (${describeElement(layer.endTrigger)}) refers to a layer positioned later `
+          + 'in DOM order, which isn\'t supported: this layer\'s own dwell padding pushes that one '
+          + 'down, so the freeze window would depend on its own dwell. Point endTrigger at a layer '
+          + 'earlier in DOM order, or use a dwell distance such as \'+=500\'.',
+        );
+      }
+
+      const unregistered = endTriggerIndex === null;
+      const insideRoot = rootElement.contains(layer.endTrigger);
+
+      // A Scene layer stretches the document by its own dwell, pushing an endTrigger outside the
+      // shared container down by that same amount, so the equation has no solution. Cover layers
+      // add no padding, so they're safe.
+      if (unregistered && !insideRoot && layer.kind !== 'cover') {
+        throw new Error(
+          `StickyScrollTrigger: createStickyTrigger's trigger ${describeElement(layer.trigger)} `
+          + `has an endTrigger (${describeElement(layer.endTrigger)}) outside the shared `
+          + 'container: the layer\'s own dwell keeps pushing it away, so the freeze window never '
+          + 'settles. Point endTrigger at an element inside the container, or use a dwell distance '
+          + 'such as \'+=500\'.',
+        );
+      }
+
+      return {
+        mode: 'clause',
+        clause: classified.value,
+        rawTop: unregistered && insideRoot ? documentTop(layer.endTrigger) : null,
+        measureLive: unregistered && !insideRoot,
+      };
     }
-
-    return { mode: 'max', offsetPx: resolveMaxOffset(endResolved as string, viewportHeight) };
   }
-
-  // The same self-reference as the 'max' case above, reached through a registered layer instead:
-  // a Scene layer's dwell padding pushes down everything after it in DOM order, so referencing a
-  // later layer's position means depending on its own dwell. Iteration can't fix this one, since
-  // the layer's own paddingHeight cancels out of its defining equation, leaving a contradiction
-  // or an arbitrary value. Cover layers add no padding, so planLayers resolves their forward
-  // references normally.
-  if (layer.kind !== 'cover' && endTriggerIndex !== null && endTriggerIndex > ownIndex) {
-    throw new Error(
-      `StickyScrollTrigger: createStickyTrigger's trigger ${describeElement(layer.trigger)}'s `
-      + `endTrigger (${describeElement(layer.endTrigger)}) refers to a layer positioned later `
-      + 'in DOM order, which isn\'t supported: this layer\'s own dwell padding pushes that one '
-      + 'down, so the freeze window would depend on its own dwell. Point endTrigger at a layer '
-      + 'earlier in DOM order, or use a dwell distance such as \'+=500\'.',
-    );
-  }
-
-  const unregistered = endTriggerIndex === null;
-  const insideRoot = rootElement.contains(layer.endTrigger);
-
-  // A Scene layer stretches the document by its own dwell, pushing an endTrigger outside the
-  // shared container down by that same amount, so the equation has no solution. Cover layers add
-  // no padding, so they're safe.
-  if (unregistered && !insideRoot && layer.kind !== 'cover') {
-    throw new Error(
-      `StickyScrollTrigger: createStickyTrigger's trigger ${describeElement(layer.trigger)} `
-      + `has an endTrigger (${describeElement(layer.endTrigger)}) outside the shared `
-      + 'container: the layer\'s own dwell keeps pushing it away, so the freeze window never '
-      + 'settles. Point endTrigger at an element inside the container, or use a dwell distance '
-      + 'such as \'+=500\'.',
-    );
-  }
-
-  return {
-    mode: 'clause',
-    clause: endResolved as string,
-    rawTop: unregistered && insideRoot ? documentTop(layer.endTrigger) : null,
-    measureLive: unregistered && !insideRoot,
-  };
 };
 
 // Converts a resolved start value into a StartSpec. position.ts's isAbsoluteFormat defines which
@@ -157,23 +157,35 @@ const resolveStartSpec = (
   elementHeight: number,
   viewportHeight: number,
 ): StartSpec => {
-  if (!isAbsoluteFormat(startResolved)) {
-    return {
-      mode: 'clause',
-      anchorOffset: resolveAnchorTop(startResolved as string, elementHeight, viewportHeight),
-    };
-  }
+  const classified = classifyPosition(startResolved);
 
-  if (layer.kind === 'cover') {
-    throw new Error(
-      `StickyScrollTrigger: createOverlapScroll's trigger ${describeElement(layer.trigger)} has `
-      + `start "${startResolved}", an absolute scroll position (GSAP reads any bare number this `
-      + 'way). That isn\'t supported here: a cover layer\'s sticky position is computed relative '
-      + 'to its own wrapper, so start must be a position clause such as \'bottom bottom\'.',
-    );
-  }
+  switch (classified.kind) {
+    case 'absolute':
+      if (layer.kind === 'cover') {
+        throw new Error(
+          `StickyScrollTrigger: createOverlapScroll's trigger ${describeElement(layer.trigger)} `
+          + `has start "${startResolved}", an absolute scroll position (GSAP reads any bare `
+          + 'number this way). That isn\'t supported here: a cover layer\'s sticky position is '
+          + 'computed relative to its own wrapper, so start must be a position clause such as '
+          + '\'bottom bottom\'.',
+        );
+      }
 
-  return { mode: 'absolute', value: resolveAbsolute(startResolved) };
+      return { mode: 'absolute', value: classified.value };
+
+    // 'max' and a dwell are end notation, and neither gets its own answer here: both go to
+    // resolveAnchorTop as an ordinary clause would, which is where they part. 'max' throws there,
+    // out of parseClauseToken's "'max' is GSAP's end-only keyword", while a dwell parses as an
+    // offset with an implicit base of 0. Naming both cases keeps that a stated decision instead
+    // of an unlabeled fall-through.
+    case 'max':
+    case 'dwell':
+    case 'clause':
+      return {
+        mode: 'clause',
+        anchorOffset: resolveAnchorTop(classified.value, elementHeight, viewportHeight),
+      };
+  }
 };
 
 // Measures one layer's natural absolute position and resolves its start/end, in
@@ -242,18 +254,27 @@ const topToStartClause = (top: number | (() => number)): PositionInput => {
 // - an absolute scroll position (a bare number): that position, independent of engageTop and
 //   endTrigger alike. Same idea as an absolute start for Scene/Cover layers (see resolveStartSpec).
 // - a position clause: where endTrigger's own side reaches the viewport's.
+// classifiedEnd excludes 'max' rather than handling it, because #refreshPinLayers rejects that
+// first: the pin's own spacer height is self-referential the same way a Scene layer's dwell
+// padding is. The exclusion makes that rejection a precondition the compiler checks. A 'max'
+// branch here would instead be dead code that starts running if the caller ever moves its throw.
 const resolvePinReleaseTop = (
   endTrigger: HTMLElement,
-  resolvedEnd: EndValue,
+  classifiedEnd: Exclude<ClassifiedPosition, { kind: 'max' }>,
   engageTop: number,
   viewportHeight: number,
 ): number => {
-  if (isDwellFormat(resolvedEnd)) return engageTop + resolveDwell(resolvedEnd, viewportHeight);
+  switch (classifiedEnd.kind) {
+    case 'dwell':
+      return engageTop + resolveDwell(classifiedEnd.value, viewportHeight);
 
-  if (isAbsoluteFormat(resolvedEnd)) return resolveAbsolute(resolvedEnd);
+    case 'absolute':
+      return classifiedEnd.value;
 
-  return documentTop(endTrigger)
-    - resolveAnchorTop(resolvedEnd as string, endTrigger.offsetHeight, viewportHeight);
+    case 'clause':
+      return documentTop(endTrigger)
+        - resolveAnchorTop(classifiedEnd.value, endTrigger.offsetHeight, viewportHeight);
+  }
 };
 
 // Shared by the layer and pin registration paths, which both reject an already-registered trigger.
@@ -568,10 +589,13 @@ export default class StickyScrollTrigger {
       // GSAP resolves the two in (ScrollTrigger.js:1384-1391).
       const resolvedStart = resolveMaybeFn(layer.start);
       const resolvedEnd = prefixSpacedRelativeEnd(resolvedStart, resolveMaybeFn(layer.end));
+      const classifiedEnd = classifyPosition(resolvedEnd);
 
       // The same self-reference resolveEndSpec rejects for Scene layers: the pin's own spacer
-      // (layer.inner) adds to the document's max scroll position.
-      if (isMaxFormat(resolvedEnd)) {
+      // (layer.inner) adds to the document's max scroll position. Rejecting it here is what lets
+      // resolvePinReleaseTop take an end that excludes 'max'. Its place ahead of the
+      // absolute-start check below decides which error a pin with both bad values reports.
+      if (classifiedEnd.kind === 'max') {
         throw new Error(
           `StickyScrollTrigger: createStickyPin's end "${resolvedEnd}" uses GSAP's 'max' keyword, `
           + 'which isn\'t supported here: the pin\'s own spacer height adds to the document\'s '
@@ -582,6 +606,7 @@ export default class StickyScrollTrigger {
 
       const triggerTop = documentTop(layer.trigger);
       const triggerHeight = layer.trigger.offsetHeight;
+      const classifiedStart = classifyPosition(resolvedStart);
 
       // A bare number keeps GSAP's meaning, an absolute scroll position, which a pin can't act on.
       // A Scene layer honors one because its freeze window is a scroll range to begin with and its
@@ -590,7 +615,7 @@ export default class StickyScrollTrigger {
       // engages at (triggerTop - topPx) follows from that. Inverting it would mean already knowing
       // triggerTop, and anyone who does would write the px distance directly, which is what `top`
       // is for.
-      if (isAbsoluteFormat(resolvedStart)) {
+      if (classifiedStart.kind === 'absolute') {
         throw new Error(
           `StickyScrollTrigger: createStickyPin's start "${resolvedStart}" is an absolute scroll `
           + 'position (GSAP reads any bare number this way). A pin can\'t act on one: it '
@@ -600,10 +625,11 @@ export default class StickyScrollTrigger {
         );
       }
 
-      const topPx = resolveAnchorTop(resolvedStart as string, triggerHeight, viewportHeight);
+      // 'max' and a dwell reach resolveAnchorTop here for the reason resolveStartSpec gives.
+      const topPx = resolveAnchorTop(classifiedStart.value, triggerHeight, viewportHeight);
       const releaseTop = resolvePinReleaseTop(
         layer.endTrigger,
-        resolvedEnd,
+        classifiedEnd,
         triggerTop - topPx,
         viewportHeight,
       );
@@ -1153,19 +1179,43 @@ export default class StickyScrollTrigger {
     const element = resolveElement(elementInput, 'resolveScrollPosition');
     const resolved = resolveMaybeFn(position);
     const viewportHeight = measureViewportHeight();
+    const classified = classifyPosition(resolved);
 
-    // 'max' isn't relative to element at all: it's GSAP's scrollerMax, optionally offset. This
-    // function registers no layer and adds no document height, so unlike Scene/Cover layers and
-    // createStickyPin it can measure directly, with no circularity. Per this function's contract,
-    // refresh() has already finalized every Scene layer's dwell padding by now.
-    if (isMaxFormat(resolved)) {
-      return measureDocumentMaxScroll(viewportHeight)
-        + resolveMaxOffset(resolved as string, viewportHeight);
+    switch (classified.kind) {
+      // 'max' isn't relative to element at all: it's GSAP's scrollerMax, optionally offset. This
+      // function registers no layer and adds no document height, so unlike Scene/Cover layers and
+      // createStickyPin it can measure directly, with no circularity. Per this function's
+      // contract, refresh() has already finalized every Scene layer's dwell padding by now.
+      case 'max':
+        return measureDocumentMaxScroll(viewportHeight)
+          + resolveMaxOffset(classified.value, viewportHeight);
+
+      // A fixed scroll position, independent of `element` entirely (see resolveStartSpec above).
+      case 'absolute':
+        return classified.value;
+
+      // This takes one position at a time, with no start for a dwell to count from, so '+=500'
+      // resolves as the clause it looks like. createResolvedTrigger's end applies the real dwell
+      // meaning itself before delegating here.
+      case 'dwell':
+      case 'clause':
+        return this.#resolveClauseScrollPosition(element, classified.value, viewportHeight);
     }
+  }
 
-    // A fixed scroll position, independent of `element` entirely (see resolveStartSpec above).
-    if (isAbsoluteFormat(resolved)) return resolveAbsolute(resolved);
-
+  // resolveScrollPosition ends here for a clause, and for a dwell too (see the switch there for
+  // why a dwell lands in the clause arithmetic).
+  // element can sit anywhere in the shared container and isn't guaranteed to share stuck
+  // ancestors with anything, so (like createStickyPin's trigger/endTrigger) its documentTop
+  // needs its own reset rather than the cancellation a Scene layer's own dwell relies on. A
+  // stuck ancestor here is a real possibility: once refresh() has applied a wrapper's
+  // position:sticky, the browser engages and disengages it natively as scroll changes, including
+  // during the documented function-valued start/end pattern GSAP re-evaluates on its own refresh.
+  #resolveClauseScrollPosition(
+    element: HTMLElement,
+    clause: string,
+    viewportHeight: number,
+  ): number {
     let gap = 0;
 
     this.#layers.forEach((layer) => {
@@ -1176,13 +1226,7 @@ export default class StickyScrollTrigger {
       gap += layer.freezeEnd - layer.freezeStart;
     });
 
-    const anchorOffset = resolveAnchorTop(resolved as string, element.offsetHeight, viewportHeight);
-    // element can sit anywhere in the shared container and isn't guaranteed to share stuck
-    // ancestors with anything, so (like createStickyPin's trigger/endTrigger) its documentTop
-    // needs its own reset rather than the cancellation a Scene layer's own dwell relies on. A
-    // stuck ancestor here is a real possibility: once refresh() has applied a wrapper's
-    // position:sticky, the browser engages and disengages it natively as scroll changes, including
-    // during the documented function-valued start/end pattern GSAP re-evaluates on its own refresh.
+    const anchorOffset = resolveAnchorTop(clause, element.offsetHeight, viewportHeight);
     const restoreSceneCoverStickyState = this.#resetSceneCoverStickyState();
     const result = documentTop(element) + gap - anchorOffset;
 
@@ -1237,14 +1281,15 @@ export default class StickyScrollTrigger {
       start: () => this.resolveScrollPosition(trigger, start),
       end: () => {
         const resolvedEnd = resolveMaybeFn(end);
+        const classifiedEnd = classifyPosition(resolvedEnd);
 
         // A dwell counts its distance from the resolved start with endTrigger ignored, the way
         // GSAP and every other end path here read it (resolvePinReleaseTop, resolveEndSpec).
         // resolveScrollPosition has no dwell branch, so without this a '+=' end resolves against
         // endTrigger, and a '%' one scales against its height rather than the viewport.
-        if (isDwellFormat(resolvedEnd)) {
+        if (classifiedEnd.kind === 'dwell') {
           return this.resolveScrollPosition(trigger, start)
-            + resolveDwell(resolvedEnd, measureViewportHeight());
+            + resolveDwell(classifiedEnd.value, measureViewportHeight());
         }
 
         // Both branches read start: the dwell above for its base, the spaced '+=' form below to

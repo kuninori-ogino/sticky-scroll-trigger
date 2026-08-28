@@ -277,3 +277,33 @@ export const resolveMaxOffset = (resolved: string, viewportHeight: number): numb
 
   return sign ? signedPx(sign, value, unit, viewportHeight) : 0;
 };
+
+// Which format a resolved start/end value is in. Every start/end in index.ts is classified here
+// before anything acts on it, so a call path names the formats it means to answer instead of
+// testing the predicates in an order of its own. Where a path answers all four, it switches over
+// `kind` and the compiler rejects it for leaving one out; where it rejects or intercepts a single
+// format, it tests `kind` for that one alone.
+//
+// The order below doesn't matter, because the three predicates above are pairwise disjoint. A
+// dwell starts with a literal '+=' and 'max' with a literal 'max', so neither is a number that
+// Number() can convert, and neither carries the other's prefix. position.test.ts checks that
+// across the notations the module accepts.
+export type ClassifiedPosition
+  = | { kind: 'dwell'; value: string }
+    | { kind: 'absolute'; value: number }
+    | { kind: 'max'; value: string }
+    | { kind: 'clause'; value: string };
+
+// value is the string as given. resolveDwell, resolveMaxOffset and resolveAnchorTop each trim
+// before parsing, so there is nothing for this to normalize on their behalf.
+export const classifyPosition = (resolved: PositionValue): ClassifiedPosition => {
+  if (typeof resolved === 'number') return { kind: 'absolute', value: resolved };
+
+  if (isDwellFormat(resolved)) return { kind: 'dwell', value: resolved };
+
+  if (isMaxFormat(resolved)) return { kind: 'max', value: resolved };
+
+  if (isAbsoluteFormat(resolved)) return { kind: 'absolute', value: resolveAbsolute(resolved) };
+
+  return { kind: 'clause', value: resolved };
+};
