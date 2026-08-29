@@ -105,7 +105,7 @@ const resolvePinReleaseTop = (
 
     case 'clause':
       return documentTop(endTrigger)
-        - resolveAnchorTop(classifiedEnd.value, endTrigger.offsetHeight, viewportHeight);
+        - resolveAnchorTop(classifiedEnd.value, measureUsedHeight(endTrigger), viewportHeight);
   }
 };
 
@@ -437,7 +437,7 @@ export default class StickyScrollTrigger {
       }
 
       const triggerTop = documentTop(layer.trigger);
-      const triggerHeight = layer.trigger.offsetHeight;
+      const triggerHeight = measureUsedHeight(layer.trigger);
       const classifiedStart = classifyPosition(resolvedStart);
 
       // A bare number keeps GSAP's meaning, an absolute scroll position, which a pin can't act on.
@@ -1060,7 +1060,7 @@ export default class StickyScrollTrigger {
       gap += layer.freezeEnd - layer.freezeStart;
     });
 
-    const anchorOffset = resolveAnchorTop(clause, element.offsetHeight, viewportHeight);
+    const anchorOffset = resolveAnchorTop(clause, measureUsedHeight(element), viewportHeight);
     const restoreSceneCoverStickyState = this.#resetSceneCoverStickyState();
     const result = documentTop(element) + gap - anchorOffset;
 

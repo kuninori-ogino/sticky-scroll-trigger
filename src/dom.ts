@@ -92,16 +92,42 @@ export const measureDocumentMaxScroll = (viewportHeight: number): number => {
   return Math.max(0, (doc.scrollHeight || document.body.scrollHeight) - viewportHeight);
 };
 
+// A side's border width, zero unless that side has a border-style. Browsers already compute it
+// that way; jsdom reports the initial 'medium' regardless, which is what the check is here for.
+const measureBorderWidth = (borderStyle: string, width: string): number => (
+  borderStyle === 'none' || borderStyle === 'hidden' ? 0 : parseFloat(width)
+);
+
 // The height an element is currently using, at full precision, where offsetHeight rounds to whole
-// pixels. Reading it off the computed style also keeps a transform out of the number, unlike
+// pixels. Reading it off the computed style keeps a transform out of the number, unlike
 // getBoundingClientRect: a scaled element still occupies its untransformed height in the flow, the
-// same layout-not-paint measurement documentTop takes. That computed height follows box-sizing, so
-// on a content-box element with padding or a border it comes up short by both; #reservePinSpace
-// measures wrapPin's own outer, which has neither. An element inside a display:none subtree has no
-// used value to report, so an auto height stays the keyword 'auto' there; it occupies nothing
-// either way, hence the 0.
-export const measureUsedHeight = (el: HTMLElement): number =>
-  parseFloat(getComputedStyle(el).height) || 0;
+// layout-not-paint measurement documentTop and offsetHeight both take.
+// That computed height follows box-sizing, so a content-box element's padding and borders are
+// added back to reach the border box; all of them arrive resolved to px, percentages included. An
+// element with no used height at all (an inline box, a display:none subtree, outside the document)
+// reports 'auto' or nothing, and the fallback is offsetHeight.
+// offsetHeight also takes precedence on any disagreement of a pixel or more, which happens only
+// when the arithmetic can't model the box: WebKit takes a space-taking scrollbar out of the height
+// it reports (Safari's "always show scrollbars"), leaving the sum a whole scrollbar short. Where
+// offsetHeight is 0 the comparison is skipped, since jsdom reports 0 for everything and would
+// otherwise reject every measurement here.
+export const measureUsedHeight = (el: HTMLElement): number => {
+  const rounded = el.offsetHeight;
+  const style = getComputedStyle(el);
+  const height = parseFloat(style.height);
+
+  if (!Number.isFinite(height)) return rounded;
+
+  const measured = style.boxSizing === 'border-box'
+    ? height
+    : height
+      + parseFloat(style.paddingTop)
+      + parseFloat(style.paddingBottom)
+      + measureBorderWidth(style.borderTopStyle, style.borderTopWidth)
+      + measureBorderWidth(style.borderBottomStyle, style.borderBottomWidth);
+
+  return rounded > 0 && Math.abs(measured - rounded) >= 1 ? rounded : measured;
+};
 
 export const compareDocumentOrder = (a: HTMLElement, b: HTMLElement): number => {
   const position = a.compareDocumentPosition(b);

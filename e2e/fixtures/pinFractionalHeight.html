@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinFractionalHeight fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .lead {
+        height: 100vh;
+      }
+      /* A border box of 70.75px, which offsetHeight can only report as 71. The content-box
+         default keeps the padding carrying that fraction out of the computed height. */
+      .pin {
+        box-sizing: content-box;
+        height: 60.25px;
+        padding: 4.25px 0;
+        border-top: 1px solid #333;
+        border-bottom: 1px solid #333;
+        background: #c33;
+      }
+      .middle {
+        height: 150vh;
+      }
+      .endTrigger {
+        height: 10px;
+      }
+      /* Tall enough that the release point stays reachable by scrolling. */
+      .tail {
+        height: 150vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="lead"></div>
+      <div class="pin"></div>
+      <div class="middle"></div>
+      <div class="endTrigger"></div>
+      <div class="tail"></div>
+    </div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      // 'bottom bottom' puts the pin's own height into the sticky top it resolves to, which is
+      // what makes a rounded height visible as a gap under the pin.
+      sticky.createStickyPin({
+        trigger: '.pin',
+        start: 'bottom bottom',
+        endTrigger: '.endTrigger',
+        end: 'top top',
+      });
+
+      sticky.refresh();
+
+      window.__endTriggerTop = () =>
+        document.querySelector('.endTrigger').getBoundingClientRect().top + window.scrollY;
+    </script>
+  </body>
+</html>

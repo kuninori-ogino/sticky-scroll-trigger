@@ -6,9 +6,10 @@ import type { EndValue } from './position';
 import type { CoverLayer, Layer, SceneLayer } from './types';
 
 // jsdom answers the one thing these functions ask the DOM, `contains`, so an unregistered
-// endTrigger's inside/outside branch is real here. It has no layout, so documentTop and
-// offsetHeight report 0 for everything, leaving endTriggerHeight and the wrapper/cover positions
-// to e2e. The arithmetic survives, since elementHeight and viewportHeight arrive as arguments.
+// endTrigger's inside/outside branch is real here. It has no layout, so documentTop reports 0 for
+// everything and measureUsedHeight falls back to offsetHeight's own 0, leaving endTriggerHeight
+// and the wrapper/cover positions to e2e. The arithmetic survives, since elementHeight and
+// viewportHeight arrive as arguments.
 //
 // This file owns the four rejection messages, the way position.test.ts owns 'unsupported position
 // clause'. index.test.ts keeps one public-API test per rejection with a short regex, covering only
@@ -240,8 +241,9 @@ describe('measureLayer', () => {
     indexByTrigger: ReadonlyMap<HTMLElement, number> = new Map(),
   ): LayerMeasurement => measureLayer(query('.root'), VIEWPORT, layer, ownIndex, indexByTrigger);
 
-  // Every position below is documentTop's 0 under jsdom, and endTriggerHeight is offsetHeight's;
-  // what this pins down is which field each one is read into, and that nothing is left undefined.
+  // Under jsdom every position below comes back as documentTop's 0, and every height as
+  // measureUsedHeight's; what this pins down is which field each one is read into, and that
+  // nothing is left undefined.
   it('assembles the whole measurement for a Scene layer', () => {
     expect(measure(scene({ endTrigger: query('.b'), end: 'top top' })))
       .toEqual<LayerMeasurement>({

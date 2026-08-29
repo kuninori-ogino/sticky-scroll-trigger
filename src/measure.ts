@@ -8,7 +8,7 @@
  * half, which is pure.
  */
 
-import { describeElement, documentTop } from './dom';
+import { describeElement, documentTop, measureUsedHeight } from './dom';
 import type { EndSpec, LayerMeasurement, StartSpec } from './freezeWindow';
 import {
   classifyPosition,
@@ -165,7 +165,7 @@ export const measureLayer = (
   const endResolved = layer.end === null
     ? null
     : prefixSpacedRelativeEnd(startResolved, resolveMaybeFn(layer.end));
-  const elementHeight = layer.trigger.offsetHeight;
+  const elementHeight = measureUsedHeight(layer.trigger);
   const endTriggerIsSelf = layer.endTrigger === layer.trigger;
   const endTriggerIndex = indexByTrigger.get(layer.endTrigger) ?? null;
   const end = resolveEndSpec(
@@ -187,6 +187,6 @@ export const measureLayer = (
     end,
     endTriggerIsSelf,
     endTriggerIndex,
-    endTriggerHeight: end.mode === 'clause' ? layer.endTrigger.offsetHeight : 0,
+    endTriggerHeight: end.mode === 'clause' ? measureUsedHeight(layer.endTrigger) : 0,
   };
 };

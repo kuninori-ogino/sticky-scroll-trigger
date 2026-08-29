@@ -7,6 +7,7 @@ import {
   describeElement,
   liftAboveStickyWrapper,
   measureDocumentMaxScroll,
+  measureUsedHeight,
   measureViewportHeight,
   resetStickyPosition,
   resolveElement,
@@ -477,6 +478,54 @@ describe('measureViewportHeight', () => {
     measureViewportHeight();
 
     expect(document.body.children.length).toBe(before);
+  });
+});
+
+// jsdom resolves declared values through getComputedStyle, which is where measureUsedHeight gets
+// every number it uses, so the box-sizing arithmetic is verifiable here. Only offsetHeight (always
+// 0 without layout) needs e2e.
+describe('measureUsedHeight', () => {
+  const measure = (css: string) => {
+    document.body.innerHTML = `<div id="el" style="${css}"></div>`;
+
+    return measureUsedHeight(document.getElementById('el') as HTMLElement);
+  };
+
+  it('adds a content-box element\'s padding and borders back, keeping the fractions', () => {
+    expect(measure(
+      'height:100.25px;padding:5.5px 0;border-top:1.25px solid red;border-bottom:2.25px solid red',
+    )).toBe(114.75);
+  });
+
+  it('adds nothing to a border-box element, whose computed height is the border box', () => {
+    expect(measure('box-sizing:border-box;height:100.25px;padding:5.5px 0')).toBe(100.25);
+  });
+
+  it('counts no border on a side whose border-style leaves it undrawn', () => {
+    expect(measure('height:30.5px;border-top-width:4px')).toBe(30.5);
+  });
+
+  it('falls back to offsetHeight where there is no used height to read', () => {
+    expect(measure('padding:5px 0')).toBe(0);
+    expect(measureUsedHeight(document.createElement('div'))).toBe(0);
+  });
+
+  // Stubbing offsetHeight is the only way to stage the disagreement here. The case that produces
+  // it in a browser, WebKit's space-taking scrollbar, is e2e's "a scrollbar that takes space".
+  it('hands back to offsetHeight when the two disagree by a pixel or more', () => {
+    document.body.innerHTML = '<div id="el" style="height:100.25px"></div>';
+
+    const el = document.getElementById('el') as HTMLElement;
+    const reportOffsetHeight = (value: number) =>
+      Object.defineProperty(el, 'offsetHeight', { value, configurable: true });
+
+    // 15px short, the size of the scrollbar WebKit leaves out of the height it reports.
+    reportOffsetHeight(115);
+    expect(measureUsedHeight(el)).toBe(115);
+
+    // A quarter of a pixel apart is the rounding it should be, so the precise number stands.
+    reportOffsetHeight(100);
+    expect(measureUsedHeight(el)).toBe(100.25);
   });
 });
 

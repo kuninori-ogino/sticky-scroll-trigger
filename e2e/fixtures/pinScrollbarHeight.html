@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinScrollbarHeight fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .lead {
+        height: 100vh;
+      }
+      /* A pin that scrolls horizontally, with the scrollbar forced to take space rather than
+         overlay, as Safari's "always show scrollbars" setting does natively. WebKit then reports
+         a computed height 15px below the box the pin occupies. */
+      .pin {
+        height: 60.25px;
+        overflow: scroll;
+        background: #c33;
+      }
+      .pin::-webkit-scrollbar {
+        height: 15px;
+        width: 15px;
+        background: #eee;
+      }
+      .pin::-webkit-scrollbar-thumb {
+        background: #999;
+      }
+      .pin__wide {
+        width: 3000px;
+        height: 40px;
+      }
+      .middle {
+        height: 150vh;
+      }
+      .endTrigger {
+        height: 10px;
+      }
+      /* Tall enough that the release point stays reachable by scrolling. */
+      .tail {
+        height: 150vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="lead"></div>
+      <div class="pin"><div class="pin__wide"></div></div>
+      <div class="middle"></div>
+      <div class="endTrigger"></div>
+      <div class="tail"></div>
+    </div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      sticky.createStickyPin({
+        trigger: '.pin',
+        start: 'bottom bottom',
+        endTrigger: '.endTrigger',
+        end: 'top top',
+      });
+
+      sticky.refresh();
+
+      window.__endTriggerTop = () =>
+        document.querySelector('.endTrigger').getBoundingClientRect().top + window.scrollY;
+    </script>
+  </body>
+</html>

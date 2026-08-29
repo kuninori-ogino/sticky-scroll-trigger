@@ -1479,7 +1479,7 @@ describe('createStickyPin()', () => {
     controller.createStickyPin({ trigger, endTrigger: query('.scene'), start: 'bottom bottom' });
     controller.refresh();
 
-    // In a real browser this would be viewportHeight - trigger.offsetHeight (see e2e).
+    // In a real browser this would be viewportHeight minus trigger's own height (see e2e).
     expect(trigger.style.top).toBe(`${window.innerHeight}px`);
   });
 

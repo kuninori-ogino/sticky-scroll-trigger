@@ -762,6 +762,68 @@ test('createStickyPin\'s start clause pins trigger by its own bottom edge, and r
   expect(releasedBottom).toBeCloseTo(layout.viewportHeight - 200, 0);
 });
 
+// A trigger whose border box lands between two whole pixels keeps its fraction, where offsetHeight
+// would leave the pin resting a quarter of a pixel short of the viewport's bottom edge. jsdom has
+// no layout, so it can't tell a rounded height from a fractional one.
+test('a pin whose height falls between whole pixels rests exactly where its start clause names', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/pinFractionalHeight.html');
+
+  const pin = page.locator('.pin');
+  const box = await pin.evaluate((el: HTMLElement) => ({
+    height: el.getBoundingClientRect().height,
+    rounded: el.offsetHeight,
+    top: parseFloat(el.style.top),
+    viewportHeight: window.innerHeight,
+  }));
+
+  // The fixture's own arithmetic, confirmed here so a CSS edit can't quietly make the rest of
+  // this test pass for the wrong reason.
+  expect(box.height).toBeCloseTo(70.75, 2);
+  expect(box.rounded).toBe(71);
+  expect(box.top).toBeCloseTo(box.viewportHeight - box.height, 2);
+
+  const heldBottom = await page.evaluate(() => {
+    const releaseTop = (window as unknown as { __endTriggerTop: () => number }).__endTriggerTop();
+
+    window.scrollTo(0, releaseTop - 300);
+
+    return document.querySelector('.pin')!.getBoundingClientRect().bottom;
+  });
+
+  expect(heldBottom).toBeCloseTo(box.viewportHeight, 1);
+});
+
+// Once a scrollbar takes space instead of overlaying, WebKit reports a height with the horizontal
+// bar already taken out of it, 15px short of what the pin occupies. offsetHeight takes precedence
+// there, so the pin rests on the viewport's bottom edge in every engine, whichever way its
+// scrollbars behave. Falling back that way loses the fraction, hence the whole-pixel tolerance
+// where the test above holds two decimals.
+test('a scrollbar that takes space doesn\'t shrink the height a pin\'s start clause resolves against', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/pinScrollbarHeight.html');
+
+  const box = await page.locator('.pin').evaluate((el: HTMLElement) => ({
+    height: el.getBoundingClientRect().height,
+    top: parseFloat(el.style.top),
+    viewportHeight: window.innerHeight,
+  }));
+
+  expect(box.top).toBeCloseTo(box.viewportHeight - box.height, 0);
+
+  const heldBottom = await page.evaluate(() => {
+    const releaseTop = (window as unknown as { __endTriggerTop: () => number }).__endTriggerTop();
+
+    window.scrollTo(0, releaseTop - 300);
+
+    return document.querySelector('.pin')!.getBoundingClientRect().bottom;
+  });
+
+  expect(heldBottom).toBeCloseTo(box.viewportHeight, 0);
+});
+
 test('resolveScrollPosition returns an absolute value (string or number) as-is, regardless of element', async ({ page }) => {
   await page.goto('/fixtures/absolutePosition.html');
 
