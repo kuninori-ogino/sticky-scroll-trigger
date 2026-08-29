@@ -95,9 +95,11 @@ export const measureDocumentMaxScroll = (viewportHeight: number): number => {
 // The height an element is currently using, at full precision, where offsetHeight rounds to whole
 // pixels. Reading it off the computed style also keeps a transform out of the number, unlike
 // getBoundingClientRect: a scaled element still occupies its untransformed height in the flow, the
-// same layout-not-paint measurement documentTop takes. An element inside a display:none subtree
-// has no used value to report, so an auto height stays the keyword 'auto' there; it occupies
-// nothing either way, hence the 0.
+// same layout-not-paint measurement documentTop takes. That computed height follows box-sizing, so
+// on a content-box element with padding or a border it comes up short by both; #reservePinSpace
+// measures wrapPin's own outer, which has neither. An element inside a display:none subtree has no
+// used value to report, so an auto height stays the keyword 'auto' there; it occupies nothing
+// either way, hence the 0.
 export const measureUsedHeight = (el: HTMLElement): number =>
   parseFloat(getComputedStyle(el).height) || 0;
 

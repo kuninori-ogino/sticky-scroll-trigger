@@ -11,17 +11,17 @@ npm run dev
 
 ## Development workflow
 
-| command                                    | description                                                                      |
-| ------------------------------------------ | -------------------------------------------------------------------------------- |
-| `npm run dev`                              | Starts the Vite dev server for `demo/`                                           |
-| `npm run build`                            | Production build of `demo/`                                                      |
-| `npm run build:lib`                        | Builds the library into `dist/` (ESM/IIFE, unminified + minified, plus `.d.ts`)  |
-| `npm run preview`                          | Previews the `demo/` build output                                                |
-| `npm run typecheck`                        | Runs `tsc --noEmit` for the library, the demo, and the e2e tests                 |
-| `npm run lint` / `format` / `format:check` | Lints/formats with ESLint + Prettier                                             |
-| `npm test` / `test:watch`                  | Vitest unit tests                                                                |
-| `npm run playwright:install`               | First run only: fetches Chromium and WebKit for Playwright into the shared cache |
-| `npm run test:e2e`                         | Playwright e2e tests                                                             |
+| command                                    | description                                                                               |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| `npm run dev`                              | Starts the Vite dev server for `demo/`                                                    |
+| `npm run build`                            | Production build of `demo/`                                                               |
+| `npm run build:lib`                        | Builds the library into `dist/` (ESM/IIFE, unminified + minified, plus `.d.ts`)           |
+| `npm run preview`                          | Previews the `demo/` build output                                                         |
+| `npm run typecheck`                        | Runs `tsc --noEmit` for the library, the demo, and the e2e tests                          |
+| `npm run lint` / `format` / `format:check` | Lints/formats with ESLint + Prettier                                                      |
+| `npm test` / `test:watch`                  | Vitest unit tests                                                                         |
+| `npm run playwright:install`               | First run only: fetches Chromium, WebKit and Firefox for Playwright into the shared cache |
+| `npm run test:e2e`                         | Playwright e2e tests                                                                      |
 
 ## File layout
 

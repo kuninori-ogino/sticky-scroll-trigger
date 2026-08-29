@@ -1008,9 +1008,9 @@ describe('resolveScrollPosition()', () => {
     controller.createStickyTrigger({ trigger: query('.inside'), end: '+=500' });
     controller.refresh();
 
-    // '.scene' is earlier than '.inside' in DOM order, so there's no layer before the target
-    // ('.inside') itself. This only confirms that having a later layer doesn't break anything
-    // (the numeric validity is e2e's job).
+    // The layer's trigger ('.inside') sits after the target ('.scene') in DOM order, so it adds
+    // nothing to the gap total. This only confirms that having a later layer doesn't break
+    // anything (the numeric validity is e2e's job).
     expect(() => controller.resolveScrollPosition(query('.scene'), 'top top')).not.toThrow();
   });
 

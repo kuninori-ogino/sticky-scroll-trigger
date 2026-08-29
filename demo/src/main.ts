@@ -68,7 +68,7 @@ document
 
 // A partially sticky label: partialSticky__pin starts pinning just below the header
 // (headerHeight+20px), and releases once the end marker's (.partialSticky__endTrigger's)
-// bottom edge arrives 40px below that.
+// bottom edge arrives 40px below the pinned label's own bottom.
 // Implemented with plain position:sticky; pinning is handled entirely by CSS, not GSAP.
 const partialStickyPin = document.querySelector<HTMLElement>(
   '.partialSticky__pin',
