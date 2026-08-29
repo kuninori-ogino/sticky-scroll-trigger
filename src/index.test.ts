@@ -234,6 +234,10 @@ describe('trigger containment', () => {
   });
 });
 
+// measure.ts raises the rejections below, and measure.test.ts asserts their messages in full.
+// What these add is that refresh() still reaches each one from the public API, so they match only
+// enough of the message to tell the rejections apart. Same split at 'max' end keyword and
+// absolute start further down.
 describe('endTrigger validity', () => {
   // An endTrigger outside the shared container has no solution, since a Scene layer's own
   // dwell keeps pushing it further away. Silently approximating it would make padding grow
@@ -247,38 +251,13 @@ describe('endTrigger validity', () => {
       endTrigger: query('.outside'),
     });
 
-    // Also confirms the message names both the trigger and endTrigger elements (the typical
-    // pattern of registering several via querySelectorAll makes it important to know
-    // which element is the culprit).
-    expect(() => controller.refresh()).toThrow(
-      /trigger <section\.scene>.*endTrigger \(<section\.outside>\).*outside the shared container/,
-    );
+    expect(() => controller.refresh()).toThrow(/endTrigger .*outside the shared container/);
   });
 
-  it('accepts an endTrigger inside the shared container', () => {
-    const { query, controller } = setup();
-
-    controller.createStickyTrigger({
-      trigger: query('.scene'),
-      end: 'top top',
-      endTrigger: query('.inside'),
-    });
-
-    expect(() => controller.refresh()).not.toThrow();
-  });
-
-  it('passes even with an endTrigger outside the container when using a dwell-distance end, since it goes unused', () => {
-    const { query, controller } = setup();
-
-    controller.createStickyTrigger({
-      trigger: query('.scene'),
-      end: '+=500',
-      endTrigger: query('.outside'),
-    });
-
-    expect(() => controller.refresh()).not.toThrow();
-  });
-
+  // The plain "this endTrigger is accepted" cases live in measure.test.ts, which asserts the
+  // EndSpec each resolves to rather than only that nothing threw. This one stays because refresh()
+  // does more with it: an endTrigger outside the container is the sole case that makes
+  // #planLayerPositions run pass 2 a second time, to re-measure after padding.
   it('passes even outside the container for a cover layer, since it never creates padding or self-references', () => {
     const { query, controller } = setup();
 
@@ -295,7 +274,7 @@ describe('endTrigger validity', () => {
   // A registered endTrigger positioned after itself in DOM order (a forward reference) splits
   // into two cases. A Scene layer's own dwell padding always precedes (and pushes down) anything
   // after it, so a Scene layer's forward reference always depends on its own dwell; that's
-  // rejected outright (see resolveEndSpec's dedicated check). A cover layer never creates
+  // rejected outright (see measure.ts's resolveEndSpec). A cover layer never creates
   // padding, so it has no such self-dependency; planLayers resolves it via its fixed-point
   // iteration instead (see freezeWindow.test.ts's "a Cover layer's forward reference resolves..."
   // for the numeric verification).
@@ -311,15 +290,13 @@ describe('endTrigger validity', () => {
       return { query, controller: new StickyScrollTrigger(query('.root')) };
     };
 
-    it('throws when a Scene layer points at a later layer (names both trigger and endTrigger)', () => {
+    it('throws when a Scene layer points at a later layer', () => {
       const { query, controller } = setupThreeInOrder();
 
       controller.createStickyTrigger({ trigger: query('.s1'), end: 'top top', endTrigger: query('.s2') });
       controller.createStickyTrigger({ trigger: query('.s2'), end: '+=100' });
 
-      expect(() => controller.refresh()).toThrow(
-        /trigger <section\.s1>.*endTrigger \(<section\.s2>\).*positioned later in DOM order/,
-      );
+      expect(() => controller.refresh()).toThrow(/positioned later in DOM order/);
     });
 
     it('resolves (does not throw) when a cover layer points at a later layer, since a cover layer creates no padding', () => {
@@ -2162,35 +2139,17 @@ describe('cover z-order lift re-sync', () => {
 // layer's own padding/spacer would contribute to the very document height 'max' measures, so the
 // equation never converges, so these reject it with a clear error instead of producing an unstable
 // value.
+// Which offset each spelling resolves to, and that a cover layer accepts them, belongs to
+// measure.test.ts: resolveEndSpec is where the keyword is read.
 describe('\'max\' end keyword', () => {
-  it('createOverlapScroll accepts end: \'max\' without throwing', () => {
-    const { query, controller } = setup();
-
-    controller.createOverlapScroll({ trigger: query('.scene'), cover: query('.inside'), end: 'max' });
-
-    expect(() => controller.refresh()).not.toThrow();
-  });
-
-  it('createOverlapScroll accepts end: \'max-=100\' without throwing', () => {
-    const { query, controller } = setup();
-
-    controller.createOverlapScroll({
-      trigger: query('.scene'),
-      cover: query('.inside'),
-      end: 'max-=100',
-    });
-
-    expect(() => controller.refresh()).not.toThrow();
-  });
-
+  // The Scene layer rejection is measure.ts's, so this covers reachability only. The pin
+  // rejection below is index.ts's own, which is why that one keeps its full message here.
   it('createStickyTrigger rejects end: \'max\' (a Scene layer\'s own dwell padding is self-referential)', () => {
     const { query, controller } = setup();
 
     controller.createStickyTrigger({ trigger: query('.scene'), end: 'max' });
 
-    expect(() => controller.refresh()).toThrow(
-      /trigger <section\.scene>.*end "max".*'max'.*isn't supported.*createOverlapScroll/,
-    );
+    expect(() => controller.refresh()).toThrow(/end "max".*Use createOverlapScroll/s);
   });
 
   it('createStickyPin rejects end: \'max\' (the pin\'s own spacer is self-referential)', () => {
@@ -2469,16 +2428,15 @@ describe('\'max\' end keyword', () => {
 // scroll position, entirely unrelated to any element. A cover layer's stickyTop is computed
 // relative to its own wrapper's natural position (see freezeWindow.ts), which has no equivalent
 // for an absolute value, so createOverlapScroll rejects it, unlike a Scene layer's stickyTop,
-// which is already document-absolute and works with either.
+// which is already document-absolute and works with either. The rejection is measure.ts's, so the
+// two below cover reachability only, once per spelling a caller can pass.
 describe('absolute start (a bare number)', () => {
   it('createOverlapScroll rejects a numeric-string start', () => {
     const { query, controller } = setup();
 
     controller.createOverlapScroll({ trigger: query('.scene'), cover: query('.inside'), start: '500' });
 
-    expect(() => controller.refresh()).toThrow(
-      /trigger <section\.scene>.*start "500".*absolute scroll position.*isn't supported/,
-    );
+    expect(() => controller.refresh()).toThrow(/absolute scroll position/);
   });
 
   it('createOverlapScroll rejects a plain-number start', () => {
@@ -2487,14 +2445,6 @@ describe('absolute start (a bare number)', () => {
     controller.createOverlapScroll({ trigger: query('.scene'), cover: query('.inside'), start: 500 });
 
     expect(() => controller.refresh()).toThrow(/absolute scroll position/);
-  });
-
-  it('createStickyTrigger accepts a numeric-string start without throwing', () => {
-    const { query, controller } = setup();
-
-    controller.createStickyTrigger({ trigger: query('.scene'), start: '500' });
-
-    expect(() => controller.refresh()).not.toThrow();
   });
 
   // freezeStart = start.value directly for an absolute start (see freezeWindow.ts's runPass),
@@ -2513,23 +2463,9 @@ describe('absolute start (a bare number)', () => {
 // Unlike start, end used to treat a bare number as a dwell distance (an intentional, documented
 // divergence from GSAP). That exception was withdrawn: end now matches GSAP's own "bare number =
 // absolute scroll position" too, the same as start.
+// That both spellings are accepted, on either kind of layer (unlike start, end has no cover-layer
+// restriction), belongs to measure.test.ts.
 describe('absolute end (a bare number)', () => {
-  it('createStickyTrigger accepts a numeric-string end without throwing', () => {
-    const { query, controller } = setup();
-
-    controller.createStickyTrigger({ trigger: query('.scene'), end: '500' });
-
-    expect(() => controller.refresh()).not.toThrow();
-  });
-
-  it('createOverlapScroll accepts a numeric-string end without throwing (unlike start, end has no cover-layer restriction)', () => {
-    const { query, controller } = setup();
-
-    controller.createOverlapScroll({ trigger: query('.scene'), cover: query('.inside'), end: 500 });
-
-    expect(() => controller.refresh()).not.toThrow();
-  });
-
   // freezeEnd = end.value directly for an absolute end (clamped to freezeStart, see
   // freezeWindow.ts's runPass), unrelated to freezeStart or any preceding dwell, so unlike a
   // clause end this doesn't need real layout to verify: it's exact even in jsdom.

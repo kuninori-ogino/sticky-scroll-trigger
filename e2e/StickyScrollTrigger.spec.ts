@@ -473,8 +473,8 @@ test('createResolvedTrigger\'s spaced \'+=\' end lands where the clause it compo
   expect(result.spaced - result.baseless).toBeCloseTo(result.endTriggerHeight, 0);
 });
 
-// The pin resolves its own end through resolvePinReleaseTop rather than resolveEndSpec, so this
-// covers the same prefix on a separate path from the clause one above.
+// The pin resolves its own end through index.ts's resolvePinReleaseTop rather than measure.ts's
+// resolveEndSpec, so this covers the same prefix on a separate path from the clause one above.
 test('createStickyPin\'s spaced \'+=\' end takes the start clause\'s element token too', async ({
   page,
 }) => {

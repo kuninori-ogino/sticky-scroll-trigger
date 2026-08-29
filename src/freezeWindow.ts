@@ -33,7 +33,7 @@ export type EndSpec
     // A bare number, unrelated to freezeStart (same rule as StartSpec's absolute mode above).
     | { mode: 'absolute'; value: number }
     // GSAP's 'max' notation: an offset (px) from the document's max scroll position. Cover layers
-    // only, since a Scene layer's own dwell padding would make it self-referential (index.ts's
+    // only, since a Scene layer's own dwell padding would make it self-referential (measure.ts's
     // resolveEndSpec rejects that).
     | { mode: 'max'; offsetPx: number }
     | {
@@ -144,9 +144,9 @@ const runPass = (
 
     switch (measurement.end.mode) {
       case 'auto':
-        // 'auto' only occurs on a cover layer, and index.ts's resolveStartSpec rejects an absolute
-        // start there, since a cover layer's stickyTop needs a clause's anchorOffset. The check
-        // below guards that invariant; it isn't an expected runtime path.
+        // 'auto' only occurs on a cover layer, and measure.ts's resolveStartSpec rejects an
+        // absolute start there, since a cover layer's stickyTop needs a clause's anchorOffset. The
+        // check below guards that invariant; it isn't an expected runtime path.
         if (measurement.start.mode !== 'clause') {
           throw new Error(
             'StickyScrollTrigger: internal error: an absolute start reached \'auto\' end mode, '
