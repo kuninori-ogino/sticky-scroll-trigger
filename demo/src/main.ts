@@ -87,7 +87,7 @@ if (partialStickyPin) {
 }
 
 // A pin spanning a scene section: a layout with scene 3 placed between pin and endTrigger,
-// demonstrating that the spacer height accounting for the dwell is computed correctly.
+// which confirms the spacer height accounts for the dwell.
 const spanScenePin = document.querySelector<HTMLElement>('.spanScenePin__pin');
 
 if (spanScenePin) {

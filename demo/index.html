@@ -29,7 +29,7 @@
         <section class="scene scene--1" data-progress-scene>
           <div class="scene__bar"></div>
           <h2>Scene 1</h2>
-          <p>Equivalent to <code>data-gsap-progress</code>. It animates width and color through <code>--progress</code>.</p>
+          <p>Registered with <code>createStickyTrigger</code>, which holds this section in place for the dwell its <code>end</code> sets. A scrubbed animation runs over that dwell and drives width and color through <code>--progress</code>.</p>
           <p>This link is only clickable while Scene 1 is pinned, so it always jumps from mid-dwell: <a href="#link">Jump to the "Plain GSAP ScrollTrigger" section</a>.</p>
         </section>
 
@@ -49,7 +49,7 @@
         <section class="scene scene--2" data-progress-scene>
           <div class="scene__bar"></div>
           <h2>Scene 2</h2>
-          <p>A second sticky-pin effect, independent of Scene 1. It rises to cover <code>overlapScroll__trigger</code> while also being pinned itself.</p>
+          <p>A second <code>createStickyTrigger</code> layer, independent of Scene 1. It rises to cover <code>overlapScroll__trigger</code> while also being pinned itself.</p>
         </section>
 
         <section class="filler">
@@ -72,7 +72,7 @@
         <!-- Everything from here down is a plain GSAP ScrollTrigger effect that uses neither this library's createStickyTrigger nor createOverlapScroll. -->
         <section id="link" class="plainSection plainSection--fade">
           <h2>Plain GSAP ScrollTrigger</h2>
-          <p>This section uses only standard <code>gsap.fromTo</code> + <code>scrollTrigger</code> scrub, without <code>createStickyTrigger</code> or <code>createOverlapScroll</code>. Position is corrected via <code>resolveScrollPosition()</code>, so it stays in sync with the actual scroll distance.</p>
+          <p>This section uses only standard <code>gsap.fromTo</code> + <code>scrollTrigger</code> scrub, without <code>createStickyTrigger</code> or <code>createOverlapScroll</code>. Position is corrected via <code>createResolvedTrigger</code>, so it stays in sync with the actual scroll distance.</p>
           <div class="plainSection__box">fromTo + scrub</div>
         </section>
 
@@ -81,15 +81,14 @@
         </section>
 
         <section class="plainSection plainSection--partialSticky">
-          <h2>Partially sticky section (createStickyPin)</h2>
-          <p>Pinned with <code>createStickyPin()</code>. The label on the left remains pinned beyond this section's own body, through the next two sections (the filler and then the closing section). Internally this is pure <code>position:sticky</code>, with pinning handled entirely by CSS, not GSAP.</p>
+          <h2>Partially sticky section</h2>
+          <p>Pinned with <code>createStickyPin</code>. The label on the left remains pinned beyond this section's own body, through the next two sections (the filler and then the closing section). Internally this is pure <code>position:sticky</code>, with pinning handled entirely by CSS, not GSAP.</p>
           <div class="partialSticky">
             <aside class="partialSticky__pin">
               <p>Just this part stays<br>pinned until<br>the next section</p>
             </aside>
             <div class="partialSticky__content">
-              <p>The release point is defined by <code>endTrigger</code> (the next filler section) and an <code>end</code> clause (GSAP's standard position syntax). It stays pinned until the filler's bottom edge arrives.</p>
-              <p>Notice how it stays pinned well past the label's own section, spanning the next two sections: the filler and the closing section.</p>
+              <p><code>endTrigger</code>, the next filler section, sets the release point through an <code>end</code> clause in GSAP's standard position syntax. The label stays pinned until the filler's bottom edge arrives.</p>
             </div>
           </div>
         </section>
@@ -100,9 +99,10 @@
 
         <!-- A layout with a scene layer placed between createStickyPin's trigger and endTrigger (see StickyScrollTrigger.spec.ts). -->
         <section class="plainSection plainSection--spanScene">
-          <h2>A pin that spans a scene section (createStickyPin)</h2>
+          <h2>A pin that spans a scene section</h2>
           <p>
-            The label on the left stays pinned through this section's own body and across "scene
+            Pinned with <code>createStickyPin</code>, like the section above. The label on the
+            left stays pinned through this section's own body and across "scene
             3" right after it (a layer that stretches the document via
             <code>createStickyTrigger</code>'s dwell), releasing at the next filler.
           </p>
@@ -111,7 +111,7 @@
               <p>Stays pinned<br>across<br>scene 3</p>
             </aside>
             <div class="spanScenePin__content">
-              <p>The "scene 3" section right after this one pins and animates through a regular <code>createStickyTrigger</code>, independent of this pin. The pinned label remains layered above it and moves together while Scene 3 is pinned.</p>
+              <p>The "scene 3" section right after this one pins and animates through a regular <code>createStickyTrigger</code>, independent of this pin. The pinned label stays layered above Scene 3 and moves with it during that pin.</p>
             </div>
           </div>
         </section>
@@ -119,7 +119,7 @@
         <section class="scene scene--3" data-progress-scene>
           <div class="scene__bar"></div>
           <h2>Scene 3</h2>
-          <p>Used to confirm that this dwell is included in <code>spanScenePin__pin</code>'s spacer height.</p>
+          <p>This section checks that <code>spanScenePin__pin</code>'s spacer height includes the dwell this <code>createStickyTrigger</code> layer adds.</p>
         </section>
 
         <section class="filler spanScenePin__endTrigger">

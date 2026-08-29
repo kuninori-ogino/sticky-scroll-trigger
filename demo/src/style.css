@@ -267,7 +267,7 @@ code {
 }
 
 /* At the narrow end of partialSticky__pin's own cqw-based shrinking (see its comment above),
-   this column has too little room left for an 18px-wide identifier like createStickyTrigger, so
+   this column has too little room left for a long identifier like createStickyTrigger at 18px, so
    it falls back to overflow-wrap:anywhere's mid-word break. Shrinking code here too (scaled off
    this column's own, narrower width) keeps most identifiers on one line instead. */
 .partialSticky__content code {
