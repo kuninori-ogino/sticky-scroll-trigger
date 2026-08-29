@@ -121,7 +121,10 @@ const usesCssRamp = supportsScrollDrivenAnimations && supportsConstructedStyleSh
 // Builds the stylesheet that ramps one registered custom property per Scene layer across that
 // layer's own freeze window. Written as text (rather than through the Web Animations API) so the
 // custom-property animation runs through the same CSS path that was verified in both engines.
-const buildStylesheet = (instanceId: string, scenes: readonly SceneDwell[]): string => {
+//
+// Exported for scrollMargin.test.ts alone: jsdom has no adoptedStyleSheets, so a sync() there never
+// reaches this, leaving the text it produces checkable only by calling it directly.
+export const buildStylesheet = (instanceId: string, scenes: readonly SceneDwell[]): string => {
   const declarations: string[] = [];
   const animations: string[] = [];
   const timelines: string[] = [];

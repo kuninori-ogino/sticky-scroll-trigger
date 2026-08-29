@@ -2566,21 +2566,16 @@ describe('rejecting duplicate registration', () => {
   });
 });
 
-// scroll-margin-top synchronization (see src/scrollMargin.ts). jsdom has no layout, so every
-// documentTop comes out 0 and the dwell has to come from '+=' notation, which resolves without
-// measuring. What's checked here is the bookkeeping: which elements get written to, what value,
-// and that everything is handed back. Whether the resulting numbers actually make the browser's
-// own scroll-into-view land correctly is e2e/StickyScrollTrigger.spec.ts's job. That file also
-// covers the `scroll` listener fallback for engines without `animation-timeline: scroll()`
-// support, since jsdom's own CSS.supports is a syntax-only stub that reports that combination as
-// supported regardless of what it's actually asked about, making the fallback branch unreachable
-// here.
+// What reaches scrollMargin.ts through this module: the option, and the two calls. Its own
+// bookkeeping (the lag arithmetic, the author's value, handing targets back) is
+// scrollMargin.test.ts's, which calls sync() directly with real freeze windows rather than working
+// around jsdom's layout-free zeros the way the '+=800' below has to.
 describe('scroll-margin-top synchronization', () => {
   // Each controller registers its own custom-property names off a module-level counter, so the
   // exact index depends on how many instances the whole suite has built by now.
-  const correction = (lagPx: number, authorPx = 0) =>
+  const correction = (lagPx: number) =>
     new RegExp(
-      `^calc\\(${authorPx}px \\+ var\\(--sst-scroll-margin-top-offset, 0px\\) \\+ var\\(--sst\\d+-c0, 0px\\) `
+      '^calc\\(0px \\+ var\\(--sst-scroll-margin-top-offset, 0px\\) \\+ var\\(--sst\\d+-c0, 0px\\) '
       + `- ${lagPx}px\\)$`,
     );
 
@@ -2601,89 +2596,27 @@ describe('scroll-margin-top synchronization', () => {
     return { query, controller };
   };
 
-  it('writes a correction that subtracts the dwell preceding each target', () => {
+  // The one proof that refresh() reaches sync() at all, and with the freeze windows its passes
+  // settled rather than the raw '+=800': #before sits above the scene, so no dwell precedes it,
+  // while #after is delayed by the full 800.
+  it('writes a correction from the freeze windows refresh() settled', () => {
     const { query, controller } = setupAnchors();
 
     controller.refresh();
 
-    // #before sits above the scene, so no dwell precedes it; #after is delayed by the full 800.
-    // Both still carry the scroll-dependent term, which is what makes a jump started mid-page
-    // land in the same place as one started from the top.
     expect(query('#before').style.scrollMarginTop).toMatch(correction(0));
     expect(query('#after').style.scrollMarginTop).toMatch(correction(800));
   });
 
+  // Stays here rather than moving with the rest: it's the shared container this module hands
+  // sync() that keeps the search off the whole document, and scrollMargin.test.ts builds a root of
+  // its own, so a sync given document.documentElement would go unnoticed there.
   it('leaves elements outside the shared container alone', () => {
     const { query, controller } = setupAnchors();
 
     controller.refresh();
 
     expect(query('#outside').style.scrollMarginTop).toBe('');
-  });
-
-  it('folds an author\'s own scroll-margin-top into the correction instead of replacing it', () => {
-    const { query, controller } = setupAnchors();
-
-    query('#after').style.scrollMarginTop = '40px';
-    controller.refresh();
-
-    expect(query('#after').style.scrollMarginTop).toMatch(correction(800, 40));
-  });
-
-  it('keeps the same value across repeated refreshes when nothing changed', () => {
-    const { query, controller } = setupAnchors();
-
-    query('#after').style.scrollMarginTop = '40px';
-    controller.refresh();
-
-    const first = query('#after').style.scrollMarginTop;
-
-    controller.refresh();
-    controller.refresh();
-
-    expect(query('#after').style.scrollMarginTop).toBe(first);
-  });
-
-  // Regression test: reading the author's value back on a later refresh would, without a reset
-  // first, return this module's own calc() from the previous refresh rather than the author's
-  // real value, so a later refresh() used to skip re-reading entirely and stayed stuck on
-  // whatever the author's value was the first time. sync() now resets each target to its
-  // pre-module inline value before re-reading, so a later author change (a responsive header
-  // height, or JS updating the same custom property) is picked up on the very next refresh().
-  // Driven through a stylesheet rule rather than the target's own inline style: the reset puts
-  // the element's inline scroll-margin-top back to what it was before this module ever touched it
-  // (empty, here), so only a change that's still visible after that reset (like a stylesheet
-  // rule) exercises the fix. Overwriting the target's inline value directly would just be
-  // undone by that same reset, and isn't the scenario this guards.
-  it('picks up a later change to the author\'s own scroll-margin-top', () => {
-    const { query, controller } = setupAnchors();
-    const style = document.createElement('style');
-
-    style.textContent = '#after { scroll-margin-top: 40px }';
-    document.head.appendChild(style);
-    controller.refresh();
-
-    expect(query('#after').style.scrollMarginTop).toMatch(correction(800, 40));
-
-    style.textContent = '#after { scroll-margin-top: 120px }';
-    controller.refresh();
-
-    expect(query('#after').style.scrollMarginTop).toMatch(correction(800, 120));
-
-    style.remove();
-  });
-
-  // --sst-scroll-margin-top-offset (scrollMargin.ts's "Nudging the landing spot on purpose"): a
-  // fixed var() term this module always emits, independent of the author's own
-  // scroll-margin-top. jsdom can't verify that the browser actually reads it live (that's e2e's
-  // job), only that the term is present in the calc() this module writes, in every case
-  // correction()'s regex already covers.
-  it('always includes the --sst-scroll-margin-top-offset term in the written calc()', () => {
-    const { query, controller } = setupAnchors();
-
-    controller.refresh();
-
-    expect(query('#after').style.scrollMarginTop).toContain('var(--sst-scroll-margin-top-offset, 0px)');
   });
 
   it('hands every target back on destroy', () => {
@@ -2718,34 +2651,5 @@ describe('scroll-margin-top synchronization', () => {
     expect(() => setupAnchors({ scrollMarginTargets: ':not(' })).toThrow(
       'scrollMarginTargets ":not(" is not a valid CSS selector',
     );
-  });
-
-  // A target that stops matching (its id removed, say) has to be handed back rather than left
-  // carrying a correction nothing updates any more.
-  it('restores a target that no longer matches the selector', () => {
-    const { query, controller } = setupAnchors();
-
-    controller.refresh();
-
-    const after = query('#after');
-
-    expect(after.style.scrollMarginTop).not.toBe('');
-
-    after.removeAttribute('id');
-    controller.refresh();
-
-    expect(after.style.scrollMarginTop).toBe('');
-  });
-
-  // A Scene layer with no dwell contributes no ramp and no lag, so there's nothing to declare.
-  it('writes nothing when no layer has any dwell', () => {
-    document.body.innerHTML = '<div class="root"><section class="scene"></section><div id="a"></div></div>';
-
-    const controller = new StickyScrollTrigger(query('.root'));
-
-    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=0' });
-    controller.refresh();
-
-    expect(query('#a').style.scrollMarginTop).toBe('');
   });
 });
