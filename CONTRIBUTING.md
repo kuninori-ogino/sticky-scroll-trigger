@@ -44,7 +44,7 @@ Husky hooks are set up automatically by the `prepare` script during `npm ci`: `p
 Test split:
 
 - Node (Vitest): `position.test.ts`, `freezeWindow.test.ts`
-- jsdom (Vitest): `dom.test.ts`, `structure.test.ts`, `index.test.ts`
+- jsdom (Vitest): `dom.test.ts`, `structure.test.ts`, `measure.test.ts`, `index.test.ts`
 - Real browser (Playwright): `e2e/StickyScrollTrigger.spec.ts`
 
 Rule of thumb: layout-dependent behavior (for example `documentTop`) belongs in e2e.
