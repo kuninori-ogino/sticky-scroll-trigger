@@ -20,8 +20,8 @@ let live: ReturnType<typeof createScrollMarginSync>[] = [];
 
 // restore() is what takes the scroll listener back off, so every sync built here is torn down
 // rather than left listening for the rest of the file.
-const createSync = (root: HTMLElement = query('.root')) => {
-  const sync = createScrollMarginSync(root);
+const createSync = (targetSelector: string | null = 'div[id]', root = query('.root')) => {
+  const sync = createScrollMarginSync(root, targetSelector);
 
   live.push(sync);
 
@@ -81,7 +81,7 @@ describe('sync', () => {
     const root = query('.root');
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 0, 800)], root, 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 800)], root);
 
     // #before sits above the only layer, so nothing delays it; #middle and #after are both behind
     // its full 800. Every target still carries the scroll-dependent term, which is what makes a
@@ -97,7 +97,7 @@ describe('sync', () => {
     const root = query('.root');
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 0, 300), dwell(query('.b'), 300, 800)], root, 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 300), dwell(query('.b'), 300, 800)], root);
 
     expect(query('#before').style.scrollMarginTop).toBe(correction(root, 0, { ramps: 2 }));
     expect(query('#middle').style.scrollMarginTop).toBe(correction(root, 300, { ramps: 2 }));
@@ -108,9 +108,9 @@ describe('sync', () => {
   // yet, and a target that is itself a layer's trigger is reached before its own dwell starts.
   it('ignores a layer at or after the target', () => {
     const root = query('.root');
-    const sync = createSync();
+    const sync = createSync('#before, .a, .b');
 
-    sync.sync([dwell(query('.a'), 0, 300), dwell(query('.b'), 300, 800)], root, '#before, .a, .b');
+    sync.sync([dwell(query('.a'), 0, 300), dwell(query('.b'), 300, 800)], root);
 
     expect(query('#before').style.scrollMarginTop).toBe(correction(root, 0, { ramps: 2 }));
     expect(query('.a').style.scrollMarginTop).toBe(correction(root, 0, { ramps: 2 }));
@@ -124,7 +124,7 @@ describe('sync', () => {
     const root = query('.root');
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 500, 500), dwell(query('.b'), 500, 1000)], root, 'div[id]');
+    sync.sync([dwell(query('.a'), 500, 500), dwell(query('.b'), 500, 1000)], root);
 
     expect(query('#middle').style.scrollMarginTop).toBe(correction(root, 0));
     expect(query('#after').style.scrollMarginTop).toBe(correction(root, 500));
@@ -133,15 +133,15 @@ describe('sync', () => {
   it('writes nothing when no layer has any dwell', () => {
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 500, 500)], query('.root'), 'div[id]');
+    sync.sync([dwell(query('.a'), 500, 500)], query('.root'));
 
     expect(query('#after').style.scrollMarginTop).toBe('');
   });
 
   it('writes nothing when the target selector is null', () => {
-    const sync = createSync();
+    const sync = createSync(null);
 
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'), null);
+    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
 
     expect(query('#after').style.scrollMarginTop).toBe('');
   });
@@ -151,7 +151,7 @@ describe('sync', () => {
   it('writes nothing when there is no host', () => {
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 0, 800)], null, 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 800)], null);
 
     expect(query('#after').style.scrollMarginTop).toBe('');
   });
@@ -159,15 +159,15 @@ describe('sync', () => {
   it('leaves elements outside the root alone', () => {
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'), 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
 
     expect(query('#outside').style.scrollMarginTop).toBe('');
   });
 
   it('honors the target selector it is given', () => {
-    const sync = createSync();
+    const sync = createSync('#after');
 
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'), '#after');
+    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
 
     expect(query('#before').style.scrollMarginTop).toBe('');
     expect(query('#after').style.scrollMarginTop).not.toBe('');
@@ -178,7 +178,7 @@ describe('sync', () => {
     const sync = createSync();
 
     query('#after').style.scrollMarginTop = '40px';
-    sync.sync([dwell(query('.a'), 0, 800)], root, 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 800)], root);
 
     expect(query('#after').style.scrollMarginTop).toBe(correction(root, 800, { authorPx: 40 }));
   });
@@ -189,9 +189,9 @@ describe('sync', () => {
     const scenes = [dwell(query('.a'), 0, 800)];
 
     query('#after').style.scrollMarginTop = '40px';
-    sync.sync(scenes, root, 'div[id]');
-    sync.sync(scenes, root, 'div[id]');
-    sync.sync(scenes, root, 'div[id]');
+    sync.sync(scenes, root);
+    sync.sync(scenes, root);
+    sync.sync(scenes, root);
 
     expect(query('#after').style.scrollMarginTop).toBe(correction(root, 800, { authorPx: 40 }));
   });
@@ -206,12 +206,12 @@ describe('sync', () => {
 
     style.textContent = '#after { scroll-margin-top: 40px }';
     document.head.appendChild(style);
-    sync.sync([dwell(query('.a'), 0, 800)], root, 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 800)], root);
 
     expect(query('#after').style.scrollMarginTop).toBe(correction(root, 800, { authorPx: 40 }));
 
     style.textContent = '#after { scroll-margin-top: 120px }';
-    sync.sync([dwell(query('.a'), 0, 800)], root, 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 800)], root);
 
     expect(query('#after').style.scrollMarginTop).toBe(correction(root, 800, { authorPx: 120 }));
   });
@@ -222,9 +222,9 @@ describe('sync', () => {
     const sync = createSync();
     const after = query('#after');
 
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'), 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
     after.removeAttribute('id');
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'), 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
 
     expect(after.style.scrollMarginTop).toBe('');
   });
@@ -235,8 +235,8 @@ describe('sync', () => {
     const sync = createSync();
 
     query('#after').style.scrollMarginTop = '40px';
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'), 'div[id]');
-    sync.sync([dwell(query('.a'), 0, 0)], query('.root'), 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
+    sync.sync([dwell(query('.a'), 0, 0)], query('.root'));
 
     expect(query('#before').style.scrollMarginTop).toBe('');
     expect(query('#after').style.scrollMarginTop).toBe('40px');
@@ -247,11 +247,11 @@ describe('sync', () => {
     const inner = query('#before');
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 0, 800)], root, 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 800)], root);
 
     const id = instanceIdOf(root);
 
-    sync.sync([dwell(query('.a'), 0, 800)], inner, 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 800)], inner);
 
     expect(root.hasAttribute(`data-${id}`)).toBe(false);
     expect(inner.hasAttribute(`data-${id}`)).toBe(true);
@@ -263,7 +263,7 @@ describe('restore', () => {
     const sync = createSync();
 
     query('#after').style.scrollMarginTop = '40px';
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'), 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
     sync.restore();
 
     expect(query('#before').style.scrollMarginTop).toBe('');
@@ -282,7 +282,7 @@ describe('restore', () => {
     // removeEventListener any other function leaves the original attached.
     const attached = addListener.mock.calls.find(([type]) => type === 'scroll')![1];
 
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'), 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
     sync.restore();
 
     expect(removeListener).toHaveBeenCalledWith('scroll', attached);
@@ -292,7 +292,7 @@ describe('restore', () => {
     const root = query('.root');
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 0, 800)], root, 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 800)], root);
 
     const id = instanceIdOf(root);
 
@@ -313,7 +313,7 @@ describe('the JS ramp fallback', () => {
     const sync = createSync();
 
     setScrollY(600);
-    sync.sync([dwell(query('.a'), 0, 300), dwell(query('.b'), 500, 1000)], root, 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 300), dwell(query('.b'), 500, 1000)], root);
 
     // The first layer's window is behind us, so all 300 of its dwell is consumed; the second is
     // 100 into its own.
@@ -325,7 +325,7 @@ describe('the JS ramp fallback', () => {
     const root = query('.root');
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 500, 1000)], root, 'div[id]');
+    sync.sync([dwell(query('.a'), 500, 1000)], root);
 
     expect(consumed(root, 0)).toBe('0px');
 
@@ -336,13 +336,23 @@ describe('the JS ramp fallback', () => {
     expect(consumed(root, 0)).toBe('500px');
   });
 
+  // A null selector opts out of the module entirely, so the listener would spend the instance's
+  // whole life firing on every scroll with nothing to write to.
+  it('attaches no listener when the target selector is null', () => {
+    const addListener = vi.spyOn(window, 'addEventListener');
+
+    createSync(null);
+
+    expect(addListener.mock.calls.map(([type]) => type)).not.toContain('scroll');
+  });
+
   // Left at whatever it last read rather than reset, since restore() takes the host itself out of
   // the picture: the property is only ever read through a target that no longer references it.
   it('stops following the scroll once restored', () => {
     const root = query('.root');
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 0, 500)], root, 'div[id]');
+    sync.sync([dwell(query('.a'), 0, 500)], root);
     setScrollY(200);
 
     const id = instanceIdOf(root);

@@ -172,9 +172,19 @@ export const buildStylesheet = (instanceId: string, scenes: readonly SceneDwell[
 /**
  * Creates the per-controller state for keeping `scroll-margin-top` in sync. `sync` is called at
  * the end of every `refresh()`, once freeze windows are final; `restore` undoes everything.
+ *
+ * `targetSelector` is fixed for the instance's lifetime, which is what lets the fallback listener
+ * below be decided once here rather than per sync(). A null selector opts out of the whole module.
  */
-export const createScrollMarginSync = (rootElement: HTMLElement) => {
+export const createScrollMarginSync = (
+  rootElement: HTMLElement,
+  targetSelector: string | null,
+) => {
   const instanceId = `sst${nextInstanceSuffix++}`;
+  // Whether this instance drives the ramps itself. A null selector means sync() returns before it
+  // would ever want them, so the listener is never attached rather than left firing as a no-op
+  // until destroy().
+  const usesJsRamp = !usesCssRamp && targetSelector !== null;
   const snapshots = new WeakMap<HTMLElement, TargetSnapshot>();
   // Elements currently carrying a value written here, so a target that stops matching the
   // selector (its id removed, say) gets handed back rather than left with a stale correction.
@@ -202,7 +212,7 @@ export const createScrollMarginSync = (rootElement: HTMLElement) => {
     });
   };
 
-  if (!usesCssRamp) window.addEventListener('scroll', applyJsRamp, { passive: true });
+  if (usesJsRamp) window.addEventListener('scroll', applyJsRamp, { passive: true });
 
   const restoreTarget = (target: HTMLElement) => {
     const snapshot = snapshots.get(target);
@@ -223,11 +233,7 @@ export const createScrollMarginSync = (rootElement: HTMLElement) => {
   };
 
   return {
-    sync(
-      scenes: readonly SceneDwell[],
-      host: HTMLElement | null,
-      targetSelector: string | null,
-    ): void {
+    sync(scenes: readonly SceneDwell[], host: HTMLElement | null): void {
       // A zero-length freeze window contributes nothing, and an animation-range whose start
       // equals its end has no meaningful ramp, so those layers are dropped rather than emitted.
       const ramps = scenes.filter((scene) => scene.freezeEnd > scene.freezeStart);
@@ -250,7 +256,7 @@ export const createScrollMarginSync = (rootElement: HTMLElement) => {
       // scroll event that may never come before the next scroll-into-view. Skipped where the CSS
       // animation already handles it: writing there wouldn't be wrong, since the animation wins
       // the cascade over an inline value either way, just a pointless write on every refresh().
-      if (!usesCssRamp) {
+      if (usesJsRamp) {
         jsRamps = ramps;
         jsHost = host;
         applyJsRamp();
@@ -307,7 +313,7 @@ export const createScrollMarginSync = (rootElement: HTMLElement) => {
     },
 
     restore(): void {
-      if (!usesCssRamp) window.removeEventListener('scroll', applyJsRamp);
+      if (usesJsRamp) window.removeEventListener('scroll', applyJsRamp);
 
       written.forEach(restoreTarget);
       written = new Set();

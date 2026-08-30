@@ -138,28 +138,30 @@ export default class StickyScrollTrigger {
   // Keeps scroll-margin-top on same-page-link targets in step with the current freeze windows,
   // so the browser's own scroll-into-view accounts for Scene layer dwell (see scrollMargin.ts).
   #scrollMarginSync: ReturnType<typeof createScrollMarginSync>;
-  #scrollMarginTargets: string | null;
 
   constructor(root: string | HTMLElement, options: StickyScrollTriggerOptions = {}) {
     this.#rootElement = resolveRoot(root);
-    this.#scrollMarginSync = createScrollMarginSync(this.#rootElement);
-    this.#scrollMarginTargets = options.scrollMarginTargets === undefined
+
+    const scrollMarginTargets = options.scrollMarginTargets === undefined
       ? '[id]'
       : options.scrollMarginTargets;
 
     // Validated here rather than inside refresh(): refresh() runs from GSAP's own dispatch, so
     // an uncaught SyntaxError from querySelectorAll on an invalid selector would abort every
-    // other ScrollTrigger's refresh on the page.
-    if (this.#scrollMarginTargets !== null) {
+    // other ScrollTrigger's refresh on the page. Before createScrollMarginSync too, so a throw
+    // leaves nothing of this instance attached to the window.
+    if (scrollMarginTargets !== null) {
       try {
-        this.#rootElement.querySelectorAll(this.#scrollMarginTargets);
+        this.#rootElement.querySelectorAll(scrollMarginTargets);
       } catch {
         throw new Error(
-          `StickyScrollTrigger: scrollMarginTargets "${this.#scrollMarginTargets}" is not a `
+          `StickyScrollTrigger: scrollMarginTargets "${scrollMarginTargets}" is not a `
           + 'valid CSS selector.',
         );
       }
     }
+
+    this.#scrollMarginSync = createScrollMarginSync(this.#rootElement, scrollMarginTargets);
   }
 
   #unbuild() {
@@ -651,7 +653,6 @@ export default class StickyScrollTrigger {
         .filter((layer): layer is SceneLayer => layer.kind === 'scene')
         .map(({ trigger, freezeStart, freezeEnd }) => ({ trigger, freezeStart, freezeEnd })),
       this.#outermostContainer,
-      this.#scrollMarginTargets,
     );
   }
 
