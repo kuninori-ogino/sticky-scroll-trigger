@@ -131,7 +131,8 @@ export default class StickyScrollTrigger {
   #destroyed = false;
   #rebuildScheduled = false;
   // The ScrollTrigger class, read at runtime off the `self` GSAP passes to its callbacks, so gsap
-  // is never imported (see #scheduleRebuild). Null until the first onKill/onRefreshInit.
+  // is never imported (see #scheduleRebuild). Null until the first onKill/onRefreshInit, and
+  // again after destroy().
   #scrollTriggerClass: { refresh(safe?: boolean): void } | null = null;
   // Independent of Scene/Cover layers, implemented with plain position:sticky alone.
   #pinLayers: PinLayer[] = [];
@@ -207,7 +208,12 @@ export default class StickyScrollTrigger {
   // Reads the ScrollTrigger class off the `self` that onKill/onRefreshInit pass in, so gsap is
   // never imported (see #scheduleRebuild). Shared by #registerLayer's and createStickyPin's
   // handlers.
+  //
+  // Does nothing once destroyed: destroy() leaves these handlers registered, and a later kill()
+  // or refreshInit would otherwise re-capture the class.
   #captureScrollTriggerClass(self: ScrollTrigger) {
+    if (this.#destroyed) return;
+
     this.#scrollTriggerClass = self.constructor as unknown as {
       refresh(safe?: boolean): void;
     };
@@ -1157,5 +1163,6 @@ export default class StickyScrollTrigger {
     this.#builtLayers = [];
     this.#pinLayers.forEach((layer) => this.#unwrapPinLayer(layer));
     this.#pinLayers.length = 0;
+    this.#scrollTriggerClass = null;
   }
 }
