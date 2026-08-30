@@ -2653,3 +2653,106 @@ describe('scroll-margin-top synchronization', () => {
     );
   });
 });
+
+// Two properties of refresh()'s pass order that leave no trace in the DOM, which is why the tests
+// below watch writes instead of reading a result. Comments in index.ts are their only other
+// record, so any structural change to refresh() has to keep these passing.
+describe('refresh() pass ordering', () => {
+  // Shadows one CSSOM property on a single element's own style object, logging each write on its
+  // way to the real setter. That setter is on the prototype chain, hence the walk.
+  const traceStyleProperty = (
+    el: HTMLElement,
+    property: string,
+    onWrite: (value: string) => void,
+  ) => {
+    const style = el.style;
+    let node: object | null = style;
+    let descriptor: PropertyDescriptor | undefined;
+
+    while (node && !descriptor) {
+      descriptor = Object.getOwnPropertyDescriptor(node, property);
+      node = Object.getPrototypeOf(node) as object | null;
+    }
+
+    const { get, set } = descriptor!;
+
+    Object.defineProperty(style, property, {
+      configurable: true,
+      get: () => get!.call(style),
+      set: (value: string) => {
+        onWrite(value);
+        set!.call(style, value);
+      },
+    });
+  };
+
+  // Freeze windows are only ever assigned in #refreshScenesAndCovers, so folding the sync into
+  // the Scene pass would compute the same corrections and leave the same DOM behind. The order
+  // separates writing from measuring. #syncScrollMargins writes style on the targets and the
+  // container, then #refreshPins measures layout. An earlier sync recalcs style in between.
+  it('writes scroll margins after the pin pass, not with the Scene pass', () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="scene"></section>
+        <section class="pin"></section>
+        <div id="anchor"></div>
+      </div>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+
+    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=800' });
+    controller.createStickyPin({ trigger: query('.pin') });
+    // This refresh builds and wraps, so the traced one below runs against a steady state.
+    controller.refresh();
+
+    const log: string[] = [];
+
+    // Only #refreshPins writes trigger's own `top`, unlike the spacer height #reservePinSpace
+    // also touches.
+    traceStyleProperty(query('.pin'), 'top', () => log.push('pin'));
+    traceStyleProperty(query('#anchor'), 'scrollMarginTop', () => log.push('scrollMargin'));
+    controller.refresh();
+
+    expect(log).toContain('pin');
+    expect(log).toContain('scrollMargin');
+    expect(log.lastIndexOf('pin')).toBeLessThan(log.indexOf('scrollMargin'));
+  });
+
+  // #refreshPins early-returns before it reaches #resetSceneCoverStickyState, so a controller with
+  // no pins never strips a Scene wrapper on the pin pass's behalf. Bracketing the pin pass with a
+  // Scene-side reset would leave the same DOM, having stripped and restored every wrapper on the
+  // page for nothing.
+  it('strips a Scene wrapper once per refresh when no pin is registered', () => {
+    const countStrips = (register: (controller: StickyScrollTrigger) => void) => {
+      document.body.innerHTML = `
+        <div class="root">
+          <section class="scene"></section>
+          <section class="pin"></section>
+        </div>
+      `;
+
+      const controller = new StickyScrollTrigger(query('.root'));
+
+      controller.createStickyTrigger({ trigger: query('.scene'), end: '+=800' });
+      register(controller);
+      controller.refresh();
+
+      let strips = 0;
+
+      // A Scene layer freezes the whole shared container, so its wrapper is around the root, not
+      // around trigger. Only a reset writes '', so the count is how many passes reached one.
+      traceStyleProperty(query('.root').parentElement!, 'position', (value) => {
+        if (value === '') strips += 1;
+      });
+      controller.refresh();
+
+      return strips;
+    };
+
+    expect(countStrips(() => {})).toBe(1);
+    expect(
+      countStrips((controller) => controller.createStickyPin({ trigger: query('.pin') })),
+    ).toBe(2);
+  });
+});
