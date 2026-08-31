@@ -36,7 +36,7 @@ npm install gsap sticky-scroll-trigger
 For plain `<script>` usage without a bundler, an IIFE build is also published, exposing `window.StickyScrollTrigger`:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/sticky-scroll-trigger/dist/StickyScrollTrigger.global.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sticky-scroll-trigger@0.9.0/dist/StickyScrollTrigger.global.min.js"></script>
 ```
 
 Consumers should only rely on the exports of `sticky-scroll-trigger` (or `window.StickyScrollTrigger` for the global build). The internal modules under `src/` are not part of the public API.
