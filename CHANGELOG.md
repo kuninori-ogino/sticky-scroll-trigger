@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Documented that `createOverlapScroll`'s `'bottom bottom'` default can resolve to a negative freeze-window start with no `start` passed. When the covered `trigger` sits within a viewport height of the document top and is shorter than the viewport, part of the rise plays before scroll 0, the same as any position clause resolving past the document top, which the README already noted only for Scene layers. `clamp()` stays unsupported, and a cover layer's sticky offset does not reference the freeze window's start, so the fix is on the content side: make `trigger` at least a viewport tall, or move it further down the page. Behavior is unchanged; only the README was missing it (see [Position syntax](README.md#position-syntax))
+
 ## [0.9.0] - 2026-09-01
 
 - A rejected option value no longer stops every other `ScrollTrigger` on the page from refreshing. This module's `refresh()` runs from GSAP's own `refreshInit` dispatch, which guards nothing, so an error leaving it there used to abort the rest of that refresh. That mattered when a function-valued `start`/`end`/`top` began returning a rejected value long after setup, on a refresh GSAP itself triggers. The error still surfaces, now off the stack as an uncaught one, and an explicit `refresh()` call still throws to the caller
