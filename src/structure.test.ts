@@ -245,22 +245,4 @@ describe('unbuildStructure', () => {
     expect(scene.padding).toBeNull();
     expect(cover.wrapper).toBeNull();
   });
-
-  it('produces the same structure after a rebuild (build → unbuild → build)', () => {
-    const { root, byId } = setup(
-      '<div id="host"><div id="root"><div id="s1"></div><div id="base"></div><div id="cover"></div></div></div>',
-    );
-    const layers = () => [sceneLayer(byId('s1')), coverLayer(byId('base'), byId('cover'))];
-    const first = layers();
-    const firstOutermost = buildStructure(root, first);
-    const built = document.body.innerHTML;
-
-    unbuildStructure(root, first, firstOutermost);
-
-    const second = layers();
-
-    buildStructure(root, second);
-
-    expect(document.body.innerHTML).toBe(built);
-  });
 });

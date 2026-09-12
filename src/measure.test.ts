@@ -306,15 +306,15 @@ describe('measureLayer', () => {
 
     expect(pointsAtSelf.endTriggerIndex).toBe(0);
     expect(pointsAtSelf.endTriggerIsSelf).toBe(true);
-  });
 
-  it('reports an unregistered endTrigger as index null', () => {
-    const measurement = measure(
+    // An endTrigger that is nobody's registered trigger reports no index at all, which is what
+    // sends resolveEndSpec down its unregistered branch.
+    const unregistered = measure(
       scene({ endTrigger: query('.b'), end: 'top top' }),
       0,
       new Map([[query('.a'), 0]]),
     );
 
-    expect(measurement.endTriggerIndex).toBeNull();
+    expect(unregistered.endTriggerIndex).toBeNull();
   });
 });

@@ -62,23 +62,25 @@ describe('StickyScrollTrigger', () => {
 });
 
 // trigger/endTrigger/cover also accept a CSS selector string (same as GSAP ScrollTrigger's own
-// trigger/endTrigger). This only checks that a selector resolves to the right element through
-// the public API; dom.test.ts covers the resolution logic itself in its resolveElement tests.
+// trigger/endTrigger). dom.test.ts owns how resolveElement resolves one and how it phrases a
+// failure; what these check is that each entry point reaches it, and hands it its own name, which
+// is the half of the message dom.test.ts can't see from the outside.
 describe('selector-string support for trigger/endTrigger/cover', () => {
-  it('createStickyTrigger accepts trigger/endTrigger as selector strings', () => {
+  it('resolves a selector for createStickyTrigger, createResolvedTrigger and resolveScrollPosition, builds and refreshes cleanly, and names the caller when one matches nothing', () => {
     const { query, controller } = setup();
-    const vars = controller.createStickyTrigger({ trigger: '.scene', end: 'top top', endTrigger: '.inside' });
 
-    expect(vars.trigger).toBe(query('.scene'));
+    expect(controller
+      .createStickyTrigger({ trigger: '.scene', end: 'top top', endTrigger: '.inside' }).trigger)
+      .toBe(query('.scene'));
+    expect(controller.createResolvedTrigger({ trigger: '.inside' }).trigger).toBe(query('.inside'));
+    expect(controller.resolveScrollPosition('.inside', 'top top'))
+      .toBe(controller.resolveScrollPosition(query('.inside'), 'top top'));
+    // Confirms the selector resolved to a real element the build machinery can wrap, not just one
+    // resolveElement can return.
     expect(() => controller.refresh()).not.toThrow();
-  });
-
-  it('createOverlapScroll accepts trigger/cover/endTrigger as selector strings', () => {
-    const { query, controller } = setup();
-    const vars = controller.createOverlapScroll({ trigger: '.scene', cover: '.inside' });
-
-    expect(vars.trigger).toBe(query('.scene'));
-    expect(query('.inside').style.position).toBe('relative'); // confirms cover was resolved correctly
+    // Each method hands resolveElement its own name, which is what the message has to carry.
+    expect(() => controller.createStickyTrigger({ trigger: '.Missing' }))
+      .toThrow(/createStickyTrigger: element "\.Missing" not found/);
   });
 
   it('createStickyPin accepts trigger/endTrigger as selector strings', () => {
@@ -90,27 +92,13 @@ describe('selector-string support for trigger/endTrigger/cover', () => {
     expect(query('.inside').style.position).toBe('sticky');
   });
 
-  it('createResolvedTrigger accepts trigger/endTrigger as selector strings', () => {
+  // cover is the one option with a resolution call site of its own.
+  it('createOverlapScroll accepts trigger/cover/endTrigger as selector strings', () => {
     const { query, controller } = setup();
-    const vars = controller.createResolvedTrigger({ trigger: '.inside', start: 'top 80%', end: 'top 30%' });
+    const vars = controller.createOverlapScroll({ trigger: '.scene', cover: '.inside' });
 
-    expect(vars.trigger).toBe(query('.inside'));
-  });
-
-  it('resolveScrollPosition accepts element as a selector string', () => {
-    const { query, controller } = setup();
-
-    expect(controller.resolveScrollPosition('.inside', 'top top')).toBe(
-      controller.resolveScrollPosition(query('.inside'), 'top top'),
-    );
-  });
-
-  it('throws naming the calling function when a selector matches no element', () => {
-    const { controller } = setup();
-
-    expect(() => controller.createStickyTrigger({ trigger: '.Missing' })).toThrow(
-      /createStickyTrigger: element "\.Missing" not found/,
-    );
+    expect(vars.trigger).toBe(query('.scene'));
+    expect(query('.inside').style.position).toBe('relative'); // confirms cover was resolved correctly
   });
 });
 
@@ -312,23 +300,6 @@ describe('endTrigger validity', () => {
 
       expect(() => controller.refresh()).not.toThrow();
     });
-
-    it('pointing at itself (the default when endTrigger is omitted) is not a forward reference, so it passes', () => {
-      const { query, controller } = setupThreeInOrder();
-
-      controller.createStickyTrigger({ trigger: query('.s1'), end: 'bottom top' }); // endTrigger omitted = itself
-
-      expect(() => controller.refresh()).not.toThrow();
-    });
-
-    it('pointing at a layer earlier in DOM order continues to work (already-supported range)', () => {
-      const { query, controller } = setupThreeInOrder();
-
-      controller.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
-      controller.createStickyTrigger({ trigger: query('.s2'), end: 'top top', endTrigger: query('.s1') });
-
-      expect(() => controller.refresh()).not.toThrow();
-    });
   });
 });
 
@@ -386,32 +357,18 @@ describe('Vars passed to GSAP', () => {
     expect((vars.end as () => number)()).not.toBe(0);
   });
 
-  it('never lets GSAP pin, since sticky handles pinning', () => {
-    const { query, controller } = setup();
-    const vars = controller.createStickyTrigger({ trigger: query('.scene') });
-
-    expect(vars.pin).toBeUndefined();
-    expect(vars.trigger).toBe(query('.scene'));
-  });
-
   // Every refresh() rewrites padding height and sticky top, i.e. changes layout, so by default
   // this wants function-valued tween props re-measured too (see the comment on
-  // registerLayer's definition).
-  it('invalidateOnRefresh defaults to true', () => {
+  // registerLayer's definition). An explicit value from the caller still wins.
+  it('defaults invalidateOnRefresh to true, and respects an explicit value', () => {
     const { query, controller } = setup();
-    const vars = controller.createStickyTrigger({ trigger: query('.scene') });
 
-    expect(vars.invalidateOnRefresh).toBe(true);
-  });
-
-  it('respects an explicit invalidateOnRefresh value from the caller', () => {
-    const { query, controller } = setup();
-    const vars = controller.createStickyTrigger({
-      trigger: query('.scene'),
+    expect(controller.createStickyTrigger({ trigger: query('.scene') }).invalidateOnRefresh)
+      .toBe(true);
+    expect(controller.createStickyTrigger({
+      trigger: query('.inside'),
       invalidateOnRefresh: false,
-    });
-
-    expect(vars.invalidateOnRefresh).toBe(false);
+    }).invalidateOnRefresh).toBe(false);
   });
 
   // The PassThroughVars (types.ts) contract: any GSAP Vars this module doesn't control
@@ -468,6 +425,48 @@ describe('Vars passed to GSAP', () => {
       pin: true,
     })).toThrow('createStickyTrigger: pin is not supported here');
   });
+
+  // The rest of GSAP's pin family, plus containerAnimation, share #assertNoExcludedVars with
+  // pin/horizontal/scroller above; one registration method is enough to prove it rejects each of
+  // these too, since the check itself doesn't vary by call site. A computed key bypasses excess-
+  // property checking entirely, unlike the literal keys above (each needing its own suppression
+  // comment), so this one is runtime coverage only. trigger/start/end/endTrigger are in
+  // EXCLUDED_VAR_KEYS as well, but never reach this check: every registration method consumes them
+  // by name in the destructuring before `...rest`, for a plain JS/JSON caller the same as for one
+  // honoring the types, so the destructuring alone already rules them out.
+  it('rejects every other GSAP pin option, and containerAnimation, the same way', () => {
+    const { query, controller } = setup();
+    const excluded = [
+      ['pinSpacing', true],
+      ['anticipatePin', 1],
+      ['pinnedContainer', document.body],
+      ['pinReparent', true],
+      ['pinSpacer', document.body],
+      ['pinType', 'transform'],
+      ['containerAnimation', {}],
+    ] as const;
+
+    excluded.forEach(([key, value]) => {
+      const trigger = query('.root').appendChild(document.createElement('section'));
+
+      expect(() => controller.createStickyTrigger({ trigger, [key]: value }))
+        .toThrow(`createStickyTrigger: ${key} is not supported here`);
+    });
+  });
+
+  // found.join(', ') pluralizes to 'are' once more than one excluded key is passed together,
+  // untested by the single-key rejections above. TypeScript's excess-property check reports once
+  // per object literal rather than once per excess key, so only the first needs its own directive.
+  it('pluralizes the message when more than one excluded option is passed at once', () => {
+    const { query, controller } = setup();
+
+    expect(() => controller.createStickyTrigger({
+      trigger: query('.scene'),
+      // @ts-expect-error both horizontal and scroller below are excluded
+      horizontal: true,
+      scroller: document.body,
+    })).toThrow('createStickyTrigger: horizontal, scroller are not supported here');
+  });
 });
 
 // The onRefreshInit registerLayer returns binds refresh() to the refreshInit GSAP itself fires
@@ -476,15 +475,6 @@ describe('Vars passed to GSAP', () => {
 // simulates it by directly calling the same Vars.onRefreshInit GSAP would call.
 describe('registerLayer\'s onRefreshInit', () => {
   const fakeSelf = makeFakeSelf();
-
-  it('calling onRefreshInit runs refresh() and builds the nesting', () => {
-    const { query, controller } = setup();
-    const vars = controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
-
-    vars.onRefreshInit?.(fakeSelf);
-
-    expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(1);
-  });
 
   it('also calls the user\'s onRefreshInit callback', () => {
     const { query, controller } = setup();
@@ -784,24 +774,15 @@ describe('batching kill()', () => {
   // via self's constructor (a way to obtain a reference to the ScrollTrigger class
   // without importing gsap).
   describe('updating GSAP\'s own cache', () => {
-    it('calls GSAP\'s static refresh via self\'s constructor after a kill batch', async () => {
-      const { vars } = setupThreeScenes();
-
-      vars[0].onKill?.(fakeSelf);
-
-      expect(FakeScrollTrigger.refresh).not.toHaveBeenCalled(); // still waiting on the batch
-      await Promise.resolve();
-      expect(FakeScrollTrigger.refresh).toHaveBeenCalledTimes(1);
-    });
-
-    it('coalesces multiple kills in the same task into a single call to GSAP\'s refresh', async () => {
+    it('calls GSAP\'s static refresh once, after the batch rather than per kill', async () => {
       const { vars } = setupThreeScenes();
 
       vars.forEach((entry) => {
         entry.onKill?.(fakeSelf);
       });
-      await Promise.resolve();
 
+      expect(FakeScrollTrigger.refresh).not.toHaveBeenCalled(); // still waiting on the batch
+      await Promise.resolve();
       expect(FakeScrollTrigger.refresh).toHaveBeenCalledTimes(1);
     });
 
@@ -869,39 +850,21 @@ describe('destroy()', () => {
     controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
     controller.refresh();
 
-    const hostBefore = document.body.innerHTML;
-
-    // confirms it returns to the pre-refresh() state (i.e. before the DOM was ever built),
-    // by matching the structure (element order)
-    // against "what the HTML would look like before building."
     controller.destroy();
 
     expect(query('.root').parentElement).toBe(document.body);
     expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(0);
-    void hostBefore;
   });
 
-  // On the README-recommended cover-only path (never calling ScrollTrigger.create()),
-  // GSAP's onKill is never called at all. destroy() is the only entry point that can
-  // still restore that z-order.
-  it('also restores the z-order of a cover layer that never went through ScrollTrigger.create()', () => {
+  // On the README-recommended cover-only path, Vars is built but never passed to
+  // ScrollTrigger.create(), so GSAP's onKill never fires, and refresh() may never have run either.
+  // destroy() is the only entry point left that can restore that z-order.
+  it('restores a cover layer\'s z-order with no ScrollTrigger.create() and no refresh()', () => {
     const { query, controller } = setup();
 
     controller.createOverlapScroll({ trigger: query('.scene'), cover: query('.inside') });
-    // Vars was built but never passed to ScrollTrigger.create() = onKill is never called
 
     expect(query('.inside').style.position).toBe('relative');
-
-    controller.destroy();
-
-    expect(query('.inside').style.position).toBe('');
-  });
-
-  it('can clean up even if refresh() was never called', () => {
-    const { query, controller } = setup();
-
-    controller.createOverlapScroll({ trigger: query('.scene'), cover: query('.inside') });
-
     expect(() => controller.destroy()).not.toThrow();
     expect(query('.inside').style.position).toBe('');
   });
@@ -919,7 +882,7 @@ describe('destroy()', () => {
     );
   });
 
-  it('makes refresh() after destroy() a harmless no-op', () => {
+  it('leaves a later refresh() and a second destroy() as harmless no-ops', () => {
     const { query, controller } = setup();
 
     controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
@@ -929,17 +892,8 @@ describe('destroy()', () => {
     const parentAfterDestroy = query('.root').parentElement;
 
     expect(() => controller.refresh()).not.toThrow();
-    expect(query('.root').parentElement).toBe(parentAfterDestroy);
-  });
-
-  it('is safe to call twice (the second call is a no-op)', () => {
-    const { query, controller } = setup();
-
-    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
-    controller.refresh();
-
-    controller.destroy();
     expect(() => controller.destroy()).not.toThrow();
+    expect(query('.root').parentElement).toBe(parentAfterDestroy);
   });
 
   it('never rebuilds after destroy(), even with a pending kill batch', async () => {
@@ -959,38 +913,12 @@ describe('destroy()', () => {
   });
 });
 
-// jsdom has no layout and offsetTop/offsetHeight are always 0, so the actual correction
-// values (px) can't be verified here (that's e2e's job). This only checks the structural side:
-// whether calling it throws or not, depending on whether a layer is registered, DOM order,
-// and the position-clause format.
+// jsdom has no layout and offsetTop/offsetHeight are always 0, so the corrected px values can't be
+// verified here (that's e2e's job). What's left is what survives without layout: that a
+// function-valued position is called, that a malformed clause reaches position.ts's rejection, that
+// an absolute value passes through untouched, and that cover layers stay out of the gap total,
+// which a dwell distance makes exact even at 0.
 describe('resolveScrollPosition()', () => {
-  it('returns a number without throwing even when there are no Scene layers at all', () => {
-    const { query, controller } = setup();
-    const result = controller.resolveScrollPosition(query('.inside'), 'top top');
-
-    expect(Number.isNaN(result)).toBe(false);
-  });
-
-  it('can be called before refresh (it just uses layers\' initial freezeStart/freezeEnd of 0)', () => {
-    const { query, controller } = setup();
-
-    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=500' });
-
-    expect(() => controller.resolveScrollPosition(query('.inside'), 'top top')).not.toThrow();
-  });
-
-  it('returns a number without throwing even when a Scene layer sits after the target in DOM order (it is simply excluded from the gap total)', () => {
-    const { query, controller } = setup();
-
-    controller.createStickyTrigger({ trigger: query('.inside'), end: '+=500' });
-    controller.refresh();
-
-    // The layer's trigger ('.inside') sits after the target ('.scene') in DOM order, so it adds
-    // nothing to the gap total. This only confirms that having a later layer doesn't break
-    // anything (the numeric validity is e2e's job).
-    expect(() => controller.resolveScrollPosition(query('.scene'), 'top top')).not.toThrow();
-  });
-
   it('when passed a function returning a position clause, uses the result of calling it', () => {
     const { query, controller } = setup();
     const positionFn = vi.fn(() => 'center center');
@@ -1008,14 +936,14 @@ describe('resolveScrollPosition()', () => {
     );
   });
 
-  it('after destroy(), layer registration is simply empty, and the call itself does not throw', () => {
+  // The 'absolute' branch returns classified.value directly, without touching element or any
+  // layout, so it needs no real browser to verify (unlike every other branch here, which does).
+  it('returns an absolute value (string or number) as-is, regardless of element', () => {
     const { query, controller } = setup();
+    const el = query('.inside');
 
-    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=500' });
-    controller.refresh();
-    controller.destroy();
-
-    expect(() => controller.resolveScrollPosition(query('.inside'), 'top top')).not.toThrow();
+    expect(controller.resolveScrollPosition(el, '1234')).toBe(1234);
+    expect(controller.resolveScrollPosition(el, 1234)).toBe(1234);
   });
 
   // Cover layers never add document height (unlike Scene layers), so they must be excluded
@@ -1050,24 +978,6 @@ describe('static getScrollTop()', () => {
 
     expect(StickyScrollTrigger.getScrollTop('.inside', [controller])).toBe(
       StickyScrollTrigger.getScrollTop(query('.inside'), [controller]),
-    );
-  });
-
-  it('with an empty instances array, measures the element directly without throwing', () => {
-    const { query } = setup();
-
-    expect(Number.isNaN(StickyScrollTrigger.getScrollTop(query('.outside'), []))).toBe(false);
-  });
-
-  it('matches the owning instance\'s own resolveScrollPosition(element, \'top top\')', () => {
-    const { query, controller } = setup();
-    const target = query('.inside');
-
-    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=500' });
-    controller.refresh();
-
-    expect(StickyScrollTrigger.getScrollTop(target, [controller])).toBe(
-      controller.resolveScrollPosition(target, 'top top'),
     );
   });
 
@@ -1130,11 +1040,11 @@ describe('static getScrollTop()', () => {
   );
 });
 
-// createResolvedTrigger is just a thin wrapper that calls resolveScrollPosition once
-// for trigger/start and once for endTrigger/end (it never registers into layers, so it's
-// outside refresh()'s scope). This only checks that the built result (ScrollTrigger.Vars)
-// has the right shape; the validity of resolveScrollPosition's own values
-// is covered by the describe block above.
+// createResolvedTrigger is a thin wrapper that calls resolveScrollPosition once for trigger/start
+// and once for endTrigger/end, registering no layer, so it sits outside refresh()'s scope. The
+// pass-through shape is checked here alongside the parts that are its own rather than
+// resolveScrollPosition's: the excluded-vars rejection, the start/end defaults, resolving end
+// against endTrigger, and a dwell end counted from the resolved start.
 describe('createResolvedTrigger()', () => {
   it('returns Vars that includes pass-through options like trigger/scrub as-is', () => {
     const { query, controller } = setup();
@@ -1160,17 +1070,6 @@ describe('createResolvedTrigger()', () => {
       // @ts-expect-error scroller isn't supported (documentTop/innerHeight assume window)
       scroller: document.body,
     })).toThrow('createResolvedTrigger: scroller is not supported here');
-  });
-
-  it('turns start/end into functions that, when called, return the same values as resolveScrollPosition', () => {
-    const { query, controller } = setup();
-    const trigger = query('.inside');
-    const vars = controller.createResolvedTrigger({ trigger, start: 'top 80%', end: 'top 30%' });
-
-    expect(typeof vars.start).toBe('function');
-    expect(typeof vars.end).toBe('function');
-    expect((vars.start as () => number)()).toBe(controller.resolveScrollPosition(trigger, 'top 80%'));
-    expect((vars.end as () => number)()).toBe(controller.resolveScrollPosition(trigger, 'top 30%'));
   });
 
   // GSAP's own defaults for a trigger that doesn't pin, which is every trigger here.
@@ -1284,16 +1183,6 @@ describe('createResolvedTrigger()', () => {
 
     expect((vars.end as () => number)() - (vars.start as () => number)()).toBe(window.innerHeight);
   });
-
-  it('the call itself does not throw even after destroy() (it never depends on refresh or layers registration)', () => {
-    const { query, controller } = setup();
-
-    controller.destroy();
-
-    expect(() =>
-      controller.createResolvedTrigger({ trigger: query('.inside'), start: 'top 80%', end: 'top 30%' }),
-    ).not.toThrow();
-  });
 });
 
 // createStickyPin is a mechanism completely independent of Scene/Cover layers (the layers array,
@@ -1330,16 +1219,16 @@ describe('createStickyPin()', () => {
   });
 
   // The reserved height is outer's own natural height, which jsdom has no layout to produce. A
-  // stylesheet rule on outer stands in for one, leaving the plumbing as what these two can check:
-  // that the measured height reaches outer's inline style intact, fractional part and all, and
-  // that it's taken again on each refresh().
+  // stylesheet rule on outer stands in for one, leaving the plumbing as what this can check: that
+  // the measured height reaches outer's inline style intact, fractional part and all, and that it's
+  // taken again on each refresh().
   const styleOuter = (height: string) => {
     // The pin's outer is the only div directly inside .root: .scene and .inside are sections, and
     // .inside has moved inside the wrappers by the time this matters.
     document.head.innerHTML = `<style>.root > div { height: ${height} }</style>`;
   };
 
-  it('writes the height it measures on outer, keeping the fractional part', () => {
+  it('writes the height it measures on outer, keeping the fraction, and re-measures each refresh()', () => {
     const { query, controller } = setup();
     const trigger = query('.inside');
 
@@ -1347,20 +1236,9 @@ describe('createStickyPin()', () => {
     controller.createStickyPin({ trigger, endTrigger: query('.scene') });
     controller.refresh();
 
-    expect(trigger.parentElement!.parentElement!.style.height).toBe('112.5px');
-  });
-
-  it('re-measures the reserved space on every refresh()', () => {
-    const { query, controller } = setup();
-    const trigger = query('.inside');
-
-    styleOuter('20px');
-    controller.createStickyPin({ trigger, endTrigger: query('.scene') });
-    controller.refresh();
-
     const outer = trigger.parentElement!.parentElement!;
 
-    expect(outer.style.height).toBe('20px');
+    expect(outer.style.height).toBe('112.5px');
 
     styleOuter('60px');
     controller.refresh();
@@ -1435,6 +1313,8 @@ describe('createStickyPin()', () => {
     expect(trigger.style.position).toBe('sticky');
   });
 
+  // setup() registers no Scene/Cover layers, so this covers pin-only usage too: the pin pass has
+  // to run whether or not any Scene layer does.
   it('makes trigger position:sticky once refresh() runs', () => {
     const { query, controller } = setup();
     const trigger = query('.inside');
@@ -1448,15 +1328,17 @@ describe('createStickyPin()', () => {
 
   // Unlike the pin's natural top/height (which depends on layout, unavailable in jsdom),
   // the `top` option is a plain passthrough to applyStickyPosition via resolveMaybeFn,
-  // so the exact CSS value it writes can be verified here without layout.
+  // so the exact CSS value it writes can be verified here without layout. A negative one pins
+  // above the viewport's top edge.
   it('writes the top option as trigger.style.top once refresh() runs', () => {
     const { query, controller } = setup();
-    const trigger = query('.inside');
 
-    controller.createStickyPin({ trigger, endTrigger: query('.scene'), top: 39 });
+    controller.createStickyPin({ trigger: query('.inside'), endTrigger: query('.scene'), top: 39 });
+    controller.createStickyPin({ trigger: query('.outside'), endTrigger: query('.scene'), top: -30 });
     controller.refresh();
 
-    expect(trigger.style.top).toBe('39px');
+    expect(query('.inside').style.top).toBe('39px');
+    expect(query('.outside').style.top).toBe('-30px');
   });
 
   // A start clause resolves to a plain CSS top too, so it's verifiable here for the same reason.
@@ -1470,17 +1352,6 @@ describe('createStickyPin()', () => {
     controller.refresh();
 
     expect(trigger.style.top).toBe(`${window.innerHeight * 0.2}px`);
-  });
-
-  it('supports a start clause whose element side is not \'top\' (e.g. \'bottom bottom\')', () => {
-    const { query, controller } = setup();
-    const trigger = query('.inside');
-
-    controller.createStickyPin({ trigger, endTrigger: query('.scene'), start: 'bottom bottom' });
-    controller.refresh();
-
-    // In a real browser this would be viewportHeight minus trigger's own height (see e2e).
-    expect(trigger.style.top).toBe(`${window.innerHeight}px`);
   });
 
   it('re-evaluates a function-valued start on every refresh()', () => {
@@ -1503,21 +1374,6 @@ describe('createStickyPin()', () => {
     expect(trigger.style.top).toBe('25px');
   });
 
-  it('treats top: 39 and start: \'top 39px\' as the same pinned position', () => {
-    const { query, controller } = setup();
-
-    controller.createStickyPin({ trigger: query('.inside'), endTrigger: query('.scene'), top: 39 });
-    controller.createStickyPin({
-      trigger: query('.outside'),
-      endTrigger: query('.scene'),
-      start: 'top 39px',
-    });
-    controller.refresh();
-
-    expect(query('.inside').style.top).toBe('39px');
-    expect(query('.outside').style.top).toBe('39px');
-  });
-
   it('throws when both start and top are given', () => {
     const { query, controller } = setup();
 
@@ -1532,26 +1388,30 @@ describe('createStickyPin()', () => {
   });
 
   // Reserving the bare-number slot for GSAP's meaning is what leaves a pin no way to spell a px
-  // distance in `start`, so the error points at the option that covers it.
-  it('throws on an absolute start (a bare number), pointing at top', () => {
-    const { query, controller } = setup();
+  // distance in `start`, so the error points at the option that covers it. A fresh controller per
+  // spelling, since the first pin keeps throwing on every later refresh().
+  it('throws on an absolute start, in both spellings GSAP reads as absolute, pointing at top', () => {
+    const fromNumber = setup();
 
-    controller.createStickyPin({ trigger: query('.inside'), endTrigger: query('.scene'), start: 20 });
+    fromNumber.controller.createStickyPin({
+      trigger: fromNumber.query('.inside'),
+      endTrigger: fromNumber.query('.scene'),
+      start: 20,
+    });
 
-    expect(() => controller.refresh())
+    expect(() => fromNumber.controller.refresh())
       .toThrow(/start "20" is an absolute scroll position[\s\S]*top: 20/);
-  });
 
-  it('throws on an absolute start given as a numeric string', () => {
-    const { query, controller } = setup();
+    const fromString = setup();
 
-    controller.createStickyPin({
-      trigger: query('.inside'),
-      endTrigger: query('.scene'),
+    fromString.controller.createStickyPin({
+      trigger: fromString.query('.inside'),
+      endTrigger: fromString.query('.scene'),
       start: '20',
     });
 
-    expect(() => controller.refresh()).toThrow(/start "20" is an absolute scroll position/);
+    expect(() => fromString.controller.refresh())
+      .toThrow(/start "20" is an absolute scroll position[\s\S]*top: 20/);
   });
 
   // Only a value that is nothing but a number is absolute; every clause spelling resolves exactly
@@ -1581,17 +1441,10 @@ describe('createStickyPin()', () => {
     });
   });
 
-  it('accepts a negative top, pinning above the viewport\'s top edge', () => {
-    const { query, controller } = setup();
-    const trigger = query('.inside');
-
-    controller.createStickyPin({ trigger, endTrigger: query('.scene'), top: -30 });
-    controller.refresh();
-
-    expect(trigger.style.top).toBe('-30px');
-  });
-
-  it('throws on a non-finite top', () => {
+  // A plain value is rejected at registration, where a function-valued one can only be caught once
+  // refresh() calls it. The rejected registration never reaches #pinLayers, so the same trigger is
+  // free for the second half.
+  it('throws on a non-finite top, whether given plainly or returned by a function', () => {
     const { query, controller } = setup();
 
     expect(() =>
@@ -1601,10 +1454,6 @@ describe('createStickyPin()', () => {
         top: Number.NaN,
       }),
     ).toThrow(/top must be a finite number/);
-  });
-
-  it('throws on a function-valued top that returns a non-finite number', () => {
-    const { query, controller } = setup();
 
     controller.createStickyPin({
       trigger: query('.inside'),
@@ -1624,19 +1473,6 @@ describe('createStickyPin()', () => {
 
     expect(trigger.parentElement).toBe(originalParent);
     expect(trigger.style.position).not.toBe('sticky');
-  });
-
-  it('builds a pin via refresh() even with zero Scene/Cover layers', () => {
-    // index.ts's refresh() returns early when there are zero Scene/Cover layers, so it
-    // must call refreshPins() before that early return.
-    // A regression here would silently break pin-only usage.
-    const { query, controller } = setup();
-    const trigger = query('.inside');
-
-    controller.createStickyPin({ trigger, endTrigger: query('.scene') });
-    controller.refresh();
-
-    expect(trigger.style.position).toBe('sticky');
   });
 
   it('throws when the same trigger is registered twice', () => {
@@ -1675,25 +1511,9 @@ describe('createStickyPin()', () => {
   });
 
   // A pin's trigger belongs to the caller and may already carry inline position/top of its own.
+  // The value is captured when the pin first wraps trigger, not back at registration, so a change
+  // made in between is what comes back.
   it('destroy() puts the caller\'s own inline position and top back', () => {
-    const { query, controller } = setup();
-    const trigger = query('.inside');
-
-    trigger.style.position = 'relative';
-    trigger.style.top = '8px';
-
-    controller.createStickyPin({ trigger, endTrigger: query('.scene'), top: 39 });
-    controller.refresh();
-
-    expect(trigger.style.position).toBe('sticky');
-
-    controller.destroy();
-
-    expect(trigger.style.position).toBe('relative');
-    expect(trigger.style.top).toBe('8px');
-  });
-
-  it('destroy() puts back inline values set after registration', () => {
     const { query, controller } = setup();
     const trigger = query('.inside');
 
@@ -1705,6 +1525,9 @@ describe('createStickyPin()', () => {
     trigger.style.top = '24px';
 
     controller.refresh();
+
+    expect(trigger.style.position).toBe('sticky');
+
     controller.destroy();
 
     expect(trigger.style.position).toBe('relative');
@@ -1867,22 +1690,6 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
     vars.onRefreshInit?.(fakeSelf);
 
     expect(trigger.style.position).toBe('sticky');
-  });
-
-  it('also calls the user\'s onRefreshInit callback', () => {
-    const { query, controller } = setup();
-    let called = false;
-    const vars = controller.createStickyPin({
-      trigger: query('.inside'),
-      endTrigger: query('.scene'),
-      onRefreshInit: () => {
-        called = true;
-      },
-    });
-
-    vars.onRefreshInit?.(fakeSelf);
-
-    expect(called).toBe(true);
   });
 
   // A pin gets its own refresh() like a Scene layer does, so dispatching to the second pin
@@ -2429,22 +2236,29 @@ describe('\'max\' end keyword', () => {
 // relative to its own wrapper's natural position (see freezeWindow.ts), which has no equivalent
 // for an absolute value, so createOverlapScroll rejects it, unlike a Scene layer's stickyTop,
 // which is already document-absolute and works with either. The rejection is measure.ts's, so the
-// two below cover reachability only, once per spelling a caller can pass.
+// test below covers reachability only, in both spellings a caller can pass.
 describe('absolute start (a bare number)', () => {
-  it('createOverlapScroll rejects a numeric-string start', () => {
-    const { query, controller } = setup();
+  // A fresh controller per spelling, since the first layer keeps throwing on every later refresh().
+  it('createOverlapScroll rejects one, in both spellings a caller can pass', () => {
+    const fromString = setup();
 
-    controller.createOverlapScroll({ trigger: query('.scene'), cover: query('.inside'), start: '500' });
+    fromString.controller.createOverlapScroll({
+      trigger: fromString.query('.scene'),
+      cover: fromString.query('.inside'),
+      start: '500',
+    });
 
-    expect(() => controller.refresh()).toThrow(/absolute scroll position/);
-  });
+    expect(() => fromString.controller.refresh()).toThrow(/absolute scroll position/);
 
-  it('createOverlapScroll rejects a plain-number start', () => {
-    const { query, controller } = setup();
+    const fromNumber = setup();
 
-    controller.createOverlapScroll({ trigger: query('.scene'), cover: query('.inside'), start: 500 });
+    fromNumber.controller.createOverlapScroll({
+      trigger: fromNumber.query('.scene'),
+      cover: fromNumber.query('.inside'),
+      start: 500,
+    });
 
-    expect(() => controller.refresh()).toThrow(/absolute scroll position/);
+    expect(() => fromNumber.controller.refresh()).toThrow(/absolute scroll position/);
   });
 
   // freezeStart = start.value directly for an absolute start (see freezeWindow.ts's runPass),
@@ -2487,7 +2301,9 @@ describe('absolute end (a bare number)', () => {
 // (since indexByTrigger's implementation only remembered the first registration).
 // This now throws immediately at registration time so it's caught right away.
 describe('rejecting duplicate registration', () => {
-  it('throws when the same element is used as the trigger of two createStickyTrigger calls', () => {
+  // Both reach the same #assertTriggerAvailable(#layers, ...) inside #registerLayer, which either
+  // registration method can arrive at.
+  it('throws when an element is already another layer\'s trigger, from either method', () => {
     const { query, controller } = setup();
 
     controller.createStickyTrigger({ trigger: query('.scene') });
@@ -2495,13 +2311,6 @@ describe('rejecting duplicate registration', () => {
     expect(() => controller.createStickyTrigger({ trigger: query('.scene') })).toThrow(
       /<section\.scene> is already registered as a trigger for another layer/,
     );
-  });
-
-  it('also throws when createStickyTrigger\'s trigger and createOverlapScroll\'s trigger are the same element', () => {
-    const { query, controller } = setup();
-
-    controller.createStickyTrigger({ trigger: query('.scene') });
-
     expect(() => controller.createOverlapScroll({ trigger: query('.scene'), cover: query('.inside') })).toThrow(
       /<section\.scene> is already registered as a trigger for another layer/,
     );
@@ -2525,21 +2334,6 @@ describe('rejecting duplicate registration', () => {
     controller.destroy();
     expect(cover.style.position).toBe('');
     expect(cover.style.zIndex).toBe('');
-  });
-
-  it('passes for distinct elements', () => {
-    document.body.innerHTML = `
-      <div class="root">
-        <section class="scene"></section>
-        <section class="base"></section>
-        <section class="cover"></section>
-      </div>`;
-
-    const controller = new StickyScrollTrigger(query('.root'));
-
-    controller.createStickyTrigger({ trigger: query('.scene') });
-
-    expect(() => controller.createOverlapScroll({ trigger: query('.base'), cover: query('.cover') })).not.toThrow();
   });
 
   // A pin layer wraps trigger itself via wrapPin(), so using the same element as a

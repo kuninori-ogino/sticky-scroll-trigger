@@ -6,7 +6,6 @@ import {
   isMaxFormat,
   parseClauseToken,
   prefixSpacedRelativeEnd,
-  resolveAbsolute,
   resolveAnchorTop,
   resolveDwell,
   resolveMaxOffset,
@@ -19,12 +18,11 @@ import {
 // (e2e/StickyScrollTrigger.spec.ts).
 
 describe('resolveMaybeFn', () => {
-  it('returns a non-function value as-is', () => {
+  // The function form is what keeps a variable value (a header height, say) current on every
+  // refresh(), so it's called rather than stored.
+  it('passes a plain value through and calls a function one', () => {
     expect(resolveMaybeFn('top top')).toBe('top top');
     expect(resolveMaybeFn(500)).toBe(500);
-  });
-
-  it('returns the result of calling a function value (so variable values like header height stay current on every refresh())', () => {
     expect(resolveMaybeFn(() => 'center center')).toBe('center center');
     expect(resolveMaybeFn(() => 500)).toBe(500);
   });
@@ -57,28 +55,20 @@ describe('parseClauseToken', () => {
   // present, omitting '=' makes GSAP silently resolve the whole token to 0. 'top+100' isn't
   // "top offset by 100" in real GSAP, since there's no '=' for _offsetToPx to split the base from
   // the offset on. This module throws instead of replicating that silent 0.
-  it('throws when `+`/`-` notation omits `=` and a base precedes it (unlike GSAP\'s silent 0, matching its arithmetic requires `=` here)', () => {
-    expect(() => parseClauseToken('top+100', 1000)).toThrow(/unsupported position clause "top\+100"/);
+  it('throws when `+`/`-` notation omits `=` and a base precedes it, naming the corrected form', () => {
+    expect(() => parseClauseToken('top+100', 1000))
+      .toThrow(/unsupported position clause "top\+100".*Did you mean "top\+=100"\?/s);
     expect(() => parseClauseToken('bottom-25.5', 1000)).toThrow(/unsupported position clause/);
     expect(() => parseClauseToken('80+10', 1000)).toThrow(/unsupported position clause/);
     // Same rule regardless of the base's own kind; this covers the percentage-base case
     // specifically, so a future refactor that special-cases basePercent can't silently skip it.
-    expect(() => parseClauseToken('50%+10', 1000)).toThrow(/unsupported position clause "50%\+10"/);
-  });
-
-  it('suggests the `=`-corrected form in the error message', () => {
-    expect(() => parseClauseToken('top+100', 1000)).toThrow(/Did you mean "top\+=100"\?/);
-    expect(() => parseClauseToken('50%+10', 1000)).toThrow(/Did you mean "50%\+=10"\?/);
+    expect(() => parseClauseToken('50%+10', 1000))
+      .toThrow(/unsupported position clause "50%\+10".*Did you mean "50%\+=10"\?/s);
   });
 
   it('resolves a percentage offset relative to refSize', () => {
     expect(parseClauseToken('top+=10%', 1000)).toEqual({ fraction: 0, offsetPx: 100 });
     expect(parseClauseToken('bottom-=25%', 800)).toEqual({ fraction: 1, offsetPx: -200 });
-  });
-
-  it('throws for an unsupported notation', () => {
-    expect(() => parseClauseToken('left', 1000)).toThrow(/unsupported position clause "left"/);
-    expect(() => parseClauseToken('top+=10vh', 1000)).toThrow(/unsupported position clause/);
   });
 
   it('names \'max\' as an end-only keyword rather than a generic unsupported clause', () => {
@@ -102,25 +92,6 @@ describe('parseClauseToken', () => {
     expect(parseClauseToken('top+=100px', 1000)).toEqual(parseClauseToken('top+=100', 1000));
     expect(parseClauseToken('bottom-=25.5px', 1000)).toEqual(parseClauseToken('bottom-=25.5', 1000));
     expect(parseClauseToken('-500px', 1000)).toEqual(parseClauseToken('-500', 1000)); // offset-only, no base
-  });
-
-  it('still throws for a unit that isn\'t "%" or "px"', () => {
-    expect(() => parseClauseToken('100vh', 1000)).toThrow(/unsupported position clause "100vh"/);
-    expect(() => parseClauseToken('100pxpx', 1000)).toThrow(/unsupported position clause/);
-  });
-
-  // Since the notation requires at least one digit, a string with no digits at all
-  // (`parseFloat` would return NaN, silently swallowed by GSAP's `||` fallback and treated as
-  // scroll position 0) throws instead.
-  it('throws for a notation with zero digits (would otherwise turn into NaN)', () => {
-    expect(() => parseClauseToken('.', 1000)).toThrow(/unsupported position clause "\."/);
-    expect(() => parseClauseToken('..', 1000)).toThrow(/unsupported position clause/);
-    expect(() => parseClauseToken('top+=.', 1000)).toThrow(/unsupported position clause/);
-  });
-
-  // Multiple dots are rejected for the same reason.
-  it('throws for a notation containing multiple dots', () => {
-    expect(() => parseClauseToken('1.2.3', 1000)).toThrow(/unsupported position clause/);
   });
 
   it('still accepts valid decimals with a leading or trailing dot', () => {
@@ -164,7 +135,30 @@ describe('parseClauseToken', () => {
     expect(parseClauseToken('-500', 1000)).toEqual(parseClauseToken('-=500', 1000));
   });
 
-  it('still throws for an empty token (an offset-only base doesn\'t mean any input goes)', () => {
+  // The spellings below all land on the generic message. 'max' and a signed offset that follows a
+  // base without its '=' are rejected too, but each of those carries a message of its own, so they
+  // keep the tests above. The families here still matter individually: a unit that is neither '%'
+  // nor 'px' would otherwise be dropped by parseFloat the way GSAP drops it, and a token carrying
+  // no digit at all would turn into NaN, which GSAP's `||` fallback reads as scroll position 0. An
+  // offset-only base doesn't mean any input goes, hence '' too.
+  it('throws with the generic message for every other malformed token', () => {
+    const rejected = [
+      'left', // not a keyword
+      'top+=10vh', '100vh', '100pxpx', // a unit that is neither '%' nor 'px'
+      '.', '..', 'top+=.', // no digits at all
+      '1.2.3', // more than one dot
+      '', // nothing at all
+    ];
+
+    rejected.forEach((token) => {
+      expect(() => parseClauseToken(token, 1000), token)
+        .toThrow(/unsupported position clause/);
+    });
+
+    // The message quotes the caller's own token rather than a normalized form.
+    expect(() => parseClauseToken('left', 1000)).toThrow(/unsupported position clause "left"/);
+    expect(() => parseClauseToken('100vh', 1000)).toThrow(/unsupported position clause "100vh"/);
+    expect(() => parseClauseToken('.', 1000)).toThrow(/unsupported position clause "\."/);
     expect(() => parseClauseToken('', 1000)).toThrow(/unsupported position clause ""/);
   });
 });
@@ -173,59 +167,22 @@ describe('isAbsoluteFormat', () => {
   // Matches GSAP's own _parsePosition: `isNaN(value) || (value = +value)` at
   // ScrollTrigger.js:750, a value coerces cleanly via unary '+' only when it's a plain number,
   // or a string with nothing in it but a number.
-  it('recognizes a plain number as absolute', () => {
-    expect(isAbsoluteFormat(500)).toBe(true);
-    expect(isAbsoluteFormat(0)).toBe(true);
-    expect(isAbsoluteFormat(-500)).toBe(true);
-  });
-
-  it('recognizes a numeric-only string as absolute', () => {
-    expect(isAbsoluteFormat('500')).toBe(true);
-    expect(isAbsoluteFormat('-500')).toBe(true);
-    expect(isAbsoluteFormat('500.5')).toBe(true);
-    expect(isAbsoluteFormat('  500  ')).toBe(true); // surrounding whitespace is fine
-  });
-
-  it('rejects a two-token clause, matching GSAP (only a single-token value coerces cleanly)', () => {
-    expect(isAbsoluteFormat('500 top')).toBe(false);
-  });
-
   // isNaN('Infinity') is false (Number('Infinity') is Infinity, not NaN), so GSAP's own check
-  // treats it as absolute too. This module deliberately doesn't tighten that to a finite check.
-  it('recognizes non-finite numeric strings as absolute, matching GSAP', () => {
-    expect(isAbsoluteFormat('Infinity')).toBe(true);
-    expect(isAbsoluteFormat('-Infinity')).toBe(true);
+  // treats it as absolute too, and this module deliberately doesn't tighten that to a finite check.
+  it('recognizes a plain number, or a string holding nothing but one', () => {
+    [500, 0, -500, '500', '-500', '500.5', '  500  ', 'Infinity', '-Infinity'].forEach((value) => {
+      expect(isAbsoluteFormat(value), String(value)).toBe(true);
+    });
   });
 
-  it('rejects a value with a unit suffix, matching GSAP (parseFloat alone isn\'t unary \'+\')', () => {
-    expect(isAbsoluteFormat('500px')).toBe(false);
-    expect(isAbsoluteFormat('50%')).toBe(false);
-  });
-
-  it('rejects a keyword', () => {
-    expect(isAbsoluteFormat('top')).toBe(false);
-  });
-
-  it('rejects an offset-only clause', () => {
-    expect(isAbsoluteFormat('+=500')).toBe(false);
-  });
-
-  // Deliberately not matching GSAP here (empty string coerces to 0 there); see the comment on
-  // isAbsoluteFormat's definition.
-  it('rejects an empty string, unlike GSAP', () => {
-    expect(isAbsoluteFormat('')).toBe(false);
-    expect(isAbsoluteFormat('   ')).toBe(false);
-  });
-});
-
-describe('resolveAbsolute', () => {
-  it('returns a number as-is', () => {
-    expect(resolveAbsolute(500)).toBe(500);
-  });
-
-  it('converts a numeric string', () => {
-    expect(resolveAbsolute('500')).toBe(500);
-    expect(resolveAbsolute('  -500  ')).toBe(-500);
+  // A unit suffix fails because parseFloat isn't unary '+'; a second token fails because only a
+  // single-token value coerces cleanly. The empty string is the one deliberate divergence: GSAP
+  // coerces it to 0, and parseClauseToken's "empty token" error is more useful than a silent
+  // absolute-0 (see the comment on isAbsoluteFormat's definition).
+  it('rejects anything else, matching GSAP apart from the empty string', () => {
+    ['500 top', '500px', '50%', 'top', '+=500', '', '   '].forEach((value) => {
+      expect(isAbsoluteFormat(value), JSON.stringify(value)).toBe(false);
+    });
   });
 });
 
@@ -433,17 +390,6 @@ describe('resolveDwell', () => {
     expect(() => resolveDwell('bottom top', 800)).toThrow(/unsupported end format "bottom top"/);
   });
 
-  // A bare number used to be dwell notation in this module; now it resolves as absolute format
-  // instead (matching GSAP, see isAbsoluteFormat/resolveAbsolute above), so resolveDwell itself
-  // no longer accepts it.
-  it('throws for notation that GSAP treats as a position clause or absolute format, not dwell', () => {
-    expect(() => resolveDwell('-=200', 800)).toThrow(/unsupported end format "-=200"/);
-    expect(() => resolveDwell('+100%', 800)).toThrow(/unsupported end format "\+100%"/);
-    expect(() => resolveDwell('50%', 800)).toThrow(/unsupported end format "50%"/);
-    expect(() => resolveDwell('500', 800)).toThrow(/unsupported end format "500"/);
-    expect(() => resolveDwell('500px', 800)).toThrow(/unsupported end format "500px"/);
-  });
-
   // Same reason as parseClauseToken (a lone '.' used to turn into NaN via parseFloat,
   // silently swallowed by GSAP's `||` fallback and treated as end=0).
   // Tightening the notation to require at least one digit now throws instead.
@@ -513,31 +459,16 @@ describe('resolveMaxOffset', () => {
 // classifyPosition composes the three predicates above into the single value every call path in
 // index.ts branches on.
 describe('classifyPosition', () => {
-  it('classifies dwell notation', () => {
-    expect(classifyPosition('+=500')).toEqual({ kind: 'dwell', value: '+=500' });
-    expect(classifyPosition('+=100%')).toEqual({ kind: 'dwell', value: '+=100%' });
-  });
-
-  it('classifies absolute notation, resolved to a number', () => {
-    expect(classifyPosition(500)).toEqual({ kind: 'absolute', value: 500 });
+  // The sweep below checks `kind` across every notation, so what's left here is `value`: it is the
+  // string exactly as given, since resolveDwell, resolveMaxOffset and resolveAnchorTop each trim
+  // before parsing. Only an absolute one is converted. Untrimmed inputs are used deliberately, so a
+  // normalization creeping in here would show up.
+  it('carries the value through as written, converting only an absolute one', () => {
+    expect(classifyPosition(' +=500 ')).toEqual({ kind: 'dwell', value: ' +=500 ' });
+    expect(classifyPosition(' max ')).toEqual({ kind: 'max', value: ' max ' });
+    expect(classifyPosition('top top')).toEqual({ kind: 'clause', value: 'top top' });
     expect(classifyPosition('500')).toEqual({ kind: 'absolute', value: 500 });
     expect(classifyPosition('Infinity')).toEqual({ kind: 'absolute', value: Infinity });
-  });
-
-  it('classifies max notation', () => {
-    expect(classifyPosition('max')).toEqual({ kind: 'max', value: 'max' });
-    expect(classifyPosition('max-=100')).toEqual({ kind: 'max', value: 'max-=100' });
-  });
-
-  it('classifies an ordinary position clause', () => {
-    expect(classifyPosition('top top')).toEqual({ kind: 'clause', value: 'top top' });
-    expect(classifyPosition('bottom')).toEqual({ kind: 'clause', value: 'bottom' });
-  });
-
-  // The space keeps it out of dwell format (see isDwellFormat/DWELL_RELATIVE_RE above), so this
-  // is a clause like any other, not a dwell.
-  it('classifies a spaced \'+=\' end as a clause, not a dwell', () => {
-    expect(classifyPosition('+=100 bottom')).toEqual({ kind: 'clause', value: '+=100 bottom' });
   });
 
   // classifyPosition's ordering rests on these three staying disjoint, so the samples run through

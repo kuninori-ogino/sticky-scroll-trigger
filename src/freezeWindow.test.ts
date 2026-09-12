@@ -443,10 +443,20 @@ describe('max end', () => {
 });
 
 describe('onPlanned', () => {
-  it('is called once per layer in DOM order, with the finalized values', () => {
+  // A pure-dwell measurement set never triggers needsConvergence, so planLayers would call runPass
+  // exactly once regardless of where onPlanned sits; "called once per layer" would hold trivially
+  // even from inside that single pass. This reuses the shape from "includes a later-processed Scene
+  // layer's dwell..." above, which needs 2 runPass calls to settle, so a regression that moved
+  // onPlanned inside the convergence loop (doubling every call) would actually be caught here.
+  it('is called exactly once per layer, in DOM order, with the finalized values, even once planLayers has converged over more than one pass', () => {
     const { plans, planned } = run([
-      scene({ triggerTop: 0, end: dwell(100) }),
-      scene({ triggerTop: 500, end: dwell(200) }),
+      scene({
+        triggerTop: 0,
+        end: { mode: 'clause', clause: 'top top', rawTop: 2000, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerIndex: null,
+      }),
+      scene({ triggerTop: 1000, end: dwell(500) }),
     ]);
 
     expect(planned.map((entry) => entry.index)).toEqual([0, 1]);

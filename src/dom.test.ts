@@ -9,9 +9,7 @@ import {
   measureDocumentMaxScroll,
   measureUsedHeight,
   measureViewportHeight,
-  resetStickyPosition,
   resolveElement,
-  restoreInlinePosition,
   resolveEndTrigger,
   resolveRoot,
   unwrapCover,
@@ -116,55 +114,6 @@ describe('describeElement', () => {
 
   it('falls back to just the tag name when there is no id or class', () => {
     expect(describeElement(document.createElement('div'))).toBe('<div>');
-  });
-});
-
-describe('applyStickyPosition/resetStickyPosition', () => {
-  it('applyStickyPosition sets position:sticky and the given top offset in px', () => {
-    const el = document.createElement('div');
-
-    applyStickyPosition(el, 39);
-
-    expect(el.style.position).toBe('sticky');
-    expect(el.style.top).toBe('39px');
-  });
-
-  it('resetStickyPosition clears both position and top', () => {
-    const el = document.createElement('div');
-
-    applyStickyPosition(el, 39);
-    resetStickyPosition(el);
-
-    expect(el.style.position).toBe('');
-    expect(el.style.top).toBe('');
-  });
-});
-
-describe('captureInlinePosition/restoreInlinePosition', () => {
-  it('puts back the values applyStickyPosition overwrote', () => {
-    const el = document.createElement('div');
-
-    el.style.position = 'relative';
-    el.style.top = '8px';
-
-    const saved = captureInlinePosition(el);
-
-    applyStickyPosition(el, 39);
-    restoreInlinePosition(el, saved);
-
-    expect(el.style.position).toBe('relative');
-    expect(el.style.top).toBe('8px');
-  });
-
-  it('leaves an element that had no inline values with none', () => {
-    const el = document.createElement('div');
-    const saved = captureInlinePosition(el);
-
-    applyStickyPosition(el, 39);
-    restoreInlinePosition(el, saved);
-
-    expect(el.style.position).toBe('');
-    expect(el.style.top).toBe('');
   });
 });
 

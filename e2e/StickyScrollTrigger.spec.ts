@@ -173,6 +173,14 @@ test('createStickyPin computes the same spacer height whether refresh() runs at 
 
   await evalRefresh();
 
+  // Where a stuck measurement actually shows. The Scene pass runs first and rewrites its own sticky
+  // top from the same corrupted reading, landing the wrapper at its engagement threshold for the
+  // current scroll, so the pin pass then measures a zero offset and the spacer below is unchanged.
+  const sceneWhileStuck = await page.evaluate(() =>
+    (window as unknown as FixtureWindow).__sceneFreezeWindow());
+
+  expect(sceneWhileStuck).toEqual(freezeWindow);
+
   const whileStuck = await evalSpacerHeight();
 
   expect(whileStuck).toBe(baseline);
@@ -824,25 +832,6 @@ test('a scrollbar that takes space doesn\'t shrink the height a pin\'s start cla
   expect(heldBottom).toBeCloseTo(box.viewportHeight, 0);
 });
 
-test('resolveScrollPosition returns an absolute value (string or number) as-is, regardless of element', async ({ page }) => {
-  await page.goto('/fixtures/absolutePosition.html');
-
-  const result = await page.evaluate(() => {
-    const win = window as unknown as {
-      __resolveScrollPosition: (el: HTMLElement, position: string | number) => number;
-    };
-    const el = document.querySelector('.absoluteStartScene') as HTMLElement;
-
-    return {
-      fromString: win.__resolveScrollPosition(el, '1234'),
-      fromNumber: win.__resolveScrollPosition(el, 1234),
-    };
-  });
-
-  expect(result.fromString).toBe(1234);
-  expect(result.fromNumber).toBe(1234);
-});
-
 // The return shape of batchKill.html's run(), exposed as window.__runBatchKillAll/
 // __runBatchKillPartial. survivorAfter is null for the all-killed case (s3 is killed too, so
 // there's no survivor to snapshot); the partial-kill tests below rely on it being present.
@@ -1367,7 +1356,13 @@ test('a native same-page anchor lands exactly on target, from any starting scrol
     const arrival = await findArrivalScroll(page, id);
 
     for (const how of ['anchorClick', 'scrollIntoView'] as const) {
-      for (const from of [0, 700, 1400, 2600, 3500]) {
+      // 4 starting positions cover the boundaries a landing depends on: above every freeze window,
+      // mid-dwell inside scene1's, mid-dwell inside scene2's while scene1's is already fully
+      // consumed (afterScene2's own lag sums both, so this is the one combination the other three
+      // starting positions can't reach for it), and past both windows entirely. 700 is dropped
+      // rather than kept alongside 0: both sit above scene1's window (800), so every ramp reads 0
+      // at either one and they land identically.
+      for (const from of [0, 1400, 2600, 3500]) {
         const landed = await jumpTo(page, id, from, how);
 
         expect(

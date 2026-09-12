@@ -183,22 +183,10 @@ describe('sync', () => {
     expect(query('#after').style.scrollMarginTop).toBe(correction(root, 800, { authorPx: 40 }));
   });
 
-  it('keeps the same value across repeated syncs when nothing changed', () => {
-    const root = query('.root');
-    const sync = createSync();
-    const scenes = [dwell(query('.a'), 0, 800)];
-
-    query('#after').style.scrollMarginTop = '40px';
-    sync.sync(scenes, root);
-    sync.sync(scenes, root);
-    sync.sync(scenes, root);
-
-    expect(query('#after').style.scrollMarginTop).toBe(correction(root, 800, { authorPx: 40 }));
-  });
-
   // Regression test for sync()'s own two-pass reset (see its comment in scrollMargin.ts). Driven
   // through a stylesheet rule rather than an inline one, since a change the reset itself undoes
-  // wouldn't exercise it.
+  // wouldn't exercise it. Syncing twice also covers the repeat case: without the reset, the second
+  // pass would read this module's own calc() back and fold it in again.
   it('picks up a later change to the author\'s own scroll-margin-top', () => {
     const root = query('.root');
     const sync = createSync();
