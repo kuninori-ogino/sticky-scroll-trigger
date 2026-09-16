@@ -13,6 +13,10 @@ The only dependency is GSAP's ScrollTrigger types.
 
 See the repository's `demo/index.html` + `demo/src/main.ts` for a live example, and `ARCHITECTURE.md` for why nested sticky was chosen over `pin`, and how it works internally.
 
+## Demo
+
+The [CodePen demo](https://codepen.io/editor/kuninori-ogino/pen/01a083a9-37ab-79e1-a955-cc97d7957f45) shows each effect running.
+
 ## Requirements
 
 | requirement      | description                                                                                                                                                 |
