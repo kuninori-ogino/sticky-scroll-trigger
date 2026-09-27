@@ -254,6 +254,22 @@ test('resolveScrollPosition counts a Scene layer\'s dwell by which comes first, 
   expect(await topAtResolved('.above')).toBeCloseTo(0, 0);
 });
 
+// A Scene layer's end is where its endTrigger would arrive without the layer's own dwell, so #end
+// reaches the top that dwell after the release. Counting .tallScene's dwell by DOM order held the
+// release 500px too long.
+test('an unregistered endTrigger counts only the dwell of scenes that freeze before it arrives', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/endTriggerFreezeOrder.html');
+
+  type FixtureWindow = Window & { __sceneRange: () => { start: number; end: number } };
+
+  const { start, end } = await page.evaluate(() =>
+    (window as unknown as FixtureWindow).__sceneRange());
+
+  expect(await findArrivalScroll(page, 'end')).toBe(end + (end - start));
+});
+
 // A stuck pin shifts documentTop for itself and everything inside it, the same way a stuck Scene
 // wrapper does, so every measurement resets pins as well as wrappers first.
 test('measurements taken while a pin is stuck match the ones taken at scroll 0', async ({ page }) => {

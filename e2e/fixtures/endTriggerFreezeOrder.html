@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>endTriggerFreezeOrder fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .lead {
+        height: 500px;
+      }
+      .scene {
+        height: 400px;
+      }
+      .gap {
+        height: 100px;
+      }
+      /* Padding rather than a margin on #end, which would collapse through .tallScene and move
+         its top along with #end's. */
+      .tallScene {
+        height: 1800px;
+        padding-top: 200px;
+      }
+      .end {
+        height: 40px;
+      }
+      .tail {
+        height: 300vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="lead"></div>
+      <section class="scene"></section>
+      <div class="gap"></div>
+      <!-- 'bottom bottom' freezes .tallScene long after #end, 200px in, has reached the top of the
+           viewport, although .tallScene comes first in DOM order. -->
+      <section class="tallScene"><div id="end" class="end"></div></section>
+    </div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+      const scene = sticky.createStickyTrigger({
+        trigger: '.scene',
+        start: 'top top',
+        endTrigger: '#end',
+        end: 'top top',
+      });
+
+      sticky.createStickyTrigger({ trigger: '.tallScene', start: 'bottom bottom', end: '+=500' });
+      sticky.refresh();
+
+      window.__sceneRange = () => ({ start: scene.start(), end: scene.end() });
+    </script>
+  </body>
+</html>
