@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>coverFreezeOrder fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .lead {
+        height: 500px;
+      }
+      .box {
+        display: flow-root;
+      }
+      .trigger {
+        height: 300px;
+      }
+      .hold {
+        height: 0;
+      }
+      .cover {
+        height: 1000px;
+      }
+      /* Holds the cover layer 100px in, so the rise is over long before this freezes. */
+      .tallScene {
+        height: 2000px;
+        padding-top: 100px;
+        box-sizing: border-box;
+      }
+      .scene {
+        height: 300px;
+      }
+      .holdScene {
+        height: 600px;
+      }
+      .tail {
+        height: 300vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root"></div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const root = document.querySelector('.root');
+      const layout = new URLSearchParams(location.search).get('layout');
+      const box = '<div class="box"><div class="trigger"></div><div class="cover"></div></div>';
+
+      // insideTallScene: a cover layer inside a scene that freezes at its bottom edge.
+      // midRise: a scene freezing while cover is rising, its 'top 150%' 720px into the scroll.
+      // handover: README's "Delaying the rise", the scene freezing just as the rise would begin.
+      root.innerHTML = '<div class="lead"></div>' + {
+        insideTallScene: `<section class="tallScene">${box}</section>`,
+        midRise: `${box}<section class="scene"></section>`,
+        handover:
+          '<section class="holdScene"></section><div class="trigger hold"></div>'
+          + '<section class="cover"></section>',
+      }[layout];
+
+      const sticky = new StickyScrollTrigger(root);
+
+      if (layout === 'insideTallScene') {
+        sticky.createStickyTrigger({ trigger: '.tallScene', start: 'bottom bottom', end: '+=500' });
+      } else if (layout === 'midRise') {
+        sticky.createStickyTrigger({ trigger: '.scene', start: 'top 150%', end: '+=500' });
+      } else {
+        sticky.createStickyTrigger({ trigger: '.holdScene', start: 'bottom bottom', end: '+=800' });
+      }
+
+      const vars = sticky.createOverlapScroll({
+        trigger: '.trigger',
+        cover: '.cover',
+        start: 'bottom bottom',
+      });
+
+      sticky.refresh();
+
+      // The rise begins once cover leaves trigger's bottom edge, and ends with cover's top edge at
+      // the top of the viewport.
+      window.__coverWindow = () => {
+        const trigger = document.querySelector('.trigger');
+        const cover = document.querySelector('.cover');
+        const max = document.documentElement.scrollHeight - window.innerHeight;
+        let riseStart = null;
+        let riseEnd = null;
+
+        for (let scroll = 0; scroll <= max && riseEnd === null; scroll += 1) {
+          window.scrollTo(0, scroll);
+
+          const coverTop = cover.getBoundingClientRect().top;
+
+          if (riseStart === null && coverTop < trigger.getBoundingClientRect().bottom - 0.5) {
+            riseStart = scroll - 1;
+          }
+
+          if (coverTop <= 0) riseEnd = scroll;
+        }
+
+        return { start: vars.start(), end: vars.end(), riseStart, riseEnd };
+      };
+    </script>
+  </body>
+</html>

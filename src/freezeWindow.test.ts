@@ -456,7 +456,7 @@ describe('position-clause end', () => {
     ])).toThrow(/circular structural dependency/);
   });
 
-  it('a Cover layer\'s forward reference resolves via the fixed-point iteration (it creates no padding, so it never depends on its own dwell)', () => {
+  it('a Cover layer\'s forward reference resolves from the referenced trigger\'s own position (it creates no padding, so nothing depends on it)', () => {
     const { plans } = run([
       cover({
         triggerTop: 1000,
@@ -476,6 +476,64 @@ describe('position-clause end', () => {
       stickyTop: -2000,
       paddingHeight: 100,
     });
+  });
+});
+
+// Every cover point is where its element reaches the anchor with no dwell, plus the dwell of each
+// Scene layer that freezes before it gets there, whatever the DOM order.
+describe('cover layer freeze window', () => {
+  // The scene is a tall section frozen at its bottom edge, and the cover layer sits inside it,
+  // near its top: the rise is over long before the scene freezes.
+  it('leaves out an earlier-in-DOM Scene layer that freezes after the rise', () => {
+    const { plans } = run([
+      scene({ triggerTop: 1000, start: clauseStart(-1200), end: dwell(500) }),
+      cover({ triggerTop: 1100, start: clauseStart(500), coverTop: 1400, end: { mode: 'auto' } }),
+    ]);
+
+    expect(plans[1].freezeStart).toBe(600); // not 1100
+    expect(plans[1].freezeEnd).toBe(1400); // not 1900
+  });
+
+  // README's "Delaying the rise": the scene and the zero-height marker after it share one anchor,
+  // so the scene freezes just as the rise would begin, and the rise waits it out.
+  it('counts a Scene layer that freezes just as the rise would begin', () => {
+    const { plans } = run([
+      scene({ triggerTop: 500, start: clauseStart(120), end: dwell(800) }),
+      cover({ triggerTop: 1100, start: clauseStart(720), coverTop: 1100, end: { mode: 'auto' } }),
+    ]);
+
+    expect(plans[0].freezeStart).toBe(380);
+    expect(plans[1].freezeStart).toBe(1180); // 380 + 800
+    expect(plans[1].freezeEnd).toBe(1900); // cover's top at 1100, + 800
+  });
+
+  // The rise stands still with the whole container while the scene is frozen.
+  it('extends the auto end by a Scene layer that freezes mid-rise, but not one freezing as cover arrives', () => {
+    const measure = (sceneAnchorOffset: number) => run([
+      cover({ triggerTop: 500, start: clauseStart(420), coverTop: 800, end: { mode: 'auto' } }),
+      scene({ triggerTop: 1800, start: clauseStart(sceneAnchorOffset), end: dwell(500) }),
+    ]).plans[0];
+
+    expect(measure(1080)).toMatchObject({ freezeStart: 80, freezeEnd: 1300 }); // freezes at 720
+    expect(measure(1000)).toMatchObject({ freezeStart: 80, freezeEnd: 800 }); // freezes at 800
+  });
+
+  it('counts only the Scene layers that freeze before a registered endTrigger arrives', () => {
+    const { plans } = run([
+      cover({
+        triggerTop: 500,
+        start: clauseStart(420),
+        end: clause('top bottom'),
+        endTriggerIsSelf: false,
+        endTriggerIndex: 2,
+        endTriggerHeight: 400,
+      }),
+      scene({ triggerTop: 1800, end: dwell(500) }),
+      scene({ triggerTop: 2200, end: dwell(500) }),
+    ]);
+
+    // The last scene's top enters the 800px viewport at 2200 - 800, before the one at 1800 freezes.
+    expect(plans[0].freezeEnd).toBe(1400); // not 1900
   });
 });
 
@@ -567,6 +625,11 @@ describe('dwellBeforeReach', () => {
 
   it('counts a later freeze the earlier dwell pushes the element past, whatever the input order', () => {
     expect(dwellBeforeReach(300, [freeze(750, 950), freeze(200, 700)])).toBe(700);
+  });
+
+  it('counts a freeze that starts as the element arrives when asked to count ties', () => {
+    expect(dwellBeforeReach(200, [freeze(200, 700)], { countTies: true })).toBe(500);
+    expect(dwellBeforeReach(100, [freeze(200, 700)], { countTies: true })).toBe(0);
   });
 });
 

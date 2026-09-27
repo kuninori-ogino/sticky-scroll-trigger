@@ -9,9 +9,10 @@
  * Two others are resolved in memory instead, by iterating the whole pass to a fixed point. An
  * unregistered endTrigger inside the container depends on the dwell of every Scene layer that
  * would delay it under GSAP's pins, including layers that come later in `measurements` order; a
- * registered endTrigger pointing at a layer later in DOM order (a forward reference) depends on
- * that layer's natural position. Iteration only fails to converge when two or more endTriggers
- * genuinely depend on each other in a cycle.
+ * Scene layer's registered endTrigger later in DOM order (a forward reference) depends on that
+ * layer's natural position. Iteration only fails to converge when two or more endTriggers
+ * genuinely depend on each other in a cycle. Cover layers are planned last, from the settled
+ * Scene windows, since nothing depends on a cover's own window.
  */
 
 import { resolveAnchorTop, resolveElementAnchor } from './position';
@@ -134,7 +135,8 @@ const gapsBeforeEndAnchor = (
   return total;
 };
 
-// One full sequential pass over every layer, in DOM order.
+// One full sequential pass over every Scene layer, in DOM order. A cover layer gets a null plan
+// here and is planned by planCover once the Scene windows settle.
 // precedingGaps accumulates Scene layer dwell only (cover layers never increase document height),
 // and only from layers already processed this pass, which is exactly right for a layer's own
 // natural position because `measurements` is already DOM-ordered. The two clause cases that reach
@@ -145,14 +147,20 @@ const gapsBeforeEndAnchor = (
 // absolute one, where freezeStart is start.value directly.
 const runPass = (
   measurements: readonly LayerMeasurement[],
-  { viewportHeight, structureTop, documentMaxScroll, measureLiveEndTriggerTop }: PlanDeps,
+  { viewportHeight, structureTop, measureLiveEndTriggerTop }: PlanDeps,
   previous: PreviousPass | null,
-): { plans: LayerPlan[]; naturalTops: number[] } => {
+): { plans: (LayerPlan | null)[]; naturalTops: number[] } => {
   const naturalTops: number[] = [];
   const paddingHeightsSoFar: (number | null)[] = [];
   let precedingGaps = 0;
   const plans = measurements.map((measurement, index) => {
     const naturalAbsoluteTop = measurement.triggerTop + precedingGaps;
+
+    naturalTops[index] = naturalAbsoluteTop;
+    paddingHeightsSoFar[index] = null;
+
+    if (measurement.kind === 'cover') return null;
+
     // An absolute start is a fixed scroll position, so unlike a clause start, trigger's own
     // natural position and precedingGaps play no part in it.
     const freezeStart = measurement.start.mode === 'absolute'
@@ -161,22 +169,6 @@ const runPass = (
     let freezeEnd: number;
 
     switch (measurement.end.mode) {
-      case 'auto':
-        // 'auto' only occurs on a cover layer, and measure.ts's resolveStartSpec rejects an
-        // absolute start there, since a cover layer's stickyTop needs a clause's anchorOffset. The
-        // check below guards that invariant; it isn't an expected runtime path.
-        if (measurement.start.mode !== 'clause') {
-          throw new Error(
-            'StickyScrollTrigger: internal error: an absolute start reached \'auto\' end mode, '
-            + 'which resolveStartSpec should have already rejected.',
-          );
-        }
-
-        freezeEnd = freezeStart + Math.max(
-          0,
-          measurement.start.anchorOffset + (measurement.coverTop - measurement.triggerTop),
-        );
-        break;
       case 'dwell':
         freezeEnd = freezeStart + measurement.end.distancePx;
         break;
@@ -187,9 +179,13 @@ const runPass = (
         freezeEnd = Math.max(freezeStart, measurement.end.value);
         break;
 
+      // measure.ts's resolveEndSpec only lets a cover layer end at 'auto' or 'max'.
+      case 'auto':
       case 'max':
-        freezeEnd = Math.max(freezeStart, documentMaxScroll + measurement.end.offsetPx);
-        break;
+        throw new Error(
+          `StickyScrollTrigger: internal error: a Scene layer reached '${measurement.end.mode}' `
+          + 'end mode, which only a cover layer can have.',
+        );
 
       case 'clause': {
         const anchorOffsetEnd = resolveAnchorTop(
@@ -235,42 +231,96 @@ const runPass = (
       }
     }
 
-    let plan: LayerPlan;
+    const paddingHeight = Math.max(0, freezeEnd - freezeStart);
 
-    if (measurement.kind === 'cover') {
-      // The same invariant the 'auto' case above guards: a cover layer's start is always a clause.
-      if (measurement.start.mode !== 'clause') {
-        throw new Error(
-          'StickyScrollTrigger: internal error: a cover layer measurement carries an absolute '
-          + 'start, which resolveStartSpec should have already rejected.',
-        );
-      }
+    precedingGaps += paddingHeight;
+    paddingHeightsSoFar[index] = paddingHeight;
 
-      plan = {
-        freezeStart,
-        freezeEnd,
-        stickyTop: measurement.start.anchorOffset
-          - (measurement.triggerTop - measurement.wrapperTop),
-        paddingHeight: null,
-      };
-    } else {
-      plan = {
-        freezeStart,
-        freezeEnd,
-        stickyTop: structureTop - freezeStart,
-        paddingHeight: Math.max(0, freezeEnd - freezeStart),
-      };
-    }
-
-    if (plan.paddingHeight !== null) precedingGaps += plan.paddingHeight;
-
-    naturalTops[index] = naturalAbsoluteTop;
-    paddingHeightsSoFar[index] = plan.paddingHeight;
-
-    return plan;
+    return { freezeStart, freezeEnd, stickyTop: structureTop - freezeStart, paddingHeight };
   });
 
   return { plans, naturalTops };
+};
+
+// A cover layer's freeze window, from the Scene layers' settled ones. A cover never freezes the
+// container, so nothing else depends on it and it needs no iteration. Each point is where the
+// element it names reaches its anchor with no dwell (the measurements are taken unpadded), plus
+// the dwell of every Scene layer that freezes before it gets there, whatever the DOM order.
+//
+// start is where the rise begins rather than where trigger arrives, so a freeze starting as
+// trigger arrives counts: the rise waits it out. That is what lets a Scene layer ending in a
+// zero-height marker hand straight over to the rise (README's "Delaying the rise").
+const planCover = (
+  measurements: readonly LayerMeasurement[],
+  index: number,
+  windows: readonly { freezeStart: number; freezeEnd: number }[],
+  { viewportHeight, documentMaxScroll, measureLiveEndTriggerTop }: PlanDeps,
+): LayerPlan => {
+  const measurement = measurements[index];
+
+  // measure.ts's resolveStartSpec rejects an absolute start on a cover layer, since its stickyTop
+  // needs a clause's anchorOffset. This guards that invariant; it isn't an expected runtime path.
+  if (measurement.start.mode !== 'clause') {
+    throw new Error(
+      'StickyScrollTrigger: internal error: a cover layer measurement carries an absolute '
+      + 'start, which resolveStartSpec should have already rejected.',
+    );
+  }
+
+  const reached = (reachedAt: number) => reachedAt + dwellBeforeReach(reachedAt, windows);
+  const startReachedAt = measurement.triggerTop - measurement.start.anchorOffset;
+  const freezeStart = startReachedAt
+    + dwellBeforeReach(startReachedAt, windows, { countTies: true });
+  let freezeEnd: number;
+
+  switch (measurement.end.mode) {
+    // Until cover's top edge reaches the top of the viewport.
+    case 'auto':
+      freezeEnd = reached(measurement.coverTop);
+      break;
+
+    case 'dwell':
+      freezeEnd = freezeStart + measurement.end.distancePx;
+      break;
+
+    case 'absolute':
+      freezeEnd = measurement.end.value;
+      break;
+
+    case 'max':
+      freezeEnd = documentMaxScroll + measurement.end.offsetPx;
+      break;
+
+    case 'clause': {
+      const anchorOffsetEnd = resolveAnchorTop(
+        measurement.end.clause,
+        measurement.endTriggerHeight,
+        viewportHeight,
+      );
+
+      if (measurement.end.measureLive) {
+        // Outside the container, so no dwell holds it back.
+        freezeEnd = measureLiveEndTriggerTop(index) - anchorOffsetEnd;
+      } else {
+        const endTop = measurement.endTriggerIsSelf
+          ? measurement.triggerTop
+          : measurement.endTriggerIndex === null
+            ? (measurement.end.rawTop ?? 0)
+            : measurements[measurement.endTriggerIndex].triggerTop;
+
+        freezeEnd = reached(endTop - anchorOffsetEnd);
+      }
+
+      break;
+    }
+  }
+
+  return {
+    freezeStart,
+    freezeEnd: Math.max(freezeStart, freezeEnd),
+    stickyTop: measurement.start.anchorOffset - (measurement.triggerTop - measurement.wrapperTop),
+    paddingHeight: null,
+  };
 };
 
 // How far past a freeze's start an element has to arrive before that freeze counts as starting
@@ -293,17 +343,22 @@ export const TIE_TOLERANCE_PX = 0.05;
 //
 // A Scene trigger resolving its own start lands exactly on its freezeStart, which the tolerance
 // keeps on the not-counted side.
+//
+// countTies moves the tolerance to the counted side, for a point that marks when something starts
+// moving rather than when it arrives.
 export const dwellBeforeReach = (
   reachedAt: number,
   windows: readonly { freezeStart: number; freezeEnd: number }[],
+  { countTies = false }: { countTies?: boolean } = {},
 ): number => {
+  const tolerance = countTies ? -TIE_TOLERANCE_PX : TIE_TOLERANCE_PX;
   let earlierDwell = 0;
   let counted = 0;
 
   [...windows]
     .sort((a, b) => a.freezeStart - b.freezeStart)
     .forEach(({ freezeStart, freezeEnd }) => {
-      if (freezeStart < reachedAt + earlierDwell - TIE_TOLERANCE_PX) {
+      if (freezeStart < reachedAt + earlierDwell - tolerance) {
         counted += freezeEnd - freezeStart;
       }
 
@@ -333,8 +388,8 @@ export const dwellConsumedAt = (
 //   above an earlier layer's trigger leaves that layer out even though its dwell moves i's start.
 //   With that layer's own end reaching past i's trigger, the pair can oscillate into the throw
 //   below. The DOM-order rule before this one had it too.
-// - A forward reference depends directly on the referenced layer's naturalTop, with no such
-//   cancellation, so endTriggers pointing at each other (or a longer cycle through several
+// - A Scene layer's forward reference depends directly on the referenced layer's naturalTop, with
+//   no such cancellation, so endTriggers pointing at each other (or a longer cycle through several
 //   layers) have no fixed point. That's the case the throw below exists for.
 //
 // Re-running the full pass with the previous pass's results converges for every acyclic
@@ -346,6 +401,8 @@ export const planLayers = (
   deps: PlanDeps,
 ): LayerPlan[] => {
   const needsConvergence = measurements.some((measurement, index) => {
+    if (measurement.kind !== 'scene') return false;
+
     if (measurement.end.mode !== 'clause' || measurement.endTriggerIsSelf) return false;
 
     return measurement.endTriggerIndex === null
@@ -376,11 +433,13 @@ export const planLayers = (
   if (needsConvergence) {
     for (let pass = 0; pass < measurements.length; pass += 1) {
       const previous: PreviousPass = {
-        paddings: plans.map((plan) => plan.paddingHeight),
+        paddings: plans.map((plan) => plan?.paddingHeight ?? null),
         naturalTops,
       };
       const next = runPass(measurements, passDeps, previous);
-      const stable = next.plans.every((plan, i) => plan.paddingHeight === plans[i].paddingHeight);
+      const stable = next.plans.every(
+        (plan, i) => plan?.paddingHeight === plans[i]?.paddingHeight,
+      );
 
       plans = next.plans;
       naturalTops = next.naturalTops;
@@ -398,7 +457,12 @@ export const planLayers = (
     }
   }
 
-  plans.forEach((plan, index) => deps.onPlanned(index, plan));
+  const windows = plans.filter((plan): plan is LayerPlan => plan !== null);
+  const finalPlans = plans.map(
+    (plan, index) => plan ?? planCover(measurements, index, windows, passDeps),
+  );
 
-  return plans;
+  finalPlans.forEach((plan, index) => deps.onPlanned(index, plan));
+
+  return finalPlans;
 };

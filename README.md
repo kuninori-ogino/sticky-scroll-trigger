@@ -197,10 +197,10 @@ Every [`refresh()`](#refresh) runs that check again over the covering side as it
 Pinning here is plain `position:sticky`, and the browser keeps a sticky element stuck only until its containing block's bottom edge catches up with it. That containing block is `trigger`'s own parent, not the shared container:
 
 ```
-trigger's parent's bottom edge - trigger's bottom edge  >=  end - start
+trigger's parent's bottom edge - trigger's bottom edge  >=  end - start - dwell
 ```
 
-With the auto `end`, that distance is where `cover`'s top edge sits when the freeze starts: `start`'s pinned offset, plus `trigger`'s own height, plus any gap between the two. Under the defaults (`start: 'bottom bottom'`, `cover` directly after `trigger`) it comes to one viewport height; a `trigger` taller than the viewport, pinned near the top, needs more.
+`dwell` is that of any Scene layer freezing mid-rise: it holds the whole container, `cover` and the parent included, so it uses no room. With the auto `end`, `end - start - dwell` is where `cover`'s top edge sits when the freeze starts: `start`'s pinned offset, plus `trigger`'s own height, plus any gap between the two. Under the defaults (`start: 'bottom bottom'`, `cover` directly after `trigger`) it comes to one viewport height; a `trigger` taller than the viewport, pinned near the top, needs more.
 
 With less room than that, the browser releases the wrapper mid-rise: `trigger` scrolls away before `cover` has covered it, at a point that moves with the window size, since the requirement scales with the viewport while the room doesn't. Content after `trigger`'s parent never counts, however long the page is. Add the missing height below `trigger` (a taller `cover`, or a spacer after it), or keep the sections that follow inside the same parent rather than wrapping `trigger` and `cover` in a box of their own.
 
@@ -240,7 +240,7 @@ ScrollTrigger.create(
 );
 ```
 
-The rise picks up where the scrub ends, with no arithmetic on your side, because `refresh()` adds a Scene layer's dwell to the freeze window of every layer whose trigger comes later in DOM order. That is also why the marker goes after the scene rather than inside it.
+The rise picks up where the scrub ends, with no arithmetic on your side, because `refresh()` adds a Scene layer's dwell to a cover layer's freeze window whenever the scene freezes first, including one that freezes just as the rise would begin.
 
 The marker sits on the scene's bottom edge, so one `'bottom bottom'` describes both layers and nothing moves at the handover. The scene pins with that edge on the viewport's bottom, and `cover`, which begins there, stays just off screen for the whole hold. Pin the scene anywhere else and you have to reconcile the two clauses by hand, since a zero-height marker resolves any clause to a plain viewport position. Its `start` has to name wherever the scene's bottom edge sits while pinned, or `trigger` jumps.
 
@@ -496,6 +496,8 @@ One pair can't compose: a `start` whose element token already carries an offset 
 If `endTrigger` points to another registered layer, its position is resolved using the same computation this module already does for that layer. A forward reference (pointing to a layer later in DOM order) only works from `createOverlapScroll`'s cover layer, which adds no padding and so doesn't depend on its own dwell. A `createStickyTrigger` Scene layer throws immediately instead: its own dwell padding pushes down everything after it, so the reference would depend on that dwell and never converge.
 
 For an unregistered `endTrigger`, its raw DOM position is measured directly, then adjusted the way GSAP's own pins would delay it: by the dwell of every other registered Scene layer, including ones registered after this call, whose `trigger` ends above the point on `endTrigger` that `end` names, or encloses `endTrigger` and freezes before that point reaches its viewport anchor. No other scene counts, even one that freezes first.
+
+A `createOverlapScroll` cover layer's `end` instead counts a scene's dwell exactly when that scene freezes before the point arrives, for any `endTrigger` inside the container, registered or not: its window describes the rise on screen, and a cover has no pin spacer to match.
 
 > Keep `createStickyTrigger`'s `endTrigger` inside the shared container: pointing at an element outside it throws. If you need to reference something outside the container, use a dwell distance (e.g. `'+=500'`) instead.
 >

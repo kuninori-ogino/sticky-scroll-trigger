@@ -557,8 +557,8 @@ export default class StickyScrollTrigger {
   // Pass 1 measures every layer's natural position, then pass 2 (planLayers) applies sticky and
   // padding while accumulating precedingGaps in DOM order. Keeping them separate is what stops an
   // earlier layer's applied sticky from throwing off a later layer's measurement.
-  // Forward references are resolved by planLayers' fixed-point iteration rather than by this pass
-  // ordering. An endTrigger outside the shared container isn't at the right position until padding
+  // Forward references are resolved inside planLayers rather than by this pass ordering. An
+  // endTrigger outside the shared container isn't at the right position until padding
   // is finalized, so pass 2 runs a second time in that case alone (cover layers only;
   // measure.ts's resolveEndSpec rejects it for Scene layers).
   // The arithmetic lives in freezeWindow.ts's planLayers, which touches no DOM; this function only

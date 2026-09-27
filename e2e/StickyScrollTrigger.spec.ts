@@ -270,6 +270,22 @@ test('an unregistered endTrigger inside a scene\'s trigger doesn\'t count a dwel
   expect(await findArrivalScroll(page, 'end')).toBe(end + (end - start));
 });
 
+// A cover layer's window counts a Scene layer's dwell only when the scene freezes first. Counted by
+// DOM order, insideTallScene ran 500px late and midRise ended 500px early.
+for (const layout of ['insideTallScene', 'midRise', 'handover']) {
+  test(`a cover layer's freeze window matches the rise it describes (${layout})`, async ({ page }) => {
+    await page.goto(`/fixtures/coverFreezeOrder.html?layout=${layout}`);
+
+    type CoverWindow = { start: number; end: number; riseStart: number; riseEnd: number };
+    type FixtureWindow = Window & { __coverWindow: () => CoverWindow };
+
+    const { start, end, riseStart, riseEnd } = await page.evaluate(() =>
+      (window as unknown as FixtureWindow).__coverWindow());
+
+    expect([start, end]).toEqual([riseStart, riseEnd]);
+  });
+}
+
 // A stuck pin shifts documentTop for itself and everything inside it, the same way a stuck Scene
 // wrapper does, so every measurement resets pins as well as wrappers first.
 test('measurements taken while a pin is stuck match the ones taken at scroll 0', async ({ page }) => {

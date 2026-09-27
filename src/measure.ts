@@ -24,9 +24,11 @@ import type { Layer } from './types';
 // Converts a resolved end value into an EndSpec. Only a position-clause end needs a decision
 // here: where endTrigger's position comes from.
 // - a registered layer: pass 2 (planLayers) resolves it, including a cover layer's forward
-//   reference, which converges because cover layers add no padding. A Scene layer's forward
-//   reference is rejected outright, since its own dwell precedes anything after it.
-// - unregistered, inside the shared container: pass 1 measures it, pass 2 adds precedingGaps.
+//   reference, which needs no iteration because cover layers add no padding. A Scene layer's
+//   forward reference is rejected outright, since its own dwell precedes anything after it.
+// - unregistered, inside the shared container: pass 1 measures it, pass 2 adds the dwell of the
+//   Scene layers that would delay it (a Scene layer's end by GSAP's pin rule, a cover's by when
+//   each scene freezes).
 // - unregistered, outside it: padding shifts the measurement, so pass 2 re-measures (measureLive).
 export const resolveEndSpec = (
   rootElement: HTMLElement,
