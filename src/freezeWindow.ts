@@ -373,12 +373,13 @@ export const dwellConsumedAt = (
 //   inputs aren't all known on the first pass (see runPass). That lookup's non-cancelling
 //   dependencies run from layer i to a later layer j, which can't close into a cycle, with one
 //   exception: an endTrigger above an earlier layer's trigger leaves that layer out even though
-//   its dwell moves i's start. With that layer's own end reaching past i's trigger, the pair can
-//   oscillate into the throw below. The DOM-order rule before this one had it too.
+//   its dwell moves i's start. With that layer's own end reaching past i's trigger, each pass
+//   flips the pair between two answers that straddle the one they share, so a pass that returns
+//   to the answer before last feeds the next one their average instead.
 //
-// Re-running the full pass with the previous pass's results converges otherwise, within one
-// iteration per layer, enough for any chain no longer than the layer count (see
-// freezeWindow.test.ts's DOM-order-scrambled stress test and the oscillation test beside it).
+// Re-running the full pass with the previous pass's results settles a chain within one iteration
+// per layer and such a flip within two more; anything still moving after that throws (see
+// freezeWindow.test.ts's DOM-order-scrambled stress test and the flip test beside it).
 export const planLayers = (
   measurements: readonly LayerMeasurement[],
   deps: PlanDeps,
@@ -409,26 +410,37 @@ export const planLayers = (
       return value;
     },
   };
+  const paddingsOf = (passPlans: readonly (LayerPlan | null)[]) =>
+    passPlans.map((plan) => plan?.paddingHeight ?? null);
+  const samePaddings = (a: PreviousPass['paddings'], b: PreviousPass['paddings']) =>
+    a.every((value, i) => value === b[i]
+      || (value !== null && b[i] !== null && Math.abs(value - b[i]!) <= TIE_TOLERANCE_PX));
   let plans = runPass(measurements, passDeps, null);
 
   if (needsConvergence) {
-    for (let pass = 0; pass < measurements.length; pass += 1) {
-      const previous: PreviousPass = {
-        paddings: plans.map((plan) => plan?.paddingHeight ?? null),
-      };
-      const next = runPass(measurements, passDeps, previous);
-      const stable = next.every((plan, i) => plan?.paddingHeight === plans[i]?.paddingHeight);
+    const budget = measurements.length + 2;
+    let fed = paddingsOf(plans);
+    let fedBefore: PreviousPass['paddings'] | null = null;
 
-      plans = next;
+    for (let pass = 0; pass < budget; pass += 1) {
+      plans = runPass(measurements, passDeps, { paddings: fed });
 
-      if (stable) break;
+      const out = paddingsOf(plans);
 
-      if (pass === measurements.length - 1) {
+      if (samePaddings(out, fed)) break;
+
+      const flipped = fedBefore !== null && samePaddings(out, fedBefore);
+
+      fedBefore = fed;
+      fed = flipped
+        ? out.map((value, i) => (value === null ? null : (value + fed[i]!) / 2))
+        : out;
+
+      if (pass === budget - 1) {
         throw new Error(
           'StickyScrollTrigger: could not resolve endTrigger positions: some endTrigger '
-          + 'references form a circular structural dependency, each layer\'s end depending on a '
-          + 'layer whose own end depends back on it. Point each endTrigger at a layer that '
-          + 'doesn\'t depend on it.',
+          + 'references form a circular structural dependency that never settles. Point each '
+          + 'endTrigger at an element that doesn\'t depend on it.',
         );
       }
     }

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>endTriggerFlip fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .lead {
+        height: 900px;
+      }
+      .gap {
+        height: 100px;
+      }
+      .scene {
+        height: 100px;
+      }
+      #secondEnd {
+        height: 200px;
+      }
+      #firstEnd {
+        height: 40px;
+      }
+      .tail {
+        height: 300vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="lead"></div>
+      <!-- Above .first's trigger, so .first's dwell doesn't count toward .second's end, though it
+           moves .second's start. .first's own end, below .second, counts .second's dwell. -->
+      <div id="secondEnd"></div>
+      <div class="gap"></div>
+      <section class="scene first"></section>
+      <section class="scene second"></section>
+      <div id="firstEnd"></div>
+    </div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+      const first = sticky.createStickyTrigger({
+        trigger: '.first',
+        start: 'top bottom',
+        endTrigger: '#firstEnd',
+        end: 'top bottom',
+      });
+      const second = sticky.createStickyTrigger({
+        trigger: '.second',
+        start: 'top bottom',
+        endTrigger: '#secondEnd',
+        end: 'bottom top',
+      });
+
+      sticky.refresh();
+
+      window.__windows = () => [first, second].map((vars) => [vars.start(), vars.end()]);
+    </script>
+  </body>
+</html>

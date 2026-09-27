@@ -458,9 +458,10 @@ describe('position-clause end', () => {
   });
 
   // Layer 1's endTrigger sits above layer 0's trigger, so layer 0 doesn't count toward it, yet
-  // layer 0's dwell moves layer 1's start; layer 0's own end counts layer 1. See planLayers.
-  it('throws when two layers\' ends feed each other without cancelling', () => {
-    expect(() => run([
+  // layer 0's dwell moves layer 1's start; layer 0's own end counts layer 1. Undamped, each pass
+  // flips between (200, 400) and (600, 0); the shared answer is p0 = 200 + p1, p1 = 600 - p0.
+  it('settles two layers whose ends feed each other without cancelling on the answer they share', () => {
+    const { plans } = run([
       scene({
         triggerTop: 1200,
         triggerHeight: 100,
@@ -477,7 +478,10 @@ describe('position-clause end', () => {
         endTriggerIsSelf: false,
         endTriggerHeight: 200,
       }),
-    ])).toThrow(/circular structural dependency/);
+    ]);
+
+    expect(plans.map(({ freezeStart, freezeEnd }) => [freezeStart, freezeEnd]))
+      .toEqual([[400, 800], [900, 1100]]);
   });
 
   it('a Cover layer\'s forward reference resolves from the referenced trigger\'s own position (it creates no padding, so nothing depends on it)', () => {

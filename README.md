@@ -531,7 +531,7 @@ sticky.createOverlapScroll({
 - GSAP's `clamp()` position wrapper isn't accepted, and a function-valued `start`/`end` is called with no arguments rather than with the `ScrollTrigger` instance GSAP passes (see [Position syntax](#position-syntax))
 - A `createStickyTrigger` Scene layer can't point `endTrigger` at a registered layer later in DOM order; `createOverlapScroll`'s cover layer can (see [End syntax](#end-syntax))
 - If a Scene layer's `end` uses a position clause, don't set `endTrigger` to an element that gets pushed down by that same scene's own dwell; the value won't converge
-- If several layers' unregistered or cover-layer `endTrigger`s form a dependency cycle, `refresh()` throws instead of settling on a wrong value
+- If Scene layers' `endTrigger`s depend on each other in a way that never settles, `refresh()` throws instead of settling on a wrong value. Two layers whose ends each move the other settle on the one answer they share
 - `end: 'max'` throws on `createStickyTrigger` and `createStickyPin` for the same reason (their own padding/spacer would depend on itself); use `createOverlapScroll` instead
 - Using the same element as the `trigger` of two different `createStickyTrigger`/`createOverlapScroll`/`createStickyPin` calls throws
 - You must call `refresh()` once manually after registration. Window resize/load recomputation is automatically wired to GSAP's own `refreshInit`, but for layout changes that don't involve those (e.g. content height changes), call `ScrollTrigger.refresh()` yourself (see [Calling refresh](#calling-refresh))

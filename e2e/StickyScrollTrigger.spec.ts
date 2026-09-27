@@ -299,6 +299,42 @@ test('a registered endTrigger counts its own dwell when it freezes before the po
   expect(bottomAtTop).toBe(end + (end - start));
 });
 
+// refresh() used to flip these two windows between two answers until it threw. The answer they
+// settle on must match where the page actually stands still.
+test('two Scene ends that feed each other settle on windows the page freezes for', async ({ page }) => {
+  await page.goto('/fixtures/endTriggerFlip.html');
+
+  const windows = await page.evaluate(() =>
+    (window as unknown as { __windows: () => [number, number][] }).__windows());
+  const stillRuns = await page.evaluate(() => {
+    const scene = document.querySelector('.first')!;
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    const runs: [number, number][] = [];
+    let previous: number | null = null;
+    let runStart: number | null = null;
+
+    for (let scroll = 0; scroll <= max; scroll += 1) {
+      window.scrollTo(0, scroll);
+
+      const top = scene.getBoundingClientRect().top;
+
+      if (previous !== null && top === previous) runStart ??= scroll - 1;
+      else if (runStart !== null) {
+        runs.push([runStart, scroll - 1]);
+        runStart = null;
+      }
+
+      previous = top;
+    }
+
+    return runs;
+  });
+
+  expect(windows[0][1]).toBeGreaterThan(windows[0][0]);
+  expect(windows[1][1]).toBeGreaterThan(windows[1][0]);
+  expect(stillRuns).toEqual(windows);
+});
+
 // A cover layer's window counts a Scene layer's dwell only when the scene freezes first. Counted by
 // DOM order, insideTallScene ran 500px late and midRise ended 500px early.
 for (const layout of ['insideTallScene', 'midRise', 'handover']) {
