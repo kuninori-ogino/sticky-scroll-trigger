@@ -310,12 +310,12 @@ gsap.to(plainBox, {
 });
 ```
 
-| option       | default        | description                                                                                |
-| ------------ | -------------- | ------------------------------------------------------------------------------------------ |
-| `trigger`    | (required)     | Reference element for `start`. Also passed through as-is to GSAP's `scrollTrigger.trigger` |
-| `start`      | `'top bottom'` | [Position syntax](#position-syntax), resolved relative to `trigger`                        |
-| `end`        | `'bottom top'` | [Position syntax](#position-syntax), resolved relative to `endTrigger`                     |
-| `endTrigger` | `trigger`      | Reference element for `end` (same idea as GSAP's standard `trigger`/`endTrigger` split)    |
+| option       | default        | description                                                                                                                   |
+| ------------ | -------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `trigger`    | (required)     | Reference element for `start`. Also passed through as-is to GSAP's `scrollTrigger.trigger`                                    |
+| `start`      | `'top bottom'` | [Position syntax](#position-syntax), resolved relative to `trigger`                                                           |
+| `end`        | `'bottom top'` | [Position syntax](#position-syntax), resolved relative to `endTrigger`                                                        |
+| `endTrigger` | `trigger`      | Reference element for `end` (same idea as GSAP's standard `trigger`/`endTrigger` split). May sit outside the shared container |
 
 Omit `start` and `end` and the range runs from `trigger`'s top edge entering the viewport at the bottom to `endTrigger`'s bottom edge leaving it at the top, GSAP's own defaults for a trigger that doesn't pin.
 
@@ -325,7 +325,7 @@ If you need different reference elements or custom progress logic, use `resolveS
 
 ### `resolveScrollPosition(element, position)`
 
-For any element inside the shared container (registered or not), returns the absolute scroll position (px) for GSAP position syntax (`element` + `position`). As with `trigger`/`endTrigger`/`cover` above, `element` also accepts a CSS selector string in addition to an `HTMLElement`. Use this to keep plain ScrollTriggers inside nested sticky in sync with real scroll distance. If `start` and `end` use the same element, [`createResolvedTrigger`](#createresolvedtriggeroptions) is usually simpler.
+For any element inside the shared container (registered or not), returns the absolute scroll position (px) for GSAP position syntax (`element` + `position`). As with `trigger`/`endTrigger`/`cover` above, `element` also accepts a CSS selector string in addition to an `HTMLElement`. Use this to keep plain ScrollTriggers inside nested sticky in sync with real scroll distance. An element outside the container gets no dwell added, since the scenes don't hold it back. If `start` and `end` use the same element, [`createResolvedTrigger`](#createresolvedtriggeroptions) is usually simpler.
 
 ```ts
 const sticky = new StickyScrollTrigger(".container__inner");
