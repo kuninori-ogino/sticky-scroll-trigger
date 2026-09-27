@@ -1057,9 +1057,12 @@ export default class StickyScrollTrigger {
     clause: string,
     viewportHeight: number,
   ): number {
+    // Only elements inside the shared container lag behind the nesting. One after it already has
+    // every layer's dwell padding in its documentTop, so adding the dwell would count it twice.
+    const layers = this.#rootElement.contains(element) ? this.#layers : [];
     let gap = 0;
 
-    this.#layers.forEach((layer) => {
+    layers.forEach((layer) => {
       if (layer.kind !== 'scene') return;
 
       if (compareDocumentOrder(layer.trigger, element) >= 0) return;

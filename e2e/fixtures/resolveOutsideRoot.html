@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>resolveOutsideRoot fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .scene {
+        height: 400px;
+      }
+      .footer {
+        height: 200vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <section class="scene"></section>
+    </div>
+    <!-- After the container, so its documentTop already includes the scene's dwell padding. -->
+    <section class="footer"></section>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      sticky.createStickyTrigger({ trigger: '.scene', start: 'top top', end: '+=500' });
+      sticky.refresh();
+
+      const vars = sticky.createResolvedTrigger({
+        trigger: '.scene',
+        endTrigger: '.footer',
+        end: 'top top',
+      });
+
+      window.__resolvedEnd = () => vars.end();
+    </script>
+  </body>
+</html>

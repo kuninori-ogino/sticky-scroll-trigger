@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Documented that `createOverlapScroll`'s `'bottom bottom'` default can resolve to a negative freeze-window start with no `start` passed. When the covered `trigger` sits within a viewport height of the document top and is shorter than the viewport, part of the rise plays before scroll 0, the same as any position clause resolving past the document top, which the README already noted only for Scene layers. `clamp()` stays unsupported, and a cover layer's sticky offset does not reference the freeze window's start, so the fix is on the content side: make `trigger` at least a viewport tall, or move it further down the page. Behavior is unchanged; only the README was missing it (see [Position syntax](README.md#position-syntax))
+- `createResolvedTrigger`'s `end` no longer lands one full dwell late for an `endTrigger` after the shared container. That element's position already includes every Scene layer's dwell, which was then added a second time. `resolveScrollPosition` now adds no dwell for elements outside the container, as `getScrollTop` already did (see [`createResolvedTrigger`](README.md#createresolvedtriggeroptions))
 
 ## [0.9.0] - 2026-09-01
 

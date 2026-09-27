@@ -970,6 +970,17 @@ describe('resolveScrollPosition()', () => {
 
     expect(after).toBe(before);
   });
+
+  it('adds no dwell for an element outside the shared container', () => {
+    const { query, controller } = setup();
+    const outside = query('.outside');
+    const before = controller.resolveScrollPosition(outside, 'top top');
+
+    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=500' });
+    controller.refresh();
+
+    expect(controller.resolveScrollPosition(outside, 'top top')).toBe(before);
+  });
 });
 
 describe('static getScrollTop()', () => {

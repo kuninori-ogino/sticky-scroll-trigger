@@ -222,6 +222,23 @@ test('resolveScrollPosition returns the same absolute position whether called at
   expect(whileStuck).toBe(baseline);
 });
 
+// createResolvedTrigger doesn't restrict endTrigger to the shared container, so this is how an
+// element after it reaches resolveScrollPosition.
+test('createResolvedTrigger\'s end against an endTrigger after the container lands where endTrigger really reaches the viewport', async ({ page }) => {
+  await page.goto('/fixtures/resolveOutsideRoot.html');
+
+  const result = await page.evaluate(() => {
+    const footer = document.querySelector('.footer')!;
+
+    return {
+      resolved: (window as unknown as { __resolvedEnd: () => number }).__resolvedEnd(),
+      actual: window.scrollY + footer.getBoundingClientRect().top,
+    };
+  });
+
+  expect(result.resolved).toBeCloseTo(result.actual, 0);
+});
+
 // measureViewportHeight follows the same technique GSAP itself uses to dodge resizes caused
 // by a mobile browser's address bar showing/hiding:
 // "append a height:100vh div to body and read its offsetHeight."
