@@ -418,8 +418,9 @@ export default class StickyScrollTrigger {
   // Recomputes pin layers' sticky top and spacer height. Pinning here is plain position:sticky, so
   // unlike Scene/Cover layers this never hands GSAP an absolute scroll position. The spacer height
   // spans from the natural position where pinning begins to the release position
-  // resolvePinReleaseTop returns, plus the sticky top and trigger's own height (a sticky element
-  // unpins once it catches up to the bottom of its containing block).
+  // resolvePinReleaseTop returns, plus the sticky top, trigger's own height and its bottom margin
+  // (a sticky element unpins once its margin box catches up to the bottom of its containing
+  // block).
   #refreshPinLayers(viewportHeight: number) {
     this.#pinLayers.forEach((layer) => {
       if (!layer.inner) return;
@@ -445,6 +446,7 @@ export default class StickyScrollTrigger {
 
       const triggerTop = documentTop(layer.trigger);
       const triggerHeight = measureUsedHeight(layer.trigger);
+      const triggerMarginBottom = parseFloat(getComputedStyle(layer.trigger).marginBottom) || 0;
       const classifiedStart = classifyPosition(resolvedStart);
 
       // A bare number keeps GSAP's meaning, an absolute scroll position, which a pin can't act on.
@@ -473,7 +475,7 @@ export default class StickyScrollTrigger {
         triggerTop - topPx,
         viewportHeight,
       );
-      const height = releaseTop - triggerTop + topPx + triggerHeight;
+      const height = releaseTop - triggerTop + topPx + triggerHeight + triggerMarginBottom;
 
       applyStickyPosition(layer.trigger, topPx);
       layer.inner.style.height = `${Math.max(0, height)}px`;

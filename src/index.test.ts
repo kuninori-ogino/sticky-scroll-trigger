@@ -1329,6 +1329,17 @@ describe('createStickyPin()', () => {
       expect(trigger.style.top).toBe('30px');
       expect(trigger.parentElement!.style.height).toBe('400px');
     });
+
+    it('extends the range by trigger\'s bottom margin', () => {
+      const { query, controller } = setup();
+      const trigger = query('.inside');
+
+      trigger.style.marginBottom = '50px';
+      controller.createStickyPin({ trigger, endTrigger: query('.scene'), end: '+=400' });
+      controller.refresh();
+
+      expect(trigger.parentElement!.style.height).toBe('450px');
+    });
   });
 
   // How long a pin against itself holds depends on layout, so the duration is e2e's job.

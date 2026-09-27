@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinMarginRelease fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .pin {
+        height: 100px;
+        background: #c33;
+      }
+      .gap {
+        height: 400px;
+      }
+      .end {
+        height: 100px;
+      }
+      .spacer {
+        height: 150vh;
+      }
+      .tail {
+        height: 200vh;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Each pin releases at its own .end reaching the viewport's top, except #self, which keeps
+         the default end and releases at its own bottom edge. The spacers keep one pin's range
+         clear of the next. -->
+    <div id="bottom" class="pin" style="margin-bottom: 50px"></div>
+    <div class="gap"></div>
+    <div id="bottom-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="both" class="pin" style="margin: 30px 0 50px"></div>
+    <div class="gap"></div>
+    <div id="both-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="negative" class="pin" style="margin-bottom: -20px"></div>
+    <div class="gap"></div>
+    <div id="negative-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="percent" class="pin" style="margin-bottom: 5%"></div>
+    <div class="gap"></div>
+    <div id="percent-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="self" class="pin" style="margin-bottom: 50px"></div>
+    <div class="tail"></div>
+    <div class="root"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      ['bottom', 'both', 'negative', 'percent'].forEach((id) => {
+        sticky.createStickyPin({ trigger: `#${id}`, endTrigger: `#${id}-end`, end: 'top top' });
+      });
+      sticky.createStickyPin({ trigger: '#self' });
+      sticky.refresh();
+
+      // Where the pin's top sits in the viewport at the scroll its end names, and a pixel later.
+      window.__topsAroundRelease = (id) => {
+        const pin = document.getElementById(id);
+        const end = document.getElementById(`${id}-end`);
+
+        // Measured from scroll 0, where no pin is stuck yet.
+        window.scrollTo(0, 0);
+
+        const release = end
+          ? end.getBoundingClientRect().top + window.scrollY
+          : pin.getBoundingClientRect().top + window.scrollY + pin.getBoundingClientRect().height;
+        const topAt = (y) => {
+          window.scrollTo(0, y);
+
+          return pin.getBoundingClientRect().top;
+        };
+
+        return { atRelease: topAt(release), after: topAt(release + 1) };
+      };
+    </script>
+  </body>
+</html>

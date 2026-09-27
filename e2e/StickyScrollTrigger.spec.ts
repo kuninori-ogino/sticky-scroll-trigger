@@ -752,6 +752,28 @@ test('a pinned trigger with vertical margins rests at exactly the top its start 
   expect(heldTop).toBeCloseTo(0, 0);
 });
 
+// Each pin holds through the scroll its end names and moves a pixel later, whatever its margins,
+// negative and percentage ones included.
+test('createStickyPin releases at the scroll its end names, whatever trigger\'s margins', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/pinMarginRelease.html');
+
+  type FixtureWindow = Window & {
+    __topsAroundRelease: (id: string) => { atRelease: number; after: number };
+  };
+
+  for (const id of ['bottom', 'both', 'negative', 'percent', 'self']) {
+    const tops = await page.evaluate(
+      (pinId) => (window as unknown as FixtureWindow).__topsAroundRelease(pinId),
+      id,
+    );
+
+    expect(tops.atRelease, `#${id} at release`).toBeCloseTo(0, 0);
+    expect(tops.after, `#${id} a pixel later`).toBeCloseTo(-1, 0);
+  }
+});
+
 // The element side of createStickyPin's start clause resolves against trigger's own height:
 // 'bottom bottom' has to become a sticky top of viewportHeight - 60, a number the clause never
 // states. jsdom reports every height as 0, so that term only shows up in a real browser.
