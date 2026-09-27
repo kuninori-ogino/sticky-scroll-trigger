@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { planLayers } from './freezeWindow';
+import { dwellBeforeReach, planLayers } from './freezeWindow';
 import type { LayerMeasurement, LayerPlan, PlanDeps } from './freezeWindow';
 
 // planLayers never touches the DOM,
@@ -461,6 +461,42 @@ describe('onPlanned', () => {
 
     expect(planned.map((entry) => entry.index)).toEqual([0, 1]);
     expect(planned.map((entry) => entry.plan)).toEqual(plans);
+  });
+});
+
+describe('dwellBeforeReach', () => {
+  const freeze = (freezeStart: number, freezeEnd: number) => ({ freezeStart, freezeEnd });
+
+  it('counts the whole dwell of a freeze that starts before the element arrives', () => {
+    expect(dwellBeforeReach(300, [freeze(200, 700)])).toBe(500);
+  });
+
+  // An element that reaches its anchor as the freeze starts sits there for the whole window, so
+  // the earliest scroll position it's there at is the one before the dwell.
+  it('counts none of a freeze that starts at or after the element arrives', () => {
+    expect(dwellBeforeReach(200, [freeze(200, 700)])).toBe(0);
+    expect(dwellBeforeReach(100, [freeze(200, 700)])).toBe(0);
+  });
+
+  // planLayers adds the first dwell to the second trigger's top before subtracting its anchor,
+  // which lands at 1299.8999999999999 rather than the 1299.9 the element arrives at.
+  it('counts none of a Scene trigger\'s own dwell when it resolves its own start', () => {
+    const { plans } = run([
+      scene({ triggerTop: 0, start: clauseStart(0.1), end: dwell(300.3) }),
+      scene({ triggerTop: 1000, start: clauseStart(0.4), end: dwell(500) }),
+    ]);
+
+    expect(dwellBeforeReach(1000 - 0.4, plans)).toBeCloseTo(300.3);
+  });
+
+  // Each test adds every earlier layer's dwell, counted or not. That can't pull in a later layer
+  // once an earlier one is out: the later one opens after the earlier one closes.
+  it('counts none of a later freeze once an earlier one doesn\'t count', () => {
+    expect(dwellBeforeReach(100, [freeze(200, 700), freeze(750, 950)])).toBe(0);
+  });
+
+  it('counts a later freeze the earlier dwell pushes the element past, whatever the input order', () => {
+    expect(dwellBeforeReach(300, [freeze(750, 950), freeze(200, 700)])).toBe(700);
   });
 });
 

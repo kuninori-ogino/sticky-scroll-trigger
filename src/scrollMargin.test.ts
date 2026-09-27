@@ -3,10 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildStylesheet, createScrollMarginSync } from './scrollMargin';
 import type { SceneDwell } from './scrollMargin';
 
-// sync() takes its freeze windows as plain arguments, so jsdom's absent layout costs nothing here:
-// every dwell below is a real number rather than the '+=' notation index.test.ts has to spell out
-// to work around documentTop always reading 0. That's what makes the lag arithmetic, the
-// document-order comparison and the zero-length filter checkable at all.
+// sync() takes its freeze windows and the targets' natural tops as plain arguments, so jsdom's
+// absent layout costs nothing here, and the text sync() writes is checkable exactly. jsdom can't
+// evaluate that text, though: whether each layer's clamp() step counts its dwell is only visible
+// in a real browser.
 //
 // jsdom implements no document.adoptedStyleSheets, so usesCssRamp is false and every sync() here
 // takes the JS ramp path. The CSS path's own text is checked by calling buildStylesheet directly;
@@ -14,8 +14,11 @@ import type { SceneDwell } from './scrollMargin';
 // scroll-into-view land correctly, is e2e/StickyScrollTrigger.spec.ts's job.
 
 const query = (sel: string) => document.querySelector<HTMLElement>(sel)!;
-const dwell = (trigger: HTMLElement, freezeStart: number, freezeEnd: number): SceneDwell =>
-  ({ trigger, freezeStart, freezeEnd });
+const dwell = (freezeStart: number, freezeEnd: number): SceneDwell => ({ freezeStart, freezeEnd });
+// Stands in for index.ts's measurement, which jsdom can't do: each fixture element carries its
+// natural top as data-top.
+const naturalTops = (targets: readonly HTMLElement[]) =>
+  targets.map((target) => Number(target.dataset.top));
 let live: ReturnType<typeof createScrollMarginSync>[] = [];
 
 // restore() is what takes the scroll listener back off, so every sync built here is torn down
@@ -33,17 +36,28 @@ const createSync = (targetSelector: string | null = 'div[id]', root = query('.ro
 const instanceIdOf = (host: HTMLElement) =>
   host.getAttributeNames().find((name) => name.startsWith('data-sst'))!.slice('data-'.length);
 
-// The exact value sync() writes: the author's own value, the offset knob, one var() per surviving
-// ramp, then the dwell that precedes this target.
+// The exact scroll-margin-top sync() writes: the author's own value, the offset knob, one var()
+// per surviving ramp, then one step per layer in freeze order. Each step's constant is the target's
+// natural top less the author's value, plus every earlier layer's dwell, less the layer's own
+// freezeStart and the 0.05px tie tolerance.
 const correction = (
   host: HTMLElement,
-  lagPx: number,
-  { authorPx = 0, ramps = 1 }: { authorPx?: number; ramps?: number } = {},
+  { top, windows, authorPx = 0 }:
+  { top: number; windows: [number, number][]; authorPx?: number },
 ) => {
   const id = instanceIdOf(host);
-  const consumed = Array.from({ length: ramps }, (_, i) => `var(--${id}-c${i}, 0px)`).join(' + ');
+  const consumed = windows.map((_, i) => `var(--${id}-c${i}, 0px)`).join(' + ');
+  let earlierDwell = 0;
+  const lag = windows.map(([freezeStart, freezeEnd]) => {
+    const margin = top - authorPx + earlierDwell - freezeStart - 0.05;
 
-  return `calc(${authorPx}px + var(--sst-scroll-margin-top-offset, 0px) + ${consumed} - ${lagPx}px)`;
+    earlierDwell += freezeEnd - freezeStart;
+
+    return `clamp(0px, (${margin}px - var(--sst-scroll-margin-top-offset, 0px)) * 1000000,`
+      + ` ${freezeEnd - freezeStart}px)`;
+  }).join(' + ');
+
+  return `calc(${authorPx}px + var(--sst-scroll-margin-top-offset, 0px) + ${consumed} - (${lag}))`;
 };
 
 // jsdom never scrolls anything, so the position is redefined outright and the event the ramps
@@ -57,13 +71,13 @@ beforeEach(() => {
   document.head.innerHTML = '';
   document.body.innerHTML = `
     <div class="root">
-      <div id="before"></div>
-      <section class="a"></section>
-      <div id="middle"></div>
-      <section class="b"></section>
-      <div id="after"></div>
+      <div id="before" data-top="0"></div>
+      <section class="a" data-top="100"></section>
+      <div id="middle" data-top="200"></div>
+      <section class="b" data-top="300"></section>
+      <div id="after" data-top="400"></div>
     </div>
-    <div id="outside"></div>
+    <div id="outside" data-top="500"></div>
   `;
   setScrollY(0);
 });
@@ -77,63 +91,55 @@ afterEach(() => {
 });
 
 describe('sync', () => {
-  it('writes a correction that subtracts the dwell preceding each target', () => {
+  // Every target carries the scroll-dependent term, which is what makes a jump started mid-page
+  // land where one started from the top does, and a step per layer that decides in CSS whether
+  // that layer's dwell delays it, from the target's own natural top.
+  it('writes each target a correction from its own natural top', () => {
     const root = query('.root');
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 0, 800)], root);
+    sync.sync([dwell(100, 900)], root, naturalTops);
 
-    // #before sits above the only layer, so nothing delays it; #middle and #after are both behind
-    // its full 800. Every target still carries the scroll-dependent term, which is what makes a
-    // jump started mid-page land where one started from the top does.
-    expect(query('#before').style.scrollMarginTop).toBe(correction(root, 0));
-    expect(query('#middle').style.scrollMarginTop).toBe(correction(root, 800));
-    expect(query('#after').style.scrollMarginTop).toBe(correction(root, 800));
+    ['#before', '#middle', '#after'].forEach((selector) => {
+      const target = query(selector);
+
+      expect(target.style.scrollMarginTop).toBe(
+        correction(root, { top: Number(target.dataset.top), windows: [[100, 900]] }),
+      );
+    });
   });
 
-  // The lag is a sum, not the nearest layer's dwell: #after is held back by both layers, so a
-  // correction that only counted the closest one would land it 300px short.
-  it('sums the dwell of every preceding layer', () => {
+  // Each step assumes every earlier layer counted, so the steps run in freeze order however the
+  // layers are handed over.
+  it('orders the steps by freeze start', () => {
     const root = query('.root');
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 0, 300), dwell(query('.b'), 300, 800)], root);
+    sync.sync([dwell(300, 800), dwell(0, 300)], root, naturalTops);
 
-    expect(query('#before').style.scrollMarginTop).toBe(correction(root, 0, { ramps: 2 }));
-    expect(query('#middle').style.scrollMarginTop).toBe(correction(root, 300, { ramps: 2 }));
-    expect(query('#after').style.scrollMarginTop).toBe(correction(root, 800, { ramps: 2 }));
+    expect(query('#after').style.scrollMarginTop).toBe(
+      correction(root, { top: 400, windows: [[0, 300], [300, 800]] }),
+    );
   });
 
-  // Both halves of `compareDocumentOrder(...) >= 0`: a layer below the target hasn't delayed it
-  // yet, and a target that is itself a layer's trigger is reached before its own dwell starts.
-  it('ignores a layer at or after the target', () => {
-    const root = query('.root');
-    const sync = createSync('#before, .a, .b');
-
-    sync.sync([dwell(query('.a'), 0, 300), dwell(query('.b'), 300, 800)], root);
-
-    expect(query('#before').style.scrollMarginTop).toBe(correction(root, 0, { ramps: 2 }));
-    expect(query('.a').style.scrollMarginTop).toBe(correction(root, 0, { ramps: 2 }));
-    expect(query('.b').style.scrollMarginTop).toBe(correction(root, 300, { ramps: 2 }));
-  });
-
-  // A zero-length window is dropped before the ramps are numbered, so the survivor becomes c0 and
-  // contributes no lag. Reading the filtered list's index as the original layer's would leave every
-  // target pointing at a custom property nothing ever ramps.
+  // A zero-length window is dropped before the ramps are numbered, so the survivor becomes c0.
+  // Reading the filtered list's index as the original layer's would leave every target pointing at
+  // a custom property nothing ever ramps.
   it('drops a layer with a zero-length freeze window and renumbers the survivors', () => {
     const root = query('.root');
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 500, 500), dwell(query('.b'), 500, 1000)], root);
+    sync.sync([dwell(500, 500), dwell(500, 1000)], root, naturalTops);
 
-    expect(query('#middle').style.scrollMarginTop).toBe(correction(root, 0));
-    expect(query('#after').style.scrollMarginTop).toBe(correction(root, 500));
+    expect(query('#after').style.scrollMarginTop).toBe(
+      correction(root, { top: 400, windows: [[500, 1000]] }),
+    );
   });
 
   it('writes nothing when no layer has any dwell', () => {
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 500, 500)], query('.root'));
+    sync.sync([dwell(500, 500)], query('.root'), naturalTops);
 
     expect(query('#after').style.scrollMarginTop).toBe('');
   });
@@ -141,7 +147,7 @@ describe('sync', () => {
   it('writes nothing when the target selector is null', () => {
     const sync = createSync(null);
 
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
+    sync.sync([dwell(0, 800)], query('.root'), naturalTops);
 
     expect(query('#after').style.scrollMarginTop).toBe('');
   });
@@ -151,7 +157,7 @@ describe('sync', () => {
   it('writes nothing when there is no host', () => {
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 0, 800)], null);
+    sync.sync([dwell(0, 800)], null, naturalTops);
 
     expect(query('#after').style.scrollMarginTop).toBe('');
   });
@@ -159,7 +165,7 @@ describe('sync', () => {
   it('leaves elements outside the root alone', () => {
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
+    sync.sync([dwell(0, 800)], query('.root'), naturalTops);
 
     expect(query('#outside').style.scrollMarginTop).toBe('');
   });
@@ -167,7 +173,7 @@ describe('sync', () => {
   it('honors the target selector it is given', () => {
     const sync = createSync('#after');
 
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
+    sync.sync([dwell(0, 800)], query('.root'), naturalTops);
 
     expect(query('#before').style.scrollMarginTop).toBe('');
     expect(query('#after').style.scrollMarginTop).not.toBe('');
@@ -178,9 +184,11 @@ describe('sync', () => {
     const sync = createSync();
 
     query('#after').style.scrollMarginTop = '40px';
-    sync.sync([dwell(query('.a'), 0, 800)], root);
+    sync.sync([dwell(0, 800)], root, naturalTops);
 
-    expect(query('#after').style.scrollMarginTop).toBe(correction(root, 800, { authorPx: 40 }));
+    expect(query('#after').style.scrollMarginTop).toBe(
+      correction(root, { top: 400, windows: [[0, 800]], authorPx: 40 }),
+    );
   });
 
   // Regression test for sync()'s own two-pass reset (see its comment in scrollMargin.ts). Driven
@@ -194,14 +202,18 @@ describe('sync', () => {
 
     style.textContent = '#after { scroll-margin-top: 40px }';
     document.head.appendChild(style);
-    sync.sync([dwell(query('.a'), 0, 800)], root);
+    sync.sync([dwell(0, 800)], root, naturalTops);
 
-    expect(query('#after').style.scrollMarginTop).toBe(correction(root, 800, { authorPx: 40 }));
+    expect(query('#after').style.scrollMarginTop).toBe(
+      correction(root, { top: 400, windows: [[0, 800]], authorPx: 40 }),
+    );
 
     style.textContent = '#after { scroll-margin-top: 120px }';
-    sync.sync([dwell(query('.a'), 0, 800)], root);
+    sync.sync([dwell(0, 800)], root, naturalTops);
 
-    expect(query('#after').style.scrollMarginTop).toBe(correction(root, 800, { authorPx: 120 }));
+    expect(query('#after').style.scrollMarginTop).toBe(
+      correction(root, { top: 400, windows: [[0, 800]], authorPx: 120 }),
+    );
   });
 
   // A target that stops matching (its id removed, say) has to be handed back rather than left
@@ -210,9 +222,9 @@ describe('sync', () => {
     const sync = createSync();
     const after = query('#after');
 
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
+    sync.sync([dwell(0, 800)], query('.root'), naturalTops);
     after.removeAttribute('id');
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
+    sync.sync([dwell(0, 800)], query('.root'), naturalTops);
 
     expect(after.style.scrollMarginTop).toBe('');
   });
@@ -223,8 +235,8 @@ describe('sync', () => {
     const sync = createSync();
 
     query('#after').style.scrollMarginTop = '40px';
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
-    sync.sync([dwell(query('.a'), 0, 0)], query('.root'));
+    sync.sync([dwell(0, 800)], query('.root'), naturalTops);
+    sync.sync([dwell(0, 0)], query('.root'), naturalTops);
 
     expect(query('#before').style.scrollMarginTop).toBe('');
     expect(query('#after').style.scrollMarginTop).toBe('40px');
@@ -235,11 +247,11 @@ describe('sync', () => {
     const inner = query('#before');
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 0, 800)], root);
+    sync.sync([dwell(0, 800)], root, naturalTops);
 
     const id = instanceIdOf(root);
 
-    sync.sync([dwell(query('.a'), 0, 800)], inner);
+    sync.sync([dwell(0, 800)], inner, naturalTops);
 
     expect(root.hasAttribute(`data-${id}`)).toBe(false);
     expect(inner.hasAttribute(`data-${id}`)).toBe(true);
@@ -251,7 +263,7 @@ describe('restore', () => {
     const sync = createSync();
 
     query('#after').style.scrollMarginTop = '40px';
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
+    sync.sync([dwell(0, 800)], query('.root'), naturalTops);
     sync.restore();
 
     expect(query('#before').style.scrollMarginTop).toBe('');
@@ -270,7 +282,7 @@ describe('restore', () => {
     // removeEventListener any other function leaves the original attached.
     const attached = addListener.mock.calls.find(([type]) => type === 'scroll')![1];
 
-    sync.sync([dwell(query('.a'), 0, 800)], query('.root'));
+    sync.sync([dwell(0, 800)], query('.root'), naturalTops);
     sync.restore();
 
     expect(removeListener).toHaveBeenCalledWith('scroll', attached);
@@ -280,7 +292,7 @@ describe('restore', () => {
     const root = query('.root');
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 0, 800)], root);
+    sync.sync([dwell(0, 800)], root, naturalTops);
 
     const id = instanceIdOf(root);
 
@@ -301,7 +313,7 @@ describe('the JS ramp fallback', () => {
     const sync = createSync();
 
     setScrollY(600);
-    sync.sync([dwell(query('.a'), 0, 300), dwell(query('.b'), 500, 1000)], root);
+    sync.sync([dwell(0, 300), dwell(500, 1000)], root, naturalTops);
 
     // The first layer's window is behind us, so all 300 of its dwell is consumed; the second is
     // 100 into its own.
@@ -313,7 +325,7 @@ describe('the JS ramp fallback', () => {
     const root = query('.root');
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 500, 1000)], root);
+    sync.sync([dwell(500, 1000)], root, naturalTops);
 
     expect(consumed(root, 0)).toBe('0px');
 
@@ -340,7 +352,7 @@ describe('the JS ramp fallback', () => {
     const root = query('.root');
     const sync = createSync();
 
-    sync.sync([dwell(query('.a'), 0, 500)], root);
+    sync.sync([dwell(0, 500)], root, naturalTops);
     setScrollY(200);
 
     const id = instanceIdOf(root);
@@ -353,10 +365,9 @@ describe('the JS ramp fallback', () => {
 });
 
 describe('buildStylesheet', () => {
-  // The trigger goes unread here; only each layer's own window shapes the text.
   const build = () => buildStylesheet('sstX', [
-    dwell(document.createElement('div'), 0, 300),
-    dwell(document.createElement('div'), 500, 1000),
+    dwell(0, 300),
+    dwell(500, 1000),
   ]);
 
   it('registers one inheriting <length> property per layer, starting at 0', () => {

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>resolveFreezeOrder fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .lead {
+        height: 100vh;
+      }
+      .scene {
+        height: 200vh;
+      }
+      .heading {
+        height: 40px;
+        margin: 50px 0 0;
+      }
+      .above {
+        height: 50vh;
+      }
+      .lateScene {
+        height: 50vh;
+      }
+      .topScene {
+        height: 100vh;
+      }
+      .nearTop {
+        height: 40px;
+        margin: 20px 0 0;
+      }
+      .tail {
+        height: 300vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="lead"></div>
+      <!-- 'center center' freezes .scene half a viewport past its top, well after .heading, 50px
+           in, has reached the top of the viewport. -->
+      <section class="scene"><h2 id="heading" class="heading">heading</h2></section>
+      <!-- 'top bottom' freezes .lateScene as it enters the viewport, while .above, before it in
+           DOM order, is still on its way to the top. -->
+      <div id="above" class="above"></div>
+      <section class="lateScene"></section>
+      <!-- 'top top' freezes .topScene once its top reaches the viewport's, 20px before #nearTop
+           does, unless a scroll-margin-top offset asks #nearTop to stop further down. -->
+      <section class="topScene"><h3 id="nearTop" class="nearTop">near top</h3></section>
+    </div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      sticky.createStickyTrigger({ trigger: '.scene', start: 'center center', end: '+=500' });
+      sticky.createStickyTrigger({ trigger: '.lateScene', start: 'top bottom', end: '+=500' });
+      sticky.createStickyTrigger({ trigger: '.topScene', start: 'top top', end: '+=500' });
+      sticky.refresh();
+
+      // Scrolls to where resolveScrollPosition says selector's top reaches the viewport's top, and
+      // reports where it actually is.
+      window.__topAtResolved = (selector) => {
+        window.scrollTo(0, sticky.resolveScrollPosition(selector, 'top top'));
+
+        return document.querySelector(selector).getBoundingClientRect().top;
+      };
+    </script>
+  </body>
+</html>

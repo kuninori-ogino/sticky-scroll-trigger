@@ -239,6 +239,21 @@ test('createResolvedTrigger\'s end against an endTrigger after the container lan
   expect(result.resolved).toBeCloseTo(result.actual, 0);
 });
 
+// A Scene layer's dwell delays an element only if the layer freezes before the element gets there,
+// whatever their DOM order: .heading sits inside .scene but gets there first, and .above sits
+// before .lateScene but gets there after it freezes.
+test('resolveScrollPosition counts a Scene layer\'s dwell by which comes first, the freeze or the element', async ({ page }) => {
+  await page.goto('/fixtures/resolveFreezeOrder.html');
+
+  type FixtureWindow = Window & { __topAtResolved: (selector: string) => number };
+
+  const topAtResolved = (selector: string) =>
+    page.evaluate((sel) => (window as unknown as FixtureWindow).__topAtResolved(sel), selector);
+
+  expect(await topAtResolved('.heading')).toBeCloseTo(0, 0);
+  expect(await topAtResolved('.above')).toBeCloseTo(0, 0);
+});
+
 // measureViewportHeight follows the same technique GSAP itself uses to dodge resizes caused
 // by a mobile browser's address bar showing/hiding:
 // "append a height:100vh div to body and read its offsetHeight."
@@ -1313,19 +1328,19 @@ test('both halves still work under a style-src policy without \'unsafe-inline\''
 // Scans for the scroll position at which an element's top edge first reaches the viewport top.
 // Sticky makes the painted position a non-linear function of scroll, so this is walked rather
 // than derived.
-const findArrivalScroll = (page: import('@playwright/test').Page, id: string) =>
-  page.evaluate((elementId) => {
+const findArrivalScroll = (page: import('@playwright/test').Page, id: string, at = 0) =>
+  page.evaluate(({ elementId, top }) => {
     const el = document.getElementById(elementId) as HTMLElement;
     const max = document.documentElement.scrollHeight - window.innerHeight;
 
     for (let scroll = 0; scroll <= max; scroll += 1) {
       window.scrollTo(0, scroll);
 
-      if (el.getBoundingClientRect().top <= 0) return scroll;
+      if (el.getBoundingClientRect().top <= top) return scroll;
     }
 
     return null;
-  }, id);
+  }, { elementId: id, top: at });
 
 // Performs one native jump and reports where it landed. `how` covers both routes into the same
 // CSSOM View algorithm: a real fragment navigation, and a direct scrollIntoView call.
@@ -1651,6 +1666,62 @@ test('--sst-scroll-margin-top-offset nudges the landing spot without a refresh()
   expect(await jump(30)).toEqual({ scroll: (arrival ?? 0) - 30, rectTop: 30 });
   // Negative: overshoots, leaving the target above the viewport top.
   expect(await jump(-30)).toEqual({ scroll: (arrival ?? 0) + 30, rectTop: -30 });
+});
+
+// The same fixture as resolveScrollPosition's freeze-order test, through a native jump.
+test('a native jump counts a Scene layer\'s dwell by which comes first, the freeze or the target', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/resolveFreezeOrder.html');
+
+  for (const id of ['heading', 'above']) {
+    const arrival = await findArrivalScroll(page, id);
+
+    // Above every freeze window, mid-dwell in the first scene, and past both.
+    for (const from of [0, 1300, 4000]) {
+      expect(await jumpTo(page, id, from, 'scrollIntoView'), `#${id} from ${from}`).toEqual({
+        scroll: arrival,
+        rectTop: 0,
+      });
+    }
+  }
+});
+
+// An engine drops a scroll-margin-top value it finds too long, leaving every jump uncorrected.
+// findArrivalScroll's pixel-by-pixel scan is slow through this much nesting in WebKit, so arrival
+// is checked at the landing spot instead: the target is at the top there, and a pixel earlier it
+// isn't.
+test('a native jump past many Scene layers still lands exactly on target', async ({ page }) => {
+  await page.goto('/fixtures/manyScenes.html');
+
+  const landed = await jumpTo(page, 'target', 0, 'scrollIntoView');
+  const topOnePixelEarlier = await page.evaluate((scroll) => {
+    window.scrollTo(0, scroll - 1);
+
+    return document.getElementById('target')!.getBoundingClientRect().top;
+  }, landed.scroll);
+
+  expect(landed.rectTop).toBe(0);
+  expect(topOnePixelEarlier).toBeGreaterThan(0);
+});
+
+// Asked to stop 80px down, #nearTop gets there 60px before .topScene freezes rather than 20px
+// after, so that scene's dwell stops counting. Only a decision made in CSS sees that without a
+// refresh().
+test('--sst-scroll-margin-top-offset decides which Scene layers count, without a refresh() call', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/resolveFreezeOrder.html');
+  await page.evaluate(() => {
+    document.getElementById('nearTop')!.style.setProperty('--sst-scroll-margin-top-offset', '80px');
+  });
+
+  const arrival = await findArrivalScroll(page, 'nearTop', 80);
+
+  expect(await jumpTo(page, 'nearTop', 0, 'scrollIntoView')).toEqual({
+    scroll: arrival,
+    rectTop: 80,
+  });
 });
 
 // --sst-scroll-margin-top-offset inherits like any other custom property, so setting it once on

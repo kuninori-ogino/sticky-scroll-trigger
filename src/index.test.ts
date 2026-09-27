@@ -42,6 +42,13 @@ beforeEach(() => {
 // there's no need to redefine this per test.
 const query = (sel: string) => document.querySelector<HTMLElement>(sel)!;
 
+// jsdom puts every element at 0, and resolveScrollPosition only adds a Scene layer's dwell to an
+// element that reaches its anchor after that freeze starts, so a test that needs the dwell counted
+// moves its element down first. offsetParent stays null, so this is its whole documentTop.
+const placeAt = (el: HTMLElement, top: number) => {
+  Object.defineProperty(el, 'offsetTop', { configurable: true, value: top });
+};
+
 const setup = () => {
   document.body.innerHTML = `
     <div class="root">
@@ -971,9 +978,25 @@ describe('resolveScrollPosition()', () => {
     expect(after).toBe(before);
   });
 
+  // The freeze starts at 200, but the target reaches the top at 100, while the container still
+  // scrolls freely, so none of the dwell applies to it.
+  it('adds no dwell for a Scene layer whose freeze starts after the element reaches its anchor', () => {
+    const { query, controller } = setup();
+    const target = query('.inside');
+
+    placeAt(target, 100);
+    controller.createStickyTrigger({ trigger: query('.scene'), start: 200, end: '+=500' });
+    controller.refresh();
+
+    expect(controller.resolveScrollPosition(target, 'top top')).toBe(100);
+  });
+
   it('adds no dwell for an element outside the shared container', () => {
     const { query, controller } = setup();
     const outside = query('.outside');
+
+    placeAt(outside, 100);
+
     const before = controller.resolveScrollPosition(outside, 'top top');
 
     controller.createStickyTrigger({ trigger: query('.scene'), end: '+=500' });
@@ -1012,6 +1035,7 @@ describe('static getScrollTop()', () => {
       const controllerB = new StickyScrollTrigger(query('.root-b'));
       const target = query('.target-a');
 
+      placeAt(target, 100);
       controllerA.createStickyTrigger({ trigger: query('.scene-a'), end: '+=500' });
       controllerA.refresh();
       controllerB.createStickyTrigger({ trigger: query('.scene-b'), end: '+=700' });
@@ -1093,14 +1117,9 @@ describe('createResolvedTrigger()', () => {
     expect((vars.end as () => number)()).toBe(controller.resolveScrollPosition(trigger, 'bottom top'));
   });
 
-  // Since jsdom has no layout, documentTop always returns 0, so passing either trigger
-  // or endTrigger would produce the same value (0) under a naive comparison, making it
-  // impossible to verify resolution is actually relative to endTrigger.
-  // A dwell distance ('+=500') is layout-independent and reliably makes
-  // freezeEnd-freezeStart exactly 500 (see "never returns 0 when freezeEnd is 0" above),
-  // so this places that dwell between trigger/between/endTrigger and verifies it as a
-  // difference in resolveScrollPosition's gap total (whether a layer's trigger sits
-  // before the target in DOM order).
+  // A Scene layer freezing at 0 for '+=500' holds back endTrigger, placed below it, but not
+  // trigger, which reaches the top as that freeze starts. So end picks up the dwell only if it
+  // resolves against endTrigger.
   it('when endTrigger is given, end is resolved relative to endTrigger, not trigger', () => {
     document.body.innerHTML = `
       <div class="root">
@@ -1113,10 +1132,7 @@ describe('createResolvedTrigger()', () => {
     const trigger = query('.trigger');
     const endTrigger = query('.endTrigger');
 
-    // places a dwelling Scene layer after trigger and before endTrigger.
-    // The gap total only sums Scene layers positioned before the target in DOM order,
-    // so it should be excluded (gap+0) relative to trigger
-    // but included (gap+500) relative to endTrigger.
+    placeAt(endTrigger, 100);
     controller.createStickyTrigger({ trigger: query('.between'), end: '+=500' });
     controller.refresh();
 
@@ -1129,7 +1145,7 @@ describe('createResolvedTrigger()', () => {
     const startValue = (vars.start as () => number)();
     const endValue = (vars.end as () => number)();
 
-    expect(endValue - startValue).toBe(500);
+    expect(endValue - startValue).toBe(600);
   });
 
   // The default end belongs to endTrigger too, so it picks up the same dwell the test above
@@ -1146,12 +1162,13 @@ describe('createResolvedTrigger()', () => {
     const trigger = query('.trigger');
     const endTrigger = query('.endTrigger');
 
+    placeAt(endTrigger, 100);
     controller.createStickyTrigger({ trigger: query('.between'), end: '+=500' });
     controller.refresh();
 
     const vars = controller.createResolvedTrigger({ trigger, endTrigger });
 
-    expect((vars.end as () => number)()).toBe(500);
+    expect((vars.end as () => number)()).toBe(600);
     expect(controller.resolveScrollPosition(trigger, 'bottom top')).toBe(0);
   });
 
@@ -2371,19 +2388,13 @@ describe('rejecting duplicate registration', () => {
   });
 });
 
-// What reaches scrollMargin.ts through this module: the option, and the two calls. Its own
-// bookkeeping (the lag arithmetic, the author's value, handing targets back) is
+// What reaches scrollMargin.ts through this module: the option, the two calls, and the targets'
+// natural tops. Its own bookkeeping (the lag steps, the author's value, handing targets back) is
 // scrollMargin.test.ts's, which calls sync() directly with real freeze windows rather than working
 // around jsdom's layout-free zeros the way the '+=800' below has to.
 describe('scroll-margin-top synchronization', () => {
   // Each controller registers its own custom-property names off a module-level counter, so the
   // exact index depends on how many instances the whole suite has built by now.
-  const correction = (lagPx: number) =>
-    new RegExp(
-      '^calc\\(0px \\+ var\\(--sst-scroll-margin-top-offset, 0px\\) \\+ var\\(--sst\\d+-c0, 0px\\) '
-      + `- ${lagPx}px\\)$`,
-    );
-
   const setupAnchors = (options?: { scrollMarginTargets?: string | null }) => {
     document.body.innerHTML = `
       <div class="root">
@@ -2401,16 +2412,19 @@ describe('scroll-margin-top synchronization', () => {
     return { query, controller };
   };
 
-  // The one proof that refresh() reaches sync() at all, and with the freeze windows its passes
-  // settled rather than the raw '+=800': #before sits above the scene, so no dwell precedes it,
-  // while #after is delayed by the full 800.
+  // The one proof that refresh() reaches sync() at all, with the freeze window its passes settled
+  // (0 to 800) rather than the raw '+=800', and with each target's own natural top.
   it('writes a correction from the freeze windows refresh() settled', () => {
     const { query, controller } = setupAnchors();
+    const after = query('#after');
 
+    placeAt(after, 100);
     controller.refresh();
 
-    expect(query('#before').style.scrollMarginTop).toMatch(correction(0));
-    expect(query('#after').style.scrollMarginTop).toMatch(correction(800));
+    // 100 - 0 (author) + 0 (no earlier dwell) - 0 (freezeStart) - 0.05 (tolerance).
+    expect(after.style.scrollMarginTop).toMatch(
+      /^calc\(0px \+ var\(--sst-scroll-margin-top-offset, 0px\) \+ var\(--sst\d+-c0, 0px\) - \(clamp\(0px, \(99\.95px - var\(--sst-scroll-margin-top-offset, 0px\)\) \* 1000000, 800px\)\)\)$/,
+    );
   });
 
   // Stays here rather than moving with the rest: it's the shared container this module hands

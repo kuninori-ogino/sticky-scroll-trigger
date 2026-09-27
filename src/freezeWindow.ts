@@ -251,6 +251,46 @@ const runPass = (
   return { plans, naturalTops };
 };
 
+// How far past a freeze's start an element has to arrive before that freeze counts as starting
+// first. An element exactly at the start waits out none of it, but the sums that land it there
+// reach it in different orders and differ in the last bit. scrollMargin.ts's CSS step uses the
+// same margin, so both paths draw the line in one place.
+export const TIE_TOLERANCE_PX = 0.05;
+
+// The total Scene layer dwell an element inside the shared container waits out before it reaches
+// a viewport anchor. reachedAt is where it would reach that anchor with no dwell at all: its
+// natural top less the anchor offset. Every Scene layer freezes the whole container and nothing in
+// it moves during a freeze, so a layer counts in full if its freeze starts first, and not at all
+// otherwise, whatever the DOM order.
+//
+// With windows that don't overlap, which "nothing moves" already assumes, the layers that count
+// are always the earliest ones. So each layer's test can assume every earlier one counted, making
+// it a comparison against a constant, which scrollMargin.ts can write as CSS without repeating the
+// earlier tests inside the later ones. planLayers can still produce an overlap: a scene with start
+// 'top bottom' can open its window before a short scene above it closes its own.
+//
+// A Scene trigger resolving its own start lands exactly on its freezeStart, which the tolerance
+// keeps on the not-counted side.
+export const dwellBeforeReach = (
+  reachedAt: number,
+  windows: readonly { freezeStart: number; freezeEnd: number }[],
+): number => {
+  let earlierDwell = 0;
+  let counted = 0;
+
+  [...windows]
+    .sort((a, b) => a.freezeStart - b.freezeStart)
+    .forEach(({ freezeStart, freezeEnd }) => {
+      if (freezeStart < reachedAt + earlierDwell - TIE_TOLERANCE_PX) {
+        counted += freezeEnd - freezeStart;
+      }
+
+      earlierDwell += freezeEnd - freezeStart;
+    });
+
+  return counted;
+};
+
 // Finalizes every layer's freeze window and style values, from measurements laid out in DOM order.
 // Most end modes settle in one pass. Two kinds of clause end need more:
 //

@@ -24,15 +24,23 @@
  *
  *   paintedTop(s) = N − s + Σ h_i(s)
  *
- * The element truly reaches the viewport top at `N + lag`, where `lag` is the total dwell of the
- * Scene layers before it (the same sum `resolveScrollPosition` adds). Substituting both into the
- * landing formula and solving for a landing of `N + lag`:
+ * A jump aims to leave the element `m` below the viewport top, where `m` is the author's own
+ * `scroll-margin-top` plus the offset property below. It truly sits there at `N − m + lag`, where
+ * `lag` is the dwell of every Scene layer that freezes before it gets there (freezeWindow.ts's
+ * `dwellBeforeReach`, the same rule `resolveScrollPosition` applies). Substituting both into the
+ * landing formula and solving for a landing of `N − m + lag`:
  *
- *   scrollMarginTop = Σ h_i(currentScroll) − lag
+ *   scrollMarginTop = m + Σ h_i(currentScroll) − lag
  *
- * `lag` is a constant this module knows after `refresh()`. `Σ h_i` depends on where the jump was
- * started from, which is why the value can't be a plain number: with `−lag` alone, a jump from the
- * top of the page is exact but one started mid-page overshoots by the dwell already consumed.
+ * `Σ h_i` depends on where the jump was started from, which is why the value can't be a plain
+ * number: with `−lag` alone, a jump from the top of the page is exact but one started mid-page
+ * overshoots by the dwell already consumed.
+ *
+ * `lag` depends on `m`, which moves the point the element has to reach, and the offset property
+ * in `m` can change without a `refresh()`. So each layer's all-or-nothing decision is written as
+ * CSS too: `clamp(0px, x * 1000000, dwell)` is 0 for any `x` at or below 0 and the full dwell for
+ * anything past a few thousandths of a pixel, a step in all but name. Each layer's `x` compares
+ * against a constant (see `dwellBeforeReach` for why), so the text grows by one term per layer.
  *
  * ## How the scroll-dependent half is supplied
  *
@@ -80,7 +88,7 @@
  * far off the caller wants to land, and what the element's own CSS already says.
  */
 
-import { compareDocumentOrder } from './dom';
+import { TIE_TOLERANCE_PX } from './freezeWindow';
 
 // Reserved custom property for nudging where a target lands, independent of both the dwell
 // correction and the author's own scroll-margin-top. Fixed rather than per-instance because it's
@@ -90,7 +98,6 @@ const OFFSET_PROPERTY = '--sst-scroll-margin-top-offset';
 
 // One Scene layer's contribution, as of the current refresh().
 export interface SceneDwell {
-  trigger: HTMLElement;
   freezeStart: number;
   freezeEnd: number;
 }
@@ -233,10 +240,19 @@ export const createScrollMarginSync = (
   };
 
   return {
-    sync(scenes: readonly SceneDwell[], host: HTMLElement | null): void {
+    // measureNaturalTops returns each target's documentTop with no wrapper stuck, which only the
+    // caller can arrange.
+    sync(
+      scenes: readonly SceneDwell[],
+      host: HTMLElement | null,
+      measureNaturalTops: (targets: readonly HTMLElement[]) => number[],
+    ): void {
       // A zero-length freeze window contributes nothing, and an animation-range whose start
       // equals its end has no meaningful ramp, so those layers are dropped rather than emitted.
-      const ramps = scenes.filter((scene) => scene.freezeEnd > scene.freezeStart);
+      // Sorted because each layer's lag decision assumes every earlier one counted.
+      const ramps = scenes
+        .filter((scene) => scene.freezeEnd > scene.freezeStart)
+        .sort((a, b) => a.freezeStart - b.freezeStart);
 
       if (targetSelector === null || !ramps.length || !host) {
         written.forEach(restoreTarget);
@@ -283,6 +299,7 @@ export const createScrollMarginSync = (
         else if (written.has(target)) target.style.scrollMarginTop = existing.inline;
       });
 
+      const naturalTops = measureNaturalTops(targets);
       const consumed = ramps
         .map((_, index) => `var(--${instanceId}-c${index}, 0px)`)
         .join(' + ');
@@ -290,18 +307,22 @@ export const createScrollMarginSync = (
       // Pass 2: read each target's author value now that it's back to that state, then write the
       // corrected one. Interleaving the two passes would be just as correct, but resetting
       // everything before reading anything avoids forcing a style recalc per target.
-      targets.forEach((target) => {
+      targets.forEach((target, targetIndex) => {
         const authorPx = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
-        let lag = 0;
+        let earlierDwell = 0;
+        // dwellBeforeReach's test, with everything but the offset folded into one number.
+        const lag = ramps.map(({ freezeStart, freezeEnd }) => {
+          const margin = naturalTops[targetIndex] - authorPx + earlierDwell - freezeStart
+            - TIE_TOLERANCE_PX;
 
-        ramps.forEach((scene) => {
-          if (compareDocumentOrder(scene.trigger, target) >= 0) return;
+          earlierDwell += freezeEnd - freezeStart;
 
-          lag += scene.freezeEnd - scene.freezeStart;
-        });
+          return `clamp(0px, (${margin}px - var(${OFFSET_PROPERTY}, 0px)) * 1000000,`
+            + ` ${freezeEnd - freezeStart}px)`;
+        }).join(' + ');
 
         target.style.scrollMarginTop
-          = `calc(${authorPx}px + var(${OFFSET_PROPERTY}, 0px) + ${consumed} - ${lag}px)`;
+          = `calc(${authorPx}px + var(${OFFSET_PROPERTY}, 0px) + ${consumed} - (${lag}))`;
       });
 
       const next = new Set(targets);

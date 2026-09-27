@@ -61,7 +61,7 @@ It settles instead of growing without bound because `refresh()` is idempotent. O
 
 ## Why `resolveScrollPosition` corrects for lag
 
-Nested sticky introduces visual lag: during a Scene layer's dwell, screen position appears frozen while real scroll keeps advancing. The lag equals the sum of dwell distances from earlier Scene layers in DOM order.
+Nested sticky introduces visual lag: during a Scene layer's dwell, screen position appears frozen while real scroll keeps advancing. For an element, the lag is the sum of dwell distances from every Scene layer whose freeze starts before that element reaches its position. A freeze that starts later delays nothing the element has already done, even when the element sits inside that layer's trigger.
 
 GSAP string `start`/`end` values (for example `'top 80%'`) do not account for this lag, so plain ScrollTriggers inside the shared container can be off by large distances. `resolveScrollPosition` returns absolute px values with lag correction applied.
 
@@ -72,6 +72,12 @@ Its target element isn't guaranteed to share stuck ancestors with anything else,
 `resolveScrollPosition` fixes the numbers this module hands to GSAP, but it can't help the browser's own scrolling: fragment navigation, `scrollIntoView`, `:target` and friends all run a one-shot calculation from the current layout, and pinning breaks that calculation the same way it breaks GSAP's own `pin`. `scrollMargin.ts`'s own doc comment derives the fix in full (the `landing = currentScroll + paintedTop − scrollMarginTop` formula, and why the correction needs a scroll-dependent term rather than a single constant). A jump started 800px into an 800px freeze window overshot by exactly 800px when the correction used a plain constant instead of the scroll-dependent term.
 
 The rest of this section covers what that comment doesn't: the browser behaviors that shaped the implementation.
+
+### Why each layer's lag decision is a CSS `clamp()`
+
+Whether a Scene layer's dwell delays a target depends on where the target has to stop, and `--sst-scroll-margin-top-offset` moves that point without a `refresh()`. So the decision can't be made in JavaScript at `refresh()` time; it's written into the target's style as `clamp(0px, x * 1000000, dwell)`, which acts as a step. Measured in Chromium, WebKit and Firefox via Playwright, it counts or drops each layer exactly. Firefox's CSS math is less precise: with the positions themselves inside the `calc()`, it counted 2 of 400 exact ties at positions up to 60000px. The module keeps those numbers out of CSS by folding everything but the offset property into one constant in JavaScript, so a value near a tie reaches Firefox small. The step still subtracts 0.05px, the same tolerance `resolveScrollPosition`'s JavaScript comparison uses for its own float error, so both draw the line in one place.
+
+Each layer's `x` is compared against a constant rather than against the lag the earlier layers add up to, which `dwellBeforeReach` shows gives the same answer. Passing that lag from layer to layer through custom properties would reference each one twice, and engines expand `var()` as text, so the value would double per layer. Measured, it reached 300,978 characters at 12 layers, where WebKit discards it as invalid, and all three engines discard it at 16, leaving `scroll-margin-top` at 0.
 
 ### Why the animation rule needs an explicit `@supports` gate
 

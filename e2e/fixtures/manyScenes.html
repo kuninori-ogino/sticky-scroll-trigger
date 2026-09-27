@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>manyScenes fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .scene {
+        height: 100px;
+      }
+      .target {
+        height: 40px;
+      }
+      .tail {
+        height: 200vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root"></div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      // Where a correction whose text doubles per layer reaches 300,978 characters and WebKit
+      // drops it. Deeper nesting slows WebKit's own sticky layout.
+      const LAYERS = 12;
+      const root = document.querySelector('.root');
+
+      root.innerHTML = Array.from({ length: LAYERS }, () => '<section class="scene"></section>')
+        .join('') + '<div id="target" class="target"></div>';
+
+      const sticky = new StickyScrollTrigger(root);
+
+      root.querySelectorAll('.scene').forEach((scene) => {
+        sticky.createStickyTrigger({ trigger: scene, start: 'top top', end: '+=100' });
+      });
+      sticky.refresh();
+    </script>
+  </body>
+</html>

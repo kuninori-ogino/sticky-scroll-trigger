@@ -399,7 +399,7 @@ It only cleans up DOM/styles managed by this module. You still need to kill acti
 
 ## Same-page links
 
-Pinning decouples an element's position in the document from the scroll position at which it actually reaches the top of the viewport. The browser's own "scroll an element into view" is a single calculation made from the current layout, so on its own it lands short by every preceding scene's dwell. This is true of any pinning technique, GSAP's own `pin` included.
+Pinning decouples an element's position in the document from the scroll position at which it actually reaches the top of the viewport. The browser's own "scroll an element into view" is a single calculation made from the current layout, so on its own it lands short by the dwell of every scene that freezes before the element gets there. This is true of any pinning technique, GSAP's own `pin` included.
 
 `refresh()` declares that difference to the browser by keeping `scroll-margin-top` in sync on every element inside the shared container that matches `scrollMarginTargets` (`'[id]'` by default). Nothing else is needed: plain `<a href="#target">` links, `scrollIntoView()`, `:target` and a `#hash` on load all land correctly as written.
 
@@ -410,7 +410,7 @@ Pinning decouples an element's position in the document from the scroll position
 
 - Your own `scroll-margin-top` still applies. The correction is added to whatever value the element already computes to, never written over it, re-read on every `refresh()` (so a later change, e.g. a responsive breakpoint, is picked up too), and `destroy()` puts the original inline value back
 - A fixed header's offset is a different case, applying to every scroll rather than only those inside the shared container. CSSOM View says `scroll-padding-top` (on the scroller) and `scroll-margin-top` (on the target) add together, so in principle the header offset could live there, independently of this module's correction. In practice, don't: Firefox drops `scroll-padding-top` from a fragment jump once any `position:sticky` element on the page has engaged, landing short by exactly the header height (see ARCHITECTURE.md's "Firefox drops scroll-padding-top" for how this was verified). Fold it into `--sst-scroll-margin-top-offset` instead (below), as the repository's demo does in `style.css`'s `html` rule
-- To land deliberately short of or past a target, set the `--sst-scroll-margin-top-offset` custom property (a length) on it, or on any ancestor to cover several targets at once (it inherits like any other custom property). A positive value lands short, settling below the viewport's top edge instead of flush with it; negative overshoots. Being a plain `var()`, the browser reads it live at scroll-into-view time, so unlike the author-`scroll-margin-top` case above, no `refresh()` call is needed for a change to take effect
+- To land deliberately short of or past a target, set the `--sst-scroll-margin-top-offset` custom property (a length) on it, or on any ancestor to cover several targets at once (it inherits like any other custom property). A positive value lands short, settling below the viewport's top edge instead of flush with it; negative overshoots. Being a plain `var()`, the browser reads it live at scroll-into-view time, so unlike the author-`scroll-margin-top` case above, no `refresh()` call is needed for a change to take effect, including when it changes which scenes' dwell the target waits out
 
   ```css
   /* A fixed header's height, folded in here rather than into scroll-padding-top (see above). */

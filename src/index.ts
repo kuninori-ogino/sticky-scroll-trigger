@@ -7,7 +7,6 @@
 import {
   applyStickyPosition,
   captureInlinePosition,
-  compareDocumentOrder,
   describeElement,
   documentTop,
   liftAboveStickyWrapper,
@@ -24,7 +23,7 @@ import {
 } from './dom';
 import { createScrollMarginSync } from './scrollMargin';
 import { buildStructure, isDomOrderStale, unbuildStructure } from './structure';
-import { planLayers } from './freezeWindow';
+import { dwellBeforeReach, planLayers } from './freezeWindow';
 import type { LayerMeasurement } from './freezeWindow';
 import { measureLayer } from './measure';
 import {
@@ -652,13 +651,24 @@ export default class StickyScrollTrigger {
   // Hands the current Scene layer freeze windows to the scroll-margin bookkeeping, along with the
   // outermost container as the host for the scroll-driven ramps. That container is built by this
   // module and is an ancestor of every target, which is what lets the ramps reach them by
-  // inheritance without ever styling an element the caller owns.
+  // inheritance without ever styling an element the caller owns. Targets are measured the way
+  // resolveScrollPosition measures its element, with every wrapper's sticky state reset.
   #syncScrollMargins(): void {
     this.#scrollMarginSync.sync(
       this.#layers
         .filter((layer): layer is SceneLayer => layer.kind === 'scene')
-        .map(({ trigger, freezeStart, freezeEnd }) => ({ trigger, freezeStart, freezeEnd })),
+        .map(({ freezeStart, freezeEnd }) => ({ freezeStart, freezeEnd })),
       this.#outermostContainer,
+      (targets) => {
+        if (!targets.length) return [];
+
+        const restoreSceneCoverStickyState = this.#resetSceneCoverStickyState();
+        const tops = targets.map((target) => documentTop(target));
+
+        restoreSceneCoverStickyState();
+
+        return tops;
+      },
     );
   }
 
@@ -1008,9 +1018,9 @@ export default class StickyScrollTrigger {
 
   // Returns the absolute scroll position (px) a GSAP-standard position clause points to, for any
   // element inside the shared container, registered as a layer or not. Nested sticky delays an
-  // inner element's on-screen movement by exactly the enclosing Scene layers' dwell, which plain
-  // GSAP ScrollTrigger knows nothing about, so this adds that dwell (freezeEnd - freezeStart, over
-  // every Scene layer earlier than the element) back onto the static documentTop. Cover layers are
+  // inner element's on-screen movement by the dwell of every Scene layer that freezes before it
+  // gets there, which plain GSAP ScrollTrigger knows nothing about, so this adds that dwell (see
+  // freezeWindow.ts's dwellBeforeReach) back onto the static documentTop. Cover layers are
   // excluded, never having changed the document height. Call this only after refresh() has run.
   resolveScrollPosition(
     elementInput: string | HTMLElement,
@@ -1057,26 +1067,19 @@ export default class StickyScrollTrigger {
     clause: string,
     viewportHeight: number,
   ): number {
-    // Only elements inside the shared container lag behind the nesting. One after it already has
-    // every layer's dwell padding in its documentTop, so adding the dwell would count it twice.
-    const layers = this.#rootElement.contains(element) ? this.#layers : [];
-    let gap = 0;
-
-    layers.forEach((layer) => {
-      if (layer.kind !== 'scene') return;
-
-      if (compareDocumentOrder(layer.trigger, element) >= 0) return;
-
-      gap += layer.freezeEnd - layer.freezeStart;
-    });
-
     const anchorOffset = resolveAnchorTop(clause, measureUsedHeight(element), viewportHeight);
     const restoreSceneCoverStickyState = this.#resetSceneCoverStickyState();
-    const result = documentTop(element) + gap - anchorOffset;
+    const reachedAt = documentTop(element) - anchorOffset;
 
     restoreSceneCoverStickyState();
 
-    return result;
+    // Only elements inside the shared container lag behind the nesting. One after it already has
+    // every layer's dwell padding in its documentTop, so adding the dwell would count it twice.
+    if (!this.#rootElement.contains(element)) return reachedAt;
+
+    const sceneLayers = this.#layers.filter((layer): layer is SceneLayer => layer.kind === 'scene');
+
+    return reachedAt + dwellBeforeReach(reachedAt, sceneLayers);
   }
 
   // Returns the absolute scroll position (px) at which element's own top edge reaches the
