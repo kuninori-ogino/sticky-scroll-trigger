@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinWrapperEffects fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .block {
+        height: 600px;
+      }
+      .pin {
+        height: 100px;
+        background: #c33;
+      }
+      .scene {
+        height: 400px;
+      }
+    </style>
+  </head>
+  <body>
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      // One case per page load:
+      // - stacking: a pin with z-index 10 against a later position:relative sibling
+      // - fixed: a position:fixed element inside the pin
+      // - endOutside: a pin outside the container held until #next's bottom reaches the viewport's
+      //   top, which the page ends too soon for
+      // - endInside: the same inside the container, after a Scene layer whose dwell moves it down
+      // - twoInstances: two instances' pins held past the end, then the page shrinks by 300px
+      const scenario = new URLSearchParams(location.search).get('case');
+      const markup = {
+        stacking: `<div class="root">
+            <div id="pin" class="pin" style="position: relative; z-index: 10"></div>
+            <div id="next" class="block" style="position: relative; height: 2000px"></div>
+          </div>`,
+        fixed: `<div class="root"><div class="block"></div></div>
+          <div id="pin" class="pin"><div id="fixed" style="position: fixed; top: 0"></div></div>
+          <div id="next" class="block" style="height: 2000px"></div>`,
+        endOutside: `<div class="root"><div class="block"></div></div>
+          <div id="pin" class="pin"></div>
+          <div id="next" style="height: 1000px"></div>`,
+        endInside: `<div class="root">
+            <section class="scene"></section>
+            <div id="pin" class="pin"></div>
+            <div id="next" style="height: 1000px"></div>
+          </div>`,
+        twoInstances: `<div class="root"><div id="pin" class="pin"></div></div>
+          <div class="rootB"><div id="pinB" class="pin"></div></div>
+          <div id="shrink" class="block"></div>
+          <div id="next" style="height: 1000px"></div>`,
+      }[scenario];
+
+      document.body.insertAdjacentHTML('afterbegin', markup);
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      if (scenario === 'endInside') {
+        sticky.createStickyTrigger({ trigger: '.scene', start: 'top top', end: '+=500' });
+      }
+
+      sticky.createStickyPin({ trigger: '#pin', endTrigger: '#next', end: 'bottom top' });
+      sticky.refresh();
+
+      if (scenario === 'twoInstances') {
+        const stickyB = new StickyScrollTrigger('.rootB');
+
+        stickyB.createStickyPin({ trigger: '#pinB', endTrigger: '#next', end: 'bottom top' });
+        stickyB.refresh();
+        window.__shrink = () => {
+          document.getElementById('shrink').style.height = '300px';
+          sticky.refresh();
+          stickyB.refresh();
+
+          return document.documentElement.scrollHeight;
+        };
+      }
+
+      window.__ready = true;
+    </script>
+  </body>
+</html>

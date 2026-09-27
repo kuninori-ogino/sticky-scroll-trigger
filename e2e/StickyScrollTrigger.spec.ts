@@ -829,6 +829,83 @@ test('createStickyPin releases at the scroll its end names, whatever trigger\'s 
   }
 });
 
+// A pin's wrappers stay out of the page's stacking and positioning: trigger's own z-index still
+// ranks it against its siblings, and a position:fixed element inside it still follows the
+// viewport.
+test('createStickyPin leaves trigger\'s z-index and fixed descendants working', async ({ page }) => {
+  await page.goto('/fixtures/pinWrapperEffects.html?case=stacking');
+  await page.waitForFunction(() => (window as unknown as { __ready: boolean }).__ready);
+
+  const onTop = await page.evaluate(() => {
+    window.scrollTo(0, 500);
+
+    return document.elementFromPoint(10, 50)!.id;
+  });
+
+  expect(onTop).toBe('pin');
+
+  await page.goto('/fixtures/pinWrapperEffects.html?case=fixed');
+  await page.waitForFunction(() => (window as unknown as { __ready: boolean }).__ready);
+
+  const fixedTops = await page.evaluate(() => [0, 300, 1200].map((y) => {
+    window.scrollTo(0, y);
+
+    return document.getElementById('fixed')!.getBoundingClientRect().top;
+  }));
+
+  expect(fixedTops).toEqual([0, 0, 0]);
+});
+
+// A pin held past the page's last scroll position keeps its range inside the page, so the page is
+// as tall with the pin as without it: at the top, mid-freeze, where a stuck wrapper carries the pin
+// down, and at the bottom.
+test('a pin held past the end of the page doesn\'t make the page taller', async ({ page }) => {
+  // 600 + 100 + 1000, and 400 + 100 + 1000 + the scene's 500px dwell padding.
+  for (const [scenario, expected] of [['endOutside', 1700], ['endInside', 2000]] as const) {
+    await page.goto(`/fixtures/pinWrapperEffects.html?case=${scenario}`);
+    await page.waitForFunction(() => (window as unknown as { __ready: boolean }).__ready);
+
+    const heights = await page.evaluate(() => {
+      const height = () => document.documentElement.scrollHeight;
+      const atTop = height();
+
+      window.scrollTo(0, 250);
+
+      const midFreeze = height();
+
+      window.scrollTo(0, height());
+
+      const atBottom = height();
+
+      return {
+        atTop,
+        midFreeze,
+        atBottom,
+        pinTop: document.getElementById('pin')!.getBoundingClientRect().top,
+      };
+    });
+
+    expect(heights, scenario).toEqual({
+      atTop: expected,
+      midFreeze: expected,
+      atBottom: expected,
+      pinTop: 0,
+    });
+  }
+});
+
+// The page's end is measured with every pin range cleared, so another instance's range left over
+// from a longer page isn't counted as page: 100 + 100 + 300 + 1000 once it shrinks.
+test('pins in two instances held past the end let the page shrink', async ({ page }) => {
+  await page.goto('/fixtures/pinWrapperEffects.html?case=twoInstances');
+  await page.waitForFunction(() => (window as unknown as { __ready: boolean }).__ready);
+
+  const height = await page.evaluate(() =>
+    (window as unknown as { __shrink: () => number }).__shrink());
+
+  expect(height).toBe(1500);
+});
+
 // The element side of createStickyPin's start clause resolves against trigger's own height:
 // 'bottom bottom' has to become a sticky top of viewportHeight - 60, a number the clause never
 // states. jsdom reports every height as 0, so that term only shows up in a real browser.

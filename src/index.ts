@@ -10,6 +10,7 @@ import {
   describeElement,
   documentTop,
   liftAboveStickyWrapper,
+  measureDocumentHeightWithoutPinRanges,
   measureDocumentMaxScroll,
   measureUsedHeight,
   measureViewportHeight,
@@ -432,7 +433,7 @@ export default class StickyScrollTrigger {
     // succeeded. The bad value doesn't have to be there from the start either: a function-valued
     // option can begin returning one long after setup, on a refresh GSAP itself triggers.
     try {
-      this.#refreshPinLayers(viewportHeight);
+      this.#refreshPinLayers(viewportHeight, measureDocumentHeightWithoutPinRanges());
     } catch (error) {
       // catch rather than finally (see #refreshScenesAndCovers' catch for why). The Scene/Cover
       // reset below is measurement scaffolding that nothing rewrites, so it stays a finally.
@@ -452,7 +453,7 @@ export default class StickyScrollTrigger {
   // margin box catches up to the bottom of its containing block). A pin inside the shared
   // container stands still with it through every freeze, so its range, measured in the
   // container's own coordinates, leaves out the dwell gone by at release.
-  #refreshPinLayers(viewportHeight: number) {
+  #refreshPinLayers(viewportHeight: number, documentHeight: number) {
     this.#pinLayers.forEach((layer) => {
       if (!layer.inner) return;
 
@@ -514,9 +515,14 @@ export default class StickyScrollTrigger {
         : 0;
       const height = releaseScroll - frozenAtRelease - triggerTop + topPx + triggerHeight
         + triggerMarginBottom;
+      // Nothing contains inner's overflow, so a range running past the page's end would make the
+      // page taller. Such a pin can't release before the scroll runs out anyway, so the range
+      // stops at the end. Wrappers carrying the pin down don't matter: all three engines leave
+      // sticky offsets out of the scrollable area. jsdom reports no height, so there's no end.
+      const room = documentHeight > 0 ? documentHeight - triggerTop : Infinity;
 
       applyStickyPosition(layer.trigger, topPx);
-      layer.inner.style.height = `${Math.max(0, height)}px`;
+      layer.inner.style.height = `${Math.max(0, Math.min(height, room))}px`;
     });
   }
 

@@ -84,13 +84,41 @@ export const measureViewportHeight = (): number => {
   return height;
 };
 
+const measureDocumentHeight = (): number =>
+  document.documentElement.scrollHeight || document.body.scrollHeight;
+// Every pin range on the page, whichever instance wrapped it. Module-level because another
+// instance's range, sized for a longer page, sticks out past the end until that instance
+// refreshes, and would otherwise be measured as page.
+const pinRanges = new Set<HTMLElement>();
+
+// The page's height with every pin range cleared, so none of them counts toward it. Clearing a
+// range moves nothing else: its outer keeps the reserved height.
+export const measureDocumentHeightWithoutPinRanges = (): number => {
+  // A range taken off the page without an unwrap (its subtree removed, say) adds nothing to the
+  // height, and leaving it here would keep it alive.
+  pinRanges.forEach((inner) => {
+    if (!inner.isConnected) pinRanges.delete(inner);
+  });
+
+  const saved = [...pinRanges].map((inner) => ({ inner, height: inner.style.height }));
+
+  saved.forEach(({ inner }) => {
+    inner.style.height = '';
+  });
+
+  const height = measureDocumentHeight();
+
+  saved.forEach(({ inner, height: range }) => {
+    inner.style.height = range;
+  });
+
+  return height;
+};
+
 // Matches GSAP's own scrollerMax for the window scroller (see _maxScroll in GSAP's
 // ScrollTrigger source): total document height minus the viewport height, floored at 0.
-export const measureDocumentMaxScroll = (viewportHeight: number): number => {
-  const doc = document.documentElement;
-
-  return Math.max(0, (doc.scrollHeight || document.body.scrollHeight) - viewportHeight);
-};
+export const measureDocumentMaxScroll = (viewportHeight: number): number =>
+  Math.max(0, measureDocumentHeight() - viewportHeight);
 
 // A side's border width, zero unless that side has a border-style. Browsers already compute it
 // that way; jsdom reports the initial 'medium' regardless, which is what the check is here for.
@@ -225,9 +253,10 @@ export const unwrapCover = (wrapper: HTMLDivElement) => {
 };
 
 // Pin layer: wraps trigger in two levels, outer{ inner{ trigger } }. inner holds the pin range,
-// which runs far past trigger's own height, and contain:layout keeps that out of the layout
-// outside outer. outer's own height is left to #reservePinSpace, which rewrites it on every
-// refresh.
+// which runs far past trigger's own height; outer's own height is left to #reservePinSpace, which
+// rewrites it on every refresh. outer is a flow-root, so trigger's margins stop inside it. contain
+// would do that too, but it also makes outer a stacking context and the containing block for
+// trigger's fixed-position descendants.
 export const wrapPin = (trigger: HTMLElement) => {
   if (!trigger.parentNode) {
     throw new Error(
@@ -238,10 +267,11 @@ export const wrapPin = (trigger: HTMLElement) => {
   const outer = document.createElement('div');
   const inner = document.createElement('div');
 
-  outer.style.contain = 'layout';
+  outer.style.display = 'flow-root';
   trigger.parentNode.insertBefore(outer, trigger);
   outer.appendChild(inner);
   inner.appendChild(trigger);
+  pinRanges.add(inner);
 
   return { outer, inner };
 };
@@ -256,6 +286,8 @@ export const unwrapPin = (
   restoreInlinePosition(trigger, saved);
 
   if (parent) parent.insertBefore(trigger, outer);
+
+  if (outer.firstElementChild instanceof HTMLElement) pinRanges.delete(outer.firstElementChild);
 
   outer.remove();
 };

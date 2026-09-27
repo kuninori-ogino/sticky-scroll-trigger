@@ -6,6 +6,7 @@ import {
   compareDocumentOrder,
   describeElement,
   liftAboveStickyWrapper,
+  measureDocumentHeightWithoutPinRanges,
   measureDocumentMaxScroll,
   measureUsedHeight,
   measureViewportHeight,
@@ -199,6 +200,29 @@ describe('wrapPin', () => {
 
     expect(trigger.style.position).toBe('relative');
     expect(trigger.style.top).toBe('8px');
+  });
+});
+
+// jsdom has no layout, so the page's height is stubbed to report whether the range is still set.
+describe('measureDocumentHeightWithoutPinRanges', () => {
+  it('measures with every pin range cleared, and puts each one back afterwards', () => {
+    document.body.innerHTML = '<div id="trigger"></div>';
+
+    const { inner } = wrapPin(document.getElementById('trigger')!);
+    const root = document.documentElement;
+
+    inner.style.height = '500px';
+    Object.defineProperty(root, 'scrollHeight', {
+      configurable: true,
+      get: () => (inner.style.height ? 900 : 100),
+    });
+
+    try {
+      expect(measureDocumentHeightWithoutPinRanges()).toBe(100);
+      expect(inner.style.height).toBe('500px');
+    } finally {
+      delete (root as { scrollHeight?: number }).scrollHeight;
+    }
   });
 });
 

@@ -34,6 +34,11 @@
       .pinEndTrigger {
         height: 222px;
       }
+      /* Keeps the page taller than the pin's absolute end, so its range isn't cut at the page's
+         end. */
+      .tail {
+        height: 4000px;
+      }
     </style>
   </head>
   <body>
@@ -49,6 +54,7 @@
     </div>
     <section class="pinTrigger"></section>
     <section class="pinEndTrigger"></section>
+    <div class="tail"></div>
 
     <script type="module">
       import gsap from 'gsap';
