@@ -182,11 +182,17 @@ export const measureLayer = (
     kind: layer.kind,
     start,
     triggerTop: documentTop(layer.trigger),
+    triggerHeight: elementHeight,
     wrapperTop: layer.wrapper ? documentTop(layer.wrapper) : 0,
     coverTop: layer.kind === 'cover' ? documentTop(layer.cover) : 0,
     end,
     endTriggerIsSelf,
     endTriggerIndex,
     endTriggerHeight: end.mode === 'clause' ? measureUsedHeight(layer.endTrigger) : 0,
+    endTriggerEnclosedBy: end.mode === 'clause' && end.rawTop !== null
+      ? [...indexByTrigger]
+          .filter(([trigger]) => trigger !== layer.endTrigger && trigger.contains(layer.endTrigger))
+          .map(([, index]) => index)
+      : [],
   };
 };

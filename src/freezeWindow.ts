@@ -8,13 +8,13 @@
  *
  * Two others are resolved in memory instead, by iterating the whole pass to a fixed point. An
  * unregistered endTrigger inside the container depends on the dwell of every Scene layer that
- * freezes before it arrives, including layers that come later in `measurements` order; a registered
- * endTrigger pointing at a layer later in DOM order (a forward reference) depends on that layer's
- * natural position. Iteration only fails to converge when two or more endTriggers genuinely
- * depend on each other in a cycle.
+ * would delay it under GSAP's pins, including layers that come later in `measurements` order; a
+ * registered endTrigger pointing at a layer later in DOM order (a forward reference) depends on
+ * that layer's natural position. Iteration only fails to converge when two or more endTriggers
+ * genuinely depend on each other in a cycle.
  */
 
-import { resolveAnchorTop } from './position';
+import { resolveAnchorTop, resolveElementAnchor } from './position';
 
 // The result of resolving start during refresh()'s first pass.
 export type StartSpec
@@ -50,12 +50,15 @@ export interface LayerMeasurement {
   kind: 'scene' | 'cover';
   start: StartSpec;
   triggerTop: number;
+  triggerHeight: number;
   wrapperTop: number;
   coverTop: number; // Only meaningful for cover layers (0 for Scene layers).
   end: EndSpec;
   endTriggerIsSelf: boolean;
   endTriggerIndex: number | null; // Index of endTrigger when it's also another layer's trigger.
   endTriggerHeight: number; // Only used for a position-clause end.
+  // Indices of the layers whose trigger encloses an unregistered endTrigger inside the container.
+  endTriggerEnclosedBy: readonly number[];
 }
 
 export interface LayerPlan {
@@ -80,54 +83,62 @@ export interface PlanDeps {
 }
 
 // A previous full pass's results, used as the "best known so far" answer for anything a pass
-// can't resolve from layers it has already processed this same pass (see dwellBeforeEndTrigger
+// can't resolve from layers it has already processed this same pass (see gapsBeforeEndAnchor
 // and runPass's `known` lookup below). null before the very first pass.
 interface PreviousPass {
   paddings: readonly (number | null)[];
   naturalTops: readonly number[];
 }
 
-// The dwell an unregistered endTrigger waits out before reaching its anchor at reachedAt, by
-// dwellBeforeReach's rule. Layers already handled this pass use their fresh dwell, the rest the
-// previous pass's. The layer's own dwell is what's being solved for, so it never counts, though it
-// still delays the windows after it.
-const dwellBeforeEndTrigger = (
+// Total dwell before the point an unregistered endTrigger's end clause names (anchorPosition, which
+// reaches the viewport's anchor at reachedAt, both unpadded), counted the way GSAP's pins would
+// delay it. A Scene layer whose trigger encloses the endTrigger counts only if it freezes first,
+// since a pin holds its contents only while engaged; any other counts if its trigger ends above
+// that point, since its spacer pushes the point down. `measurements` order doesn't matter. A layer
+// already handled this pass contributes its fresh value from `paddingHeightsSoFar`; one not yet
+// reached contributes the previous pass's (null on the very first). Reading a fresh value where a
+// stale one belongs, or the reverse, double-counts or drops a layer relative to the sequential
+// `precedingGaps` below, which makes the iteration oscillate instead of converge.
+const gapsBeforeEndAnchor = (
   measurements: readonly LayerMeasurement[],
-  paddingHeightsSoFar: readonly (number | null)[],
+  paddingHeightsSoFar: readonly (number | null | undefined)[],
   previous: PreviousPass | null,
+  anchorPosition: number,
   reachedAt: number,
+  enclosedBy: readonly number[],
   ownIndex: number,
 ): number => {
-  const windows: { freezeStart: number; freezeEnd: number }[] = [];
-  let ownWindow: { freezeStart: number; freezeEnd: number } | null = null;
+  let total = 0;
+  // Dwell before each layer in DOM order, to put an absolute start in unpadded terms.
   let precedingGaps = 0;
 
   measurements.forEach((measurement, i) => {
-    if (measurement.kind !== 'scene') return;
-
-    const paddingHeight = i < ownIndex
+    const paddingHeight = paddingHeightsSoFar[i] !== undefined
       ? paddingHeightsSoFar[i]
       : (previous ? previous.paddings[i] : null);
-    const freezeStart = measurement.start.mode === 'absolute'
-      ? measurement.start.value
-      : measurement.triggerTop + precedingGaps - measurement.start.anchorOffset;
-    const freeze = { freezeStart, freezeEnd: freezeStart + (paddingHeight ?? 0) };
+    const triggerBottom = measurement.triggerTop + measurement.triggerHeight;
+    const unpaddedFreezeStart = measurement.start.mode === 'absolute'
+      ? measurement.start.value - precedingGaps
+      : measurement.triggerTop - measurement.start.anchorOffset;
+    const counts = enclosedBy.includes(i)
+      ? unpaddedFreezeStart < reachedAt - TIE_TOLERANCE_PX
+      : triggerBottom <= anchorPosition + TIE_TOLERANCE_PX;
 
-    windows.push(freeze);
+    if (paddingHeight !== null && paddingHeight !== undefined) {
+      if (i !== ownIndex && counts) total += paddingHeight;
 
-    if (i === ownIndex) ownWindow = freeze;
-
-    precedingGaps += paddingHeight ?? 0;
+      precedingGaps += paddingHeight;
+    }
   });
 
-  return dwellBeforeReach(reachedAt, windows, ownWindow);
+  return total;
 };
 
 // One full sequential pass over every layer, in DOM order.
 // precedingGaps accumulates Scene layer dwell only (cover layers never increase document height),
 // and only from layers already processed this pass, which is exactly right for a layer's own
 // natural position because `measurements` is already DOM-ordered. The two clause cases that reach
-// beyond those layers look elsewhere: an unregistered endTrigger through dwellBeforeEndTrigger, a
+// beyond those layers look elsewhere: an unregistered endTrigger through gapsBeforeEndAnchor, a
 // forward reference through `previous.naturalTops`.
 // naturalTops is returned alongside plans because a caller can't reconstruct it from freezeStart:
 // freezeStart = naturalAbsoluteTop - start.anchorOffset only holds for a clause start, not an
@@ -200,13 +211,17 @@ const runPass = (
           if (known !== undefined) endTop = known;
           else if (measurement.end.measureLive) endTop = measureLiveEndTriggerTop(index);
           else {
-            endTop = measurement.end.rawTop === null
+            const { rawTop } = measurement.end;
+
+            endTop = rawTop === null
               ? 0
-              : measurement.end.rawTop + dwellBeforeEndTrigger(
+              : rawTop + gapsBeforeEndAnchor(
                 measurements,
                 paddingHeightsSoFar,
                 previous,
-                measurement.end.rawTop - anchorOffsetEnd,
+                rawTop + resolveElementAnchor(measurement.end.clause, measurement.endTriggerHeight),
+                rawTop - anchorOffsetEnd,
+                measurement.endTriggerEnclosedBy,
                 index,
               );
           }
@@ -214,6 +229,7 @@ const runPass = (
 
         // An end that falls before the start (endTrigger sitting above trigger, say) collapses to
         // a zero-length window, the same behavior as GSAP ScrollTrigger.
+
         freezeEnd = Math.max(freezeStart, endTop - anchorOffsetEnd);
         break;
       }
@@ -277,22 +293,17 @@ export const TIE_TOLERANCE_PX = 0.05;
 //
 // A Scene trigger resolving its own start lands exactly on its freezeStart, which the tolerance
 // keeps on the not-counted side.
-//
-// excluded, if given, never counts but still delays the windows after it.
 export const dwellBeforeReach = (
   reachedAt: number,
   windows: readonly { freezeStart: number; freezeEnd: number }[],
-  excluded: { freezeStart: number; freezeEnd: number } | null = null,
 ): number => {
   let earlierDwell = 0;
   let counted = 0;
 
   [...windows]
     .sort((a, b) => a.freezeStart - b.freezeStart)
-    .forEach((freeze) => {
-      const { freezeStart, freezeEnd } = freeze;
-
-      if (freeze !== excluded && freezeStart < reachedAt + earlierDwell - TIE_TOLERANCE_PX) {
+    .forEach(({ freezeStart, freezeEnd }) => {
+      if (freezeStart < reachedAt + earlierDwell - TIE_TOLERANCE_PX) {
         counted += freezeEnd - freezeStart;
       }
 
@@ -316,10 +327,12 @@ export const dwellConsumedAt = (
 // Finalizes every layer's freeze window and style values, from measurements laid out in DOM order.
 // Most end modes settle in one pass. Two kinds of clause end need more:
 //
-// - An unregistered clause needs dwellBeforeEndTrigger's look-ahead, whose inputs aren't
-//   all known on the first pass (see runPass). This always resolves: that lookup only creates a
-//   non-cancelling dependency from layer i to layer j when j's index is >= i's, and such edges
-//   can never close into a cycle between two distinct indices.
+// - An unregistered clause needs gapsBeforeEndAnchor's structural lookup, whose inputs aren't
+//   all known on the first pass (see runPass). That lookup's non-cancelling dependencies run from
+//   layer i to a later layer j, which can't close into a cycle, with one exception: an endTrigger
+//   above an earlier layer's trigger leaves that layer out even though its dwell moves i's start.
+//   With that layer's own end reaching past i's trigger, the pair can oscillate into the throw
+//   below. The DOM-order rule before this one had it too.
 // - A forward reference depends directly on the referenced layer's naturalTop, with no such
 //   cancellation, so endTriggers pointing at each other (or a longer cycle through several
 //   layers) have no fixed point. That's the case the throw below exists for.

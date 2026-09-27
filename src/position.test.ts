@@ -7,6 +7,7 @@ import {
   parseClauseToken,
   prefixSpacedRelativeEnd,
   resolveAnchorTop,
+  resolveElementAnchor,
   resolveDwell,
   resolveMaxOffset,
   resolveMaybeFn,
@@ -183,6 +184,14 @@ describe('isAbsoluteFormat', () => {
     ['500 top', '500px', '50%', 'top', '+=500', '', '   '].forEach((value) => {
       expect(isAbsoluteFormat(value), JSON.stringify(value)).toBe(false);
     });
+  });
+});
+
+describe('resolveElementAnchor', () => {
+  it('returns the element side\'s distance below the top edge, ignoring the viewport side', () => {
+    expect(resolveElementAnchor('bottom top', 300)).toBe(300);
+    expect(resolveElementAnchor('center+=10 bottom', 300)).toBe(160);
+    expect(resolveElementAnchor('top', 300)).toBe(0);
   });
 });
 

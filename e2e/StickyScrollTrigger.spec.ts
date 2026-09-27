@@ -254,10 +254,10 @@ test('resolveScrollPosition counts a Scene layer\'s dwell by which comes first, 
   expect(await topAtResolved('.above')).toBeCloseTo(0, 0);
 });
 
-// A Scene layer's end is where its endTrigger would arrive without the layer's own dwell, so #end
-// reaches the top that dwell after the release. Counting .tallScene's dwell by DOM order held the
-// release 500px too long.
-test('an unregistered endTrigger counts only the dwell of scenes that freeze before it arrives', async ({
+// #end sits inside .tallScene's trigger but reaches the top before .tallScene freezes, so it
+// arrives one .scene dwell after the release. Counting .tallScene's dwell because its trigger
+// starts first held the release 500px too long.
+test('an unregistered endTrigger inside a scene\'s trigger doesn\'t count a dwell that comes after it arrives', async ({
   page,
 }) => {
   await page.goto('/fixtures/endTriggerFreezeOrder.html');

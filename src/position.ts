@@ -132,6 +132,18 @@ const assertNotClamped = (trimmed: string) => {
   );
 };
 
+// How far below the element's top edge a position clause's element side points (px), e.g. the
+// element's height for 'bottom top'.
+export const resolveElementAnchor = (position: string, elementHeight: number): number => {
+  const trimmed = position.trim();
+
+  assertNotClamped(trimmed);
+
+  const elementClause = parseClauseToken(trimmed.split(/\s+/)[0], elementHeight);
+
+  return elementHeight * elementClause.fraction + elementClause.offsetPx;
+};
+
 // Back-calculates the top position (px) at which the element's anchor point lines up with
 // the viewport's anchor point, from a GSAP-standard position clause (e.g. 'center center').
 // When only one clause is given, the viewport side defaults to 'top' (matching GSAP).
@@ -144,14 +156,13 @@ export const resolveAnchorTop = (
 
   assertNotClamped(trimmed);
 
-  const [elementToken, viewportToken = 'top'] = trimmed.split(/\s+/);
-  const elementClause = parseClauseToken(elementToken, elementHeight);
+  const viewportToken = trimmed.split(/\s+/)[1] ?? 'top';
   const viewportClause = parseClauseToken(viewportToken, viewportHeight);
 
   return (
     viewportHeight * viewportClause.fraction
     + viewportClause.offsetPx
-    - (elementHeight * elementClause.fraction + elementClause.offsetPx)
+    - resolveElementAnchor(trimmed, elementHeight)
   );
 };
 

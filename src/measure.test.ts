@@ -250,12 +250,14 @@ describe('measureLayer', () => {
         kind: 'scene',
         start: { mode: 'clause', anchorOffset: 0 },
         triggerTop: 0,
+        triggerHeight: 0,
         wrapperTop: 0,
         coverTop: 0,
         end: { mode: 'clause', clause: 'top top', rawTop: 0, measureLive: false },
         endTriggerIsSelf: false,
         endTriggerIndex: null,
         endTriggerHeight: 0,
+        endTriggerEnclosedBy: [],
       });
   });
 
@@ -316,5 +318,22 @@ describe('measureLayer', () => {
     );
 
     expect(unregistered.endTriggerIndex).toBeNull();
+  });
+
+  // Geometry alone can't place a point on a scene's top edge: the endTrigger may be the scene's
+  // first child, or end right where the scene starts.
+  it('lists the registered triggers that enclose an unregistered endTrigger', () => {
+    const inner = document.createElement('div');
+    const after = document.createElement('div');
+
+    query('.b').append(inner);
+    query('.root').append(after);
+
+    const indexByTrigger = new Map([[query('.a'), 0], [query('.b'), 1]]);
+
+    expect(measure(scene({ endTrigger: inner, end: 'top top' }), 0, indexByTrigger)
+      .endTriggerEnclosedBy).toEqual([1]);
+    expect(measure(scene({ endTrigger: after, end: 'top top' }), 0, indexByTrigger)
+      .endTriggerEnclosedBy).toEqual([]);
   });
 });

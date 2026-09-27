@@ -495,7 +495,7 @@ One pair can't compose: a `start` whose element token already carries an offset 
 
 If `endTrigger` points to another registered layer, its position is resolved using the same computation this module already does for that layer. A forward reference (pointing to a layer later in DOM order) only works from `createOverlapScroll`'s cover layer, which adds no padding and so doesn't depend on its own dwell. A `createStickyTrigger` Scene layer throws immediately instead: its own dwell padding pushes down everything after it, so the reference would depend on that dwell and never converge.
 
-For an unregistered `endTrigger`, its raw DOM position is measured directly, then adjusted by the dwell of every other registered Scene layer that freezes before `endTrigger` reaches its `end` anchor, the same rule as [`resolveScrollPosition`](#resolvescrollpositionelement-position). A tall scene with `start: 'bottom bottom'` that holds `endTrigger` near its top freezes after `endTrigger` has passed, so its dwell doesn't count even though it comes first in DOM order.
+For an unregistered `endTrigger`, its raw DOM position is measured directly, then adjusted the way GSAP's own pins would delay it: by the dwell of every other registered Scene layer, including ones registered after this call, whose `trigger` ends above the point on `endTrigger` that `end` names, or encloses `endTrigger` and freezes before that point reaches its viewport anchor. No other scene counts, even one that freezes first.
 
 > Keep `createStickyTrigger`'s `endTrigger` inside the shared container: pointing at an element outside it throws. If you need to reference something outside the container, use a dwell distance (e.g. `'+=500'`) instead.
 >

@@ -16,12 +16,14 @@ const scene = (over: Partial<LayerMeasurement> = {}): LayerMeasurement => ({
   kind: 'scene',
   start: clauseStart(0),
   triggerTop: 0,
+  triggerHeight: 0,
   wrapperTop: 0,
   coverTop: 0,
   end: { mode: 'dwell', distancePx: 0 },
   endTriggerIsSelf: true,
   endTriggerIndex: null,
   endTriggerHeight: 0,
+  endTriggerEnclosedBy: [],
   ...over,
 });
 const cover = (over: Partial<LayerMeasurement> = {}): LayerMeasurement =>
@@ -203,9 +205,9 @@ describe('position-clause end', () => {
     expect(plans[1].freezeEnd).toBe(1100); // 900 + 200
   });
 
-  it('includes a later-processed Scene layer\'s dwell when it freezes before the endTrigger arrives', () => {
-    // S1's endTrigger reaches the top at raw position 2000, after S2 freezes at its own raw 1000,
-    // so S2's dwell must be included even though S2 is processed after S1 in this array.
+  it('includes a later-processed Scene layer\'s dwell when its trigger ends before the raw endTrigger position', () => {
+    // S2's trigger (1000) ends before S1's raw endTrigger position (2000), so S2's dwell counts
+    // even though S2 is processed after S1.
     const { plans } = run([
       scene({
         triggerTop: 0,
@@ -221,26 +223,61 @@ describe('position-clause end', () => {
     expect(plans[1].freezeStart).toBe(3500); // 1000 + S1's now-larger dwell (2500)
   });
 
-  // S2 is a tall section frozen at 'bottom bottom' (2000px tall in an 800px viewport), and the
-  // endTrigger sits 200px into it, so it reaches the top long before S2 freezes.
-  it('leaves out an earlier-in-DOM Scene layer\'s dwell when it freezes after the endTrigger arrives', () => {
+  // S2 freezes at its bottom edge, long after the endTrigger 200px into its 2000px trigger has
+  // reached the top.
+  it('leaves out the dwell of a Scene layer that encloses the endTrigger but freezes after it arrives', () => {
     const { plans } = run([
       scene({
         triggerTop: 500,
         end: { mode: 'clause', clause: 'top top', rawTop: 1200, measureLive: false },
         endTriggerIsSelf: false,
         endTriggerIndex: null,
+        endTriggerEnclosedBy: [1],
       }),
-      scene({ triggerTop: 1000, start: clauseStart(-1200), end: dwell(500) }),
+      scene({ triggerTop: 1000, triggerHeight: 2000, start: clauseStart(-1200), end: dwell(500) }),
     ]);
 
     expect(plans[0].freezeEnd).toBe(1200); // not 1700
     expect(plans[1].freezeStart).toBe(2900); // 1000 + 700 + 1200
   });
 
-  // S2's 'top bottom' freezes it as it enters the viewport, 200px below the endTrigger, which
-  // is still 600px from the top by then.
-  it('counts a later-in-DOM Scene layer\'s dwell when it freezes before the endTrigger arrives', () => {
+  // S2's 'top bottom' freezes it before the endTrigger reaches the top, but its pin spacer would
+  // sit after the endTrigger, so GSAP's end wouldn't move.
+  // A pin holds what's inside it while engaged: S2 freezes at 1000, before the endTrigger 500px
+  // into its trigger reaches the top at 1500.
+  it('counts the dwell of a Scene layer that encloses the endTrigger and freezes first', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 0,
+        end: { mode: 'clause', clause: 'top top', rawTop: 1500, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerIndex: null,
+        endTriggerEnclosedBy: [1],
+      }),
+      scene({ triggerTop: 1000, triggerHeight: 1000, end: dwell(500) }),
+    ]);
+
+    expect(plans[0].freezeEnd).toBe(2000); // 1500 + 500
+  });
+
+  // S2's trigger sits inside the 1000px endTrigger, above its bottom edge, so GSAP's spacer for S2
+  // would stretch the endTrigger and push that edge down.
+  it('counts the dwell of a Scene layer inside the endTrigger, above the point the end names', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 0,
+        end: { mode: 'clause', clause: 'bottom top', rawTop: 1000, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerIndex: null,
+        endTriggerHeight: 1000,
+      }),
+      scene({ triggerTop: 1200, triggerHeight: 300, end: dwell(500) }),
+    ]);
+
+    expect(plans[0].freezeEnd).toBe(2500); // 1000 + 1000 + 500
+  });
+
+  it('leaves out a later-in-DOM Scene layer\'s dwell even when it freezes before the endTrigger arrives', () => {
     const { plans } = run([
       scene({
         triggerTop: 500,
@@ -251,8 +288,8 @@ describe('position-clause end', () => {
       scene({ triggerTop: 1400, start: clauseStart(800), end: dwell(500) }),
     ]);
 
-    expect(plans[0].freezeEnd).toBe(1700); // not 1200
-    expect(plans[1].freezeStart).toBe(1800); // 1400 + 1200 - 800
+    expect(plans[0].freezeEnd).toBe(1200);
+    expect(plans[1].freezeStart).toBe(1300); // 1400 + 700 - 800
   });
 
   it('propagates a look-ahead correction through a chain of unregistered endTriggers (multi-pass convergence)', () => {
@@ -286,7 +323,7 @@ describe('position-clause end', () => {
 
   it('converges even when DOM order and trigger position disagree, using the full iteration budget without throwing', () => {
     // Array order is deliberately NOT sorted by triggerTop (unlike real usage, where
-    // structure.ts guarantees that) to stress-test dwellBeforeEndTrigger's freeze-order
+    // structure.ts guarantees that) to stress-test gapsBeforeEndAnchor's position-based
     // lookup against runPass's index-based one. Each layer's endTrigger raw position reaches
     // past the other two, so resolving layer 0 needs layer 1's dwell, which itself needs layer
     // 2's, so this needs exactly 3 runPass calls (the full budget for 3 layers) to settle, verified
