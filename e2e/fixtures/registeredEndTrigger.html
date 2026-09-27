@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>registeredEndTrigger fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .lead {
+        height: 1000px;
+      }
+      .first {
+        height: 400px;
+      }
+      .gap {
+        height: 500px;
+      }
+      .second {
+        height: 300px;
+      }
+      .tail {
+        height: 300vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <div class="lead"></div>
+      <!-- .first freezes as it reaches the top, holding its own bottom edge back by its dwell. -->
+      <section class="first"></section>
+      <div class="gap"></div>
+      <section class="second"></section>
+    </div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      sticky.createStickyTrigger({ trigger: '.first', start: 'top top', end: '+=500' });
+
+      const second = sticky.createStickyTrigger({
+        trigger: '.second',
+        start: 'top bottom',
+        endTrigger: '.first',
+        end: 'bottom top',
+      });
+
+      sticky.refresh();
+
+      window.__secondRange = () => ({ start: second.start(), end: second.end() });
+    </script>
+  </body>
+</html>

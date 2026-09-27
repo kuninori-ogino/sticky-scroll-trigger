@@ -267,12 +267,9 @@ describe('endTrigger validity', () => {
   });
 
   // A registered endTrigger positioned after itself in DOM order (a forward reference) splits
-  // into two cases. A Scene layer's own dwell padding always precedes (and pushes down) anything
-  // after it, so a Scene layer's forward reference always depends on its own dwell; that's
-  // rejected outright (see measure.ts's resolveEndSpec). A cover layer never creates
-  // padding, so it has no such self-dependency; planLayers resolves it via its fixed-point
-  // iteration instead (see freezeWindow.test.ts's "a Cover layer's forward reference resolves..."
-  // for the numeric verification).
+  // into two cases: a Scene layer's is rejected outright (see measure.ts's resolveEndSpec), a
+  // cover layer's resolves (see freezeWindow.test.ts's "a Cover layer's forward reference
+  // resolves..." for the numeric verification).
   describe('forward references (endTrigger points at a layer positioned after itself in DOM order)', () => {
     const setupThreeInOrder = () => {
       document.body.innerHTML = `

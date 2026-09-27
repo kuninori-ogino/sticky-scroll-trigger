@@ -23,12 +23,9 @@ import type { Layer } from './types';
 
 // Converts a resolved end value into an EndSpec. Only a position-clause end needs a decision
 // here: where endTrigger's position comes from.
-// - a registered layer: pass 2 (planLayers) resolves it, including a cover layer's forward
-//   reference, which needs no iteration because cover layers add no padding. A Scene layer's
-//   forward reference is rejected outright, since its own dwell precedes anything after it.
-// - unregistered, inside the shared container: pass 1 measures it, pass 2 adds the dwell of the
-//   Scene layers that would delay it (a Scene layer's end by GSAP's pin rule, a cover's by when
-//   each scene freezes).
+// - inside the shared container, registered or not: pass 1 measures it, pass 2 adds the dwell of
+//   the Scene layers that would delay it (a Scene layer's end by GSAP's pin rule, a cover's by
+//   when each scene freezes). A Scene layer's forward reference is rejected outright.
 // - unregistered, outside it: padding shifts the measurement, so pass 2 re-measures (measureLive).
 export const resolveEndSpec = (
   rootElement: HTMLElement,
@@ -69,19 +66,16 @@ export const resolveEndSpec = (
       return { mode: 'max', offsetPx: resolveMaxOffset(classified.value, viewportHeight) };
 
     case 'clause': {
-      // The same self-reference the 'max' case above rejects, reached through a registered layer
-      // instead: a Scene layer's dwell padding pushes down everything after it in DOM order, so
-      // referencing a later layer's position means depending on its own dwell. Iteration can't
-      // fix this one, since the layer's own paddingHeight cancels out of its defining equation,
-      // leaving a contradiction or an arbitrary value. Cover layers add no padding, so planLayers
-      // resolves their forward references normally.
+      // Rejected for a Scene layer as an API decision: planLayers could resolve it, since the
+      // endTrigger is measured unpadded and the layer's own dwell never counts toward its end.
+      // Cover layers support it.
       if (layer.kind !== 'cover' && endTriggerIndex !== null && endTriggerIndex > ownIndex) {
         throw new Error(
           `StickyScrollTrigger: createStickyTrigger's trigger ${describeElement(layer.trigger)}'s `
           + `endTrigger (${describeElement(layer.endTrigger)}) refers to a layer positioned later `
-          + 'in DOM order, which isn\'t supported: this layer\'s own dwell padding pushes that one '
-          + 'down, so the freeze window would depend on its own dwell. Point endTrigger at a layer '
-          + 'earlier in DOM order, or use a dwell distance such as \'+=500\'.',
+          + 'in DOM order, which isn\'t supported for createStickyTrigger. Point endTrigger at a '
+          + 'layer earlier in DOM order, use an unregistered element at the same spot, or use a '
+          + 'dwell distance such as \'+=500\'.',
         );
       }
 
@@ -191,9 +185,10 @@ export const measureLayer = (
     endTriggerIsSelf,
     endTriggerIndex,
     endTriggerHeight: end.mode === 'clause' ? measureUsedHeight(layer.endTrigger) : 0,
-    endTriggerEnclosedBy: end.mode === 'clause' && end.rawTop !== null
+    // A registered endTrigger counts as enclosing itself: its own pin holds it too.
+    endTriggerEnclosedBy: end.mode === 'clause' && !end.measureLive && !endTriggerIsSelf
       ? [...indexByTrigger]
-          .filter(([trigger]) => trigger !== layer.endTrigger && trigger.contains(layer.endTrigger))
+          .filter(([trigger]) => trigger.contains(layer.endTrigger))
           .map(([, index]) => index)
       : [],
   };

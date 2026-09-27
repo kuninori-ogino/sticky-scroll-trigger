@@ -173,22 +173,25 @@ describe('position-clause end', () => {
     expect(plans[0].freezeEnd).toBe(1400);
   });
 
-  it('reuses the gap-adjusted natural position when pointing at an already-computed layer', () => {
+  // S1 freezes at 1000, before its own bottom edge (raw 1400) reaches the top, so that edge gets
+  // there one S1 dwell late, the same as for any element S1's trigger encloses.
+  it('counts a registered endTrigger\'s own dwell when it freezes before the point the end names', () => {
     const { plans } = run([
-      scene({ triggerTop: 500, end: dwell(200) }),
+      scene({ triggerTop: 1000, triggerHeight: 400, end: dwell(500) }),
       scene({
-        triggerTop: 100,
-        end: clause('top top'),
+        triggerTop: 1900,
+        triggerHeight: 300,
+        start: clauseStart(800),
+        end: clause('bottom top'),
         endTriggerIsSelf: false,
         endTriggerIndex: 0,
-        endTriggerHeight: 100,
+        endTriggerHeight: 400,
+        endTriggerEnclosedBy: [0],
       }),
     ]);
 
-    // the 1st layer's natural position is 500 (gaps 0).
-    // the 2nd layer picks up gaps of 200, giving a natural position of 300.
-    expect(plans[1].freezeStart).toBe(300);
-    expect(plans[1].freezeEnd).toBe(500);
+    expect(plans[1].freezeStart).toBe(1600); // 1900 + 500 - 800
+    expect(plans[1].freezeEnd).toBe(1900); // 1400 + 500, not a collapsed 1600
   });
 
   it('adds precedingGaps onto the raw position for an unregistered endTrigger inside the shared container', () => {
@@ -436,23 +439,44 @@ describe('position-clause end', () => {
     expect(plans[0].paddingHeight).toBe(0);
   });
 
-  it('a Scene layer\'s forward reference never converges: its own dwell precedes (and would depend on) the layer it points at', () => {
-    // Scene layer 0's own paddingHeight always contributes to layer 1's naturalTop (it precedes
-    // layer 1 in DOM order unconditionally), so "layer 0's end = layer 1's position" cancels its
-    // own unknown out of its defining equation, so there's no fixed point to iterate toward. This
-    // is the low-level counterpart of index.ts's early rejection for this exact case (a Scene
-    // layer's forward reference); freezeWindow.ts has no notion of that upstream check, so
-    // constructing this measurement set directly still hits the generic circular-dependency
-    // throw.
-    expect(() => run([
+  // measure.ts rejects this upstream, but measured unpadded the reference is well defined.
+  it('resolves a Scene layer\'s forward reference from the referenced trigger\'s own position', () => {
+    const { plans } = run([
       scene({
         triggerTop: 1000,
         end: clause('top top'),
         endTriggerIsSelf: false,
-        endTriggerIndex: 1, // a layer positioned after this one
+        endTriggerIndex: 1,
         endTriggerHeight: 100,
+        endTriggerEnclosedBy: [1],
       }),
       scene({ triggerTop: 2000, end: dwell(100) }),
+    ]);
+
+    expect(plans[0].freezeEnd).toBe(2000);
+    expect(plans[1].freezeStart).toBe(3000); // 2000 + 1000
+  });
+
+  // Layer 1's endTrigger sits above layer 0's trigger, so layer 0 doesn't count toward it, yet
+  // layer 0's dwell moves layer 1's start; layer 0's own end counts layer 1. See planLayers.
+  it('throws when two layers\' ends feed each other without cancelling', () => {
+    expect(() => run([
+      scene({
+        triggerTop: 1200,
+        triggerHeight: 100,
+        start: clauseStart(800),
+        end: { mode: 'clause', clause: 'top bottom', rawTop: 1400, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 40,
+      }),
+      scene({
+        triggerTop: 1300,
+        triggerHeight: 100,
+        start: clauseStart(800),
+        end: { mode: 'clause', clause: 'bottom top', rawTop: 900, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 200,
+      }),
     ])).toThrow(/circular structural dependency/);
   });
 

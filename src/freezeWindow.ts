@@ -58,7 +58,7 @@ export interface LayerMeasurement {
   endTriggerIsSelf: boolean;
   endTriggerIndex: number | null; // Index of endTrigger when it's also another layer's trigger.
   endTriggerHeight: number; // Only used for a position-clause end.
-  // Indices of the layers whose trigger encloses an unregistered endTrigger inside the container.
+  // Indices of the layers whose trigger encloses (or is) an endTrigger inside the container.
   endTriggerEnclosedBy: readonly number[];
 }
 
@@ -84,14 +84,13 @@ export interface PlanDeps {
 }
 
 // A previous full pass's results, used as the "best known so far" answer for anything a pass
-// can't resolve from layers it has already processed this same pass (see gapsBeforeEndAnchor
-// and runPass's `known` lookup below). null before the very first pass.
+// can't resolve from layers it has already processed this same pass (see gapsBeforeEndAnchor).
+// null before the very first pass.
 interface PreviousPass {
   paddings: readonly (number | null)[];
-  naturalTops: readonly number[];
 }
 
-// Total dwell before the point an unregistered endTrigger's end clause names (anchorPosition, which
+// Total dwell before the point an endTrigger's end clause names (anchorPosition, which
 // reaches the viewport's anchor at reachedAt, both unpadded), counted the way GSAP's pins would
 // delay it. A Scene layer whose trigger encloses the endTrigger counts only if it freezes first,
 // since a pin holds its contents only while engaged; any other counts if its trigger ends above
@@ -139,24 +138,19 @@ const gapsBeforeEndAnchor = (
 // here and is planned by planCover once the Scene windows settle.
 // precedingGaps accumulates Scene layer dwell only (cover layers never increase document height),
 // and only from layers already processed this pass, which is exactly right for a layer's own
-// natural position because `measurements` is already DOM-ordered. The two clause cases that reach
-// beyond those layers look elsewhere: an unregistered endTrigger through gapsBeforeEndAnchor, a
-// forward reference through `previous.naturalTops`.
-// naturalTops is returned alongside plans because a caller can't reconstruct it from freezeStart:
-// freezeStart = naturalAbsoluteTop - start.anchorOffset only holds for a clause start, not an
-// absolute one, where freezeStart is start.value directly.
+// natural position because `measurements` is already DOM-ordered. An endTrigger other than trigger
+// itself reaches beyond those layers through gapsBeforeEndAnchor.
 const runPass = (
   measurements: readonly LayerMeasurement[],
   { viewportHeight, structureTop, measureLiveEndTriggerTop }: PlanDeps,
   previous: PreviousPass | null,
-): { plans: (LayerPlan | null)[]; naturalTops: number[] } => {
-  const naturalTops: number[] = [];
+): (LayerPlan | null)[] => {
   const paddingHeightsSoFar: (number | null)[] = [];
   let precedingGaps = 0;
-  const plans = measurements.map((measurement, index) => {
+
+  return measurements.map((measurement, index) => {
     const naturalAbsoluteTop = measurement.triggerTop + precedingGaps;
 
-    naturalTops[index] = naturalAbsoluteTop;
     paddingHeightsSoFar[index] = null;
 
     if (measurement.kind === 'cover') return null;
@@ -197,35 +191,30 @@ const runPass = (
 
         if (measurement.endTriggerIsSelf) {
           endTop = naturalAbsoluteTop;
+        } else if (measurement.end.measureLive) {
+          endTop = measureLiveEndTriggerTop(index);
         } else {
-          const known = measurement.endTriggerIndex === null
-            ? undefined
-            : (naturalTops[measurement.endTriggerIndex] !== undefined
-                ? naturalTops[measurement.endTriggerIndex]
-                : (previous ? previous.naturalTops[measurement.endTriggerIndex] : undefined));
+          // A registered endTrigger is measured unpadded like any other element, rather than
+          // taken from that layer's own plan.
+          const rawTop = measurement.endTriggerIndex === null
+            ? measurement.end.rawTop
+            : measurements[measurement.endTriggerIndex].triggerTop;
 
-          if (known !== undefined) endTop = known;
-          else if (measurement.end.measureLive) endTop = measureLiveEndTriggerTop(index);
-          else {
-            const { rawTop } = measurement.end;
-
-            endTop = rawTop === null
-              ? 0
-              : rawTop + gapsBeforeEndAnchor(
-                measurements,
-                paddingHeightsSoFar,
-                previous,
-                rawTop + resolveElementAnchor(measurement.end.clause, measurement.endTriggerHeight),
-                rawTop - anchorOffsetEnd,
-                measurement.endTriggerEnclosedBy,
-                index,
-              );
-          }
+          endTop = rawTop === null
+            ? 0
+            : rawTop + gapsBeforeEndAnchor(
+              measurements,
+              paddingHeightsSoFar,
+              previous,
+              rawTop + resolveElementAnchor(measurement.end.clause, measurement.endTriggerHeight),
+              rawTop - anchorOffsetEnd,
+              measurement.endTriggerEnclosedBy,
+              index,
+            );
         }
 
         // An end that falls before the start (endTrigger sitting above trigger, say) collapses to
         // a zero-length window, the same behavior as GSAP ScrollTrigger.
-
         freezeEnd = Math.max(freezeStart, endTop - anchorOffsetEnd);
         break;
       }
@@ -238,8 +227,6 @@ const runPass = (
 
     return { freezeStart, freezeEnd, stickyTop: structureTop - freezeStart, paddingHeight };
   });
-
-  return { plans, naturalTops };
 };
 
 // A cover layer's freeze window, from the Scene layers' settled ones. A cover never freezes the
@@ -380,34 +367,28 @@ export const dwellConsumedAt = (
 );
 
 // Finalizes every layer's freeze window and style values, from measurements laid out in DOM order.
-// Most end modes settle in one pass. Two kinds of clause end need more:
+// Most end modes settle in one pass. One kind of clause end needs more:
 //
-// - An unregistered clause needs gapsBeforeEndAnchor's structural lookup, whose inputs aren't
-//   all known on the first pass (see runPass). That lookup's non-cancelling dependencies run from
-//   layer i to a later layer j, which can't close into a cycle, with one exception: an endTrigger
-//   above an earlier layer's trigger leaves that layer out even though its dwell moves i's start.
-//   With that layer's own end reaching past i's trigger, the pair can oscillate into the throw
-//   below. The DOM-order rule before this one had it too.
-// - A Scene layer's forward reference depends directly on the referenced layer's naturalTop, with
-//   no such cancellation, so endTriggers pointing at each other (or a longer cycle through several
-//   layers) have no fixed point. That's the case the throw below exists for.
+// - A clause with an endTrigger other than trigger needs gapsBeforeEndAnchor's lookup, whose
+//   inputs aren't all known on the first pass (see runPass). That lookup's non-cancelling
+//   dependencies run from layer i to a later layer j, which can't close into a cycle, with one
+//   exception: an endTrigger above an earlier layer's trigger leaves that layer out even though
+//   its dwell moves i's start. With that layer's own end reaching past i's trigger, the pair can
+//   oscillate into the throw below. The DOM-order rule before this one had it too.
 //
-// Re-running the full pass with the previous pass's results converges for every acyclic
-// dependency, within one iteration per layer, enough for any chain no longer than the layer count
-// (see freezeWindow.test.ts's DOM-order-scrambled stress test and the genuine-cycle test beside
-// it).
+// Re-running the full pass with the previous pass's results converges otherwise, within one
+// iteration per layer, enough for any chain no longer than the layer count (see
+// freezeWindow.test.ts's DOM-order-scrambled stress test and the oscillation test beside it).
 export const planLayers = (
   measurements: readonly LayerMeasurement[],
   deps: PlanDeps,
 ): LayerPlan[] => {
-  const needsConvergence = measurements.some((measurement, index) => {
+  const needsConvergence = measurements.some((measurement) => {
     if (measurement.kind !== 'scene') return false;
 
     if (measurement.end.mode !== 'clause' || measurement.endTriggerIsSelf) return false;
 
-    return measurement.endTriggerIndex === null
-      ? measurement.end.rawTop !== null
-      : measurement.endTriggerIndex >= index;
+    return measurement.endTriggerIndex !== null || measurement.end.rawTop !== null;
   });
   // onPlanned, the only thing that writes DOM or layer state, runs once after the loop, so no
   // shared state changes between passes and a live remeasurement gives the same answer every time.
@@ -428,21 +409,17 @@ export const planLayers = (
       return value;
     },
   };
-  let { plans, naturalTops } = runPass(measurements, passDeps, null);
+  let plans = runPass(measurements, passDeps, null);
 
   if (needsConvergence) {
     for (let pass = 0; pass < measurements.length; pass += 1) {
       const previous: PreviousPass = {
         paddings: plans.map((plan) => plan?.paddingHeight ?? null),
-        naturalTops,
       };
       const next = runPass(measurements, passDeps, previous);
-      const stable = next.plans.every(
-        (plan, i) => plan?.paddingHeight === plans[i]?.paddingHeight,
-      );
+      const stable = next.every((plan, i) => plan?.paddingHeight === plans[i]?.paddingHeight);
 
-      plans = next.plans;
-      naturalTops = next.naturalTops;
+      plans = next;
 
       if (stable) break;
 

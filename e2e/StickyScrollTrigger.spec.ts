@@ -270,6 +270,35 @@ test('an unregistered endTrigger inside a scene\'s trigger doesn\'t count a dwel
   expect(await findArrivalScroll(page, 'end')).toBe(end + (end - start));
 });
 
+// .second ends where .first's bottom edge would leave the top of the viewport without .second's
+// own dwell, and .first's own freeze delays that edge. Left out, the end fell before .second's
+// start and the window collapsed.
+test('a registered endTrigger counts its own dwell when it freezes before the point the end names', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/registeredEndTrigger.html');
+
+  type FixtureWindow = Window & { __secondRange: () => { start: number; end: number } };
+
+  const { start, end } = await page.evaluate(() =>
+    (window as unknown as FixtureWindow).__secondRange());
+  const bottomAtTop = await page.evaluate(() => {
+    const first = document.querySelector('.first')!;
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+
+    for (let scroll = 0; scroll <= max; scroll += 1) {
+      window.scrollTo(0, scroll);
+
+      if (first.getBoundingClientRect().bottom <= 0) return scroll;
+    }
+
+    return null;
+  });
+
+  expect(end).toBeGreaterThan(start);
+  expect(bottomAtTop).toBe(end + (end - start));
+});
+
 // A cover layer's window counts a Scene layer's dwell only when the scene freezes first. Counted by
 // DOM order, insideTallScene ran 500px late and midRise ended 500px early.
 for (const layout of ['insideTallScene', 'midRise', 'handover']) {

@@ -171,7 +171,7 @@ describe('resolveEndSpec', () => {
       expect(forwardRef).toThrow(
         /createStickyTrigger's trigger <section\.a>'s endTrigger \(<section\.b>\) refers to a /,
       );
-      expect(forwardRef).toThrow(/layer positioned later in DOM order.*its own dwell/s);
+      expect(forwardRef).toThrow(/layer positioned later in DOM order, which isn't supported/);
     });
 
     // Both rejections are about dwell padding, which a cover layer never creates, so its forward
@@ -335,5 +335,8 @@ describe('measureLayer', () => {
       .endTriggerEnclosedBy).toEqual([1]);
     expect(measure(scene({ endTrigger: after, end: 'top top' }), 0, indexByTrigger)
       .endTriggerEnclosedBy).toEqual([]);
+    // A registered endTrigger encloses itself.
+    expect(measure(scene({ trigger: query('.b'), endTrigger: query('.a'), end: 'top top' }), 1, indexByTrigger)
+      .endTriggerEnclosedBy).toEqual([0]);
   });
 });
