@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinStuckMeasure fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .pin {
+        height: 100px;
+      }
+      .scene {
+        height: 400px;
+      }
+      .gap {
+        height: 600px;
+      }
+      .tail {
+        height: 300vh;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Both pins hold until .tail, so at scroll 2500 both are stuck: #pinOut before the container,
+         #pinIn inside it, holding the element the scene's end measures. -->
+    <div id="pinOut" class="pin"></div>
+    <div class="root">
+      <section class="scene"></section>
+      <div class="gap"></div>
+      <div id="pinIn" class="pin"><div id="pinChild"></div></div>
+      <div class="gap"></div>
+    </div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+      const sceneVars = sticky.createStickyTrigger({
+        trigger: '.scene',
+        start: 'top top',
+        endTrigger: '#pinChild',
+        end: 'top top',
+      });
+
+      sticky.createStickyPin({ trigger: '#pinOut', endTrigger: '.tail', end: 'top top' });
+      sticky.createStickyPin({ trigger: '#pinIn', endTrigger: '.tail', end: 'top top' });
+      sticky.refresh();
+
+      // Every value here is a document position, so it shouldn't depend on where the page is
+      // scrolled when it's taken.
+      window.__measureAt = (y) => {
+        window.scrollTo(0, y);
+
+        const pinInTopAtScroll = document.getElementById('pinIn').getBoundingClientRect().top;
+        const pinIn = sticky.resolveScrollPosition('#pinIn', 'top top');
+        const pinOut = StickyScrollTrigger.getScrollTop('#pinOut', [sticky]);
+
+        sticky.refresh();
+
+        return { pinIn, pinOut, sceneEnd: sceneVars.end(), pinInTopAtScroll };
+      };
+    </script>
+  </body>
+</html>

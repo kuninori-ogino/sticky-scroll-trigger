@@ -1075,6 +1075,88 @@ describe('static getScrollTop()', () => {
   );
 });
 
+// jsdom never sticks anything, so el reports a top 400px off whenever pin carries
+// position:sticky, standing in for the shift a stuck pin causes. A measurement that lands on the
+// natural value reset the pin first.
+describe('measuring while a pin is stuck', () => {
+  const shiftWhileSticky = (el: HTMLElement, pin: HTMLElement, natural: number) => {
+    Object.defineProperty(el, 'offsetTop', {
+      configurable: true,
+      get: () => (pin.style.position === 'sticky' ? natural + 400 : natural),
+    });
+  };
+
+  const setupPinned = () => {
+    document.body.innerHTML = `
+      <div class="outsidePin"></div>
+      <div class="root">
+        <section class="scene"></section>
+        <div class="pin"><div id="child"></div></div>
+      </div>
+    `;
+
+    return new StickyScrollTrigger(query('.root'));
+  };
+
+  it('resolveScrollPosition resets the pin it measures', () => {
+    const controller = setupPinned();
+    const pin = query('.pin');
+
+    controller.createStickyPin({ trigger: pin });
+    controller.refresh();
+    shiftWhileSticky(pin, pin, 100);
+
+    expect(controller.resolveScrollPosition(pin, 'top top')).toBe(100);
+    expect(pin.style.position).toBe('sticky');
+  });
+
+  it('getScrollTop resets a pin outside every container', () => {
+    const controller = setupPinned();
+    const pin = query('.outsidePin');
+
+    controller.createStickyPin({ trigger: pin });
+    controller.refresh();
+    shiftWhileSticky(pin, pin, 100);
+
+    expect(StickyScrollTrigger.getScrollTop(pin, [controller])).toBe(100);
+    expect(pin.style.position).toBe('sticky');
+  });
+
+  // The first refresh() makes the pin sticky, so the second is the one that measures around it.
+  it('refresh() resets a pin holding a Scene layer\'s endTrigger', () => {
+    const controller = setupPinned();
+    const pin = query('.pin');
+    const vars = controller.createStickyTrigger({
+      trigger: query('.scene'),
+      endTrigger: query('#child'),
+      end: 'top top',
+    });
+
+    controller.createStickyPin({ trigger: pin });
+    controller.refresh();
+    shiftWhileSticky(query('#child'), pin, 300);
+    controller.refresh();
+
+    expect((vars.end as () => number)()).toBe(300);
+    expect(pin.style.position).toBe('sticky');
+  });
+
+  // 300 less the 0.05px tie tolerance, with no author margin, earlier dwell or freezeStart.
+  it('the scroll-margin sync resets a pin holding a target', () => {
+    const controller = setupPinned();
+    const pin = query('.pin');
+
+    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=800' });
+    controller.createStickyPin({ trigger: pin });
+    controller.refresh();
+    shiftWhileSticky(query('#child'), pin, 300);
+    controller.refresh();
+
+    expect(query('#child').style.scrollMarginTop).toContain('(299.95px - var(');
+    expect(pin.style.position).toBe('sticky');
+  });
+});
+
 // createResolvedTrigger is a thin wrapper that calls resolveScrollPosition once for trigger/start
 // and once for endTrigger/end, registering no layer, so it sits outside refresh()'s scope. The
 // pass-through shape is checked here alongside the parts that are its own rather than

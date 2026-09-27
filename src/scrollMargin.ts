@@ -286,6 +286,9 @@ export const createScrollMarginSync = (
       }
 
       const targets = Array.from(rootElement.querySelectorAll<HTMLElement>(targetSelector));
+      // Measured before anything here writes to a target. Nothing below changes layout, so this
+      // only keeps the caller's sticky resets ahead of every write of this module's own.
+      const naturalTops = measureNaturalTops(targets);
 
       // Pass 1: snapshot each target on first sight, then put every previously-written one back to
       // its pre-module inline value, so pass 2 can read the author's own scroll-margin-top fresh.
@@ -299,7 +302,6 @@ export const createScrollMarginSync = (
         else if (written.has(target)) target.style.scrollMarginTop = existing.inline;
       });
 
-      const naturalTops = measureNaturalTops(targets);
       const consumed = ramps
         .map((_, index) => `var(--${instanceId}-c${index}, 0px)`)
         .join(' + ');

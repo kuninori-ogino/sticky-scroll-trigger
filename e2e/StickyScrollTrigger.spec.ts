@@ -254,6 +254,25 @@ test('resolveScrollPosition counts a Scene layer\'s dwell by which comes first, 
   expect(await topAtResolved('.above')).toBeCloseTo(0, 0);
 });
 
+// A stuck pin shifts documentTop for itself and everything inside it, the same way a stuck Scene
+// wrapper does, so every measurement resets pins as well as wrappers first.
+test('measurements taken while a pin is stuck match the ones taken at scroll 0', async ({ page }) => {
+  await page.goto('/fixtures/pinStuckMeasure.html');
+
+  type Measured = { pinIn: number; pinOut: number; sceneEnd: number; pinInTopAtScroll: number };
+
+  type FixtureWindow = Window & { __measureAt: (scroll: number) => Measured };
+
+  const measureAt = (y: number) =>
+    page.evaluate((scroll) => (window as unknown as FixtureWindow).__measureAt(scroll), y);
+  const atTop = await measureAt(0);
+  const whileStuck = await measureAt(2500);
+
+  // sanity check: #pinIn really is stuck at the viewport's top there
+  expect(whileStuck.pinInTopAtScroll).toBeCloseTo(0, 0);
+  expect({ ...whileStuck, pinInTopAtScroll: 0 }).toEqual({ ...atTop, pinInTopAtScroll: 0 });
+});
+
 // measureViewportHeight follows the same technique GSAP itself uses to dodge resizes caused
 // by a mobile browser's address bar showing/hiding:
 // "append a height:100vh div to body and read its offsetHeight."

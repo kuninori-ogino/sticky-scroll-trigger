@@ -361,6 +361,32 @@ export default class StickyScrollTrigger {
     };
   }
 
+  // Snapshots and resets every wrapped pin's own sticky state, returning a function that puts it
+  // back. A stuck pin shifts documentTop for its trigger and everything inside it, as a stuck
+  // wrapper does (see #resetSceneCoverStickyState).
+  #resetPinStickyState(): () => void {
+    const snapshots = this.#pinLayers
+      .filter((layer) => layer.inner)
+      .map(({ trigger }) => ({ trigger, position: captureInlinePosition(trigger) }));
+
+    snapshots.forEach(({ trigger }) => resetStickyPosition(trigger));
+
+    return () => {
+      snapshots.forEach(({ trigger, position }) => restoreInlinePosition(trigger, position));
+    };
+  }
+
+  // Both resets above, for a measurement that can land anywhere on the page.
+  #resetStickyState(): () => void {
+    const restoreSceneCoverStickyState = this.#resetSceneCoverStickyState();
+    const restorePinStickyState = this.#resetPinStickyState();
+
+    return () => {
+      restorePinStickyState();
+      restoreSceneCoverStickyState();
+    };
+  }
+
   // Pass 1 of the pin refresh: snapshots and strips every pin's own sticky top and spacer height,
   // returning a function that puts them back. #refreshPinLayers then measures a natural position
   // rather than the previous refresh's result.
@@ -504,6 +530,9 @@ export default class StickyScrollTrigger {
     if (!active.length) return;
 
     const restoreStickyState = this.#resetSceneCoverStickyState();
+    // Put back whether or not planning throws. #refreshPins rewrites pins after a success anyway,
+    // but a throw skips it and would leave every pin unstuck.
+    const restorePinStickyState = this.#resetPinStickyState();
 
     try {
       this.#planLayerPositions(viewportHeight, active);
@@ -514,6 +543,8 @@ export default class StickyScrollTrigger {
       restoreStickyState();
 
       throw error;
+    } finally {
+      restorePinStickyState();
     }
   }
 
@@ -674,10 +705,10 @@ export default class StickyScrollTrigger {
       (targets) => {
         if (!targets.length) return [];
 
-        const restoreSceneCoverStickyState = this.#resetSceneCoverStickyState();
+        const restoreStickyState = this.#resetStickyState();
         const tops = targets.map((target) => documentTop(target));
 
-        restoreSceneCoverStickyState();
+        restoreStickyState();
 
         return tops;
       },
@@ -1080,10 +1111,10 @@ export default class StickyScrollTrigger {
     viewportHeight: number,
   ): number {
     const anchorOffset = resolveAnchorTop(clause, measureUsedHeight(element), viewportHeight);
-    const restoreSceneCoverStickyState = this.#resetSceneCoverStickyState();
+    const restoreStickyState = this.#resetStickyState();
     const reachedAt = documentTop(element) - anchorOffset;
 
-    restoreSceneCoverStickyState();
+    restoreStickyState();
 
     return this.#addDwellBeforeReach(element, reachedAt);
   }
@@ -1119,7 +1150,13 @@ export default class StickyScrollTrigger {
 
     if (owner) return owner.resolveScrollPosition(element, 'top top');
 
-    return documentTop(element);
+    // A pin can sit outside its own container, and element may be one or sit inside one.
+    const restores = instances.map((instance) => instance.#resetPinStickyState());
+    const top = documentTop(element);
+
+    restores.forEach((restore) => restore());
+
+    return top;
   }
 
   // A thin wrapper that calls resolveScrollPosition for trigger/start and endTrigger/end together,
