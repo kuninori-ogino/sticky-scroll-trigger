@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { dwellBeforeReach, planLayers } from './freezeWindow';
+import { dwellBeforeReach, dwellConsumedAt, planLayers } from './freezeWindow';
 import type { LayerMeasurement, LayerPlan, PlanDeps } from './freezeWindow';
 
 // planLayers never touches the DOM,
@@ -497,6 +497,19 @@ describe('dwellBeforeReach', () => {
 
   it('counts a later freeze the earlier dwell pushes the element past, whatever the input order', () => {
     expect(dwellBeforeReach(300, [freeze(750, 950), freeze(200, 700)])).toBe(700);
+  });
+});
+
+describe('dwellConsumedAt', () => {
+  const freeze = (freezeStart: number, freezeEnd: number) => ({ freezeStart, freezeEnd });
+
+  it('counts nothing before a window, the part gone by inside it, and all of it after', () => {
+    const windows = [freeze(200, 700), freeze(900, 1000)];
+
+    expect(dwellConsumedAt(100, windows)).toBe(0);
+    expect(dwellConsumedAt(450, windows)).toBe(250);
+    expect(dwellConsumedAt(950, windows)).toBe(550);
+    expect(dwellConsumedAt(2000, windows)).toBe(600);
   });
 });
 

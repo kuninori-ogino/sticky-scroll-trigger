@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinAcrossContainer fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      .pin {
+        height: 100px;
+      }
+      .lead {
+        height: 300px;
+      }
+      .scene {
+        height: 400px;
+      }
+      .end {
+        height: 100px;
+      }
+      .gap {
+        height: 300px;
+      }
+      .tail {
+        height: 200vh;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- #outer sits before the container and releases at #innerEnd, inside it; #inner sits inside
+         the container and releases at #outerEnd, after it. The scene's dwell lies between each pin
+         and its endTrigger. -->
+    <div id="outer" class="pin"></div>
+    <div class="root">
+      <div id="inner" class="pin"></div>
+      <!-- Held past the scene's whole freeze, one for a dwell distance and one up to an absolute
+           scroll position. -->
+      <div id="dwell" class="pin"></div>
+      <div id="absolute" class="pin"></div>
+      <div class="lead"></div>
+      <section class="scene"></section>
+      <div id="innerEnd" class="end"></div>
+    </div>
+    <div class="gap"></div>
+    <div id="outerEnd" class="end"></div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      sticky.createStickyTrigger({ trigger: '.scene', start: 'top top', end: '+=500' });
+      sticky.createStickyPin({ trigger: '#outer', endTrigger: '#innerEnd', end: 'top top' });
+      sticky.createStickyPin({ trigger: '#inner', endTrigger: '#outerEnd', end: 'top top' });
+      sticky.createStickyPin({ trigger: '#dwell', end: '+=1100' });
+      sticky.createStickyPin({ trigger: '#absolute', end: 1500 });
+      sticky.refresh();
+
+      // The scroll at which endId's top really reaches the viewport's top, found by scrolling
+      // rather than derived, then where the pin sits there and a pixel later.
+      // end names an element, or gives a dwell distance counted from where the pin engages, or an
+      // absolute scroll position.
+      window.__topsAroundRelease = (pinId, end) => {
+        const pin = document.getElementById(pinId);
+        const reaches = (element) => {
+          const max = document.documentElement.scrollHeight - window.innerHeight;
+          let scroll = 0;
+
+          while (scroll <= max) {
+            window.scrollTo(0, scroll);
+
+            if (element.getBoundingClientRect().top <= 0) break;
+
+            scroll += 1;
+          }
+
+          return scroll;
+        };
+        let release;
+
+        if (typeof end === 'string') release = reaches(document.getElementById(end));
+        else if ('dwell' in end) release = reaches(pin) + end.dwell;
+        else release = end.at;
+
+        const topAt = (y) => {
+          window.scrollTo(0, y);
+
+          return pin.getBoundingClientRect().top;
+        };
+
+        return { release, atRelease: topAt(release), after: topAt(release + 1) };
+      };
+    </script>
+  </body>
+</html>

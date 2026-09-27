@@ -752,6 +752,42 @@ test('a pinned trigger with vertical margins rests at exactly the top its start 
   expect(heldTop).toBeCloseTo(0, 0);
 });
 
+// A Scene layer's dwell delays whichever of a pin and its endTrigger sits inside the container, so
+// with one on each side the pin still has to release when the endTrigger really arrives. A dwell
+// end is scroll distance and an absolute one a scroll position, as in GSAP, even when a freeze
+// falls before either.
+test('createStickyPin releases on time with trigger and endTrigger across the container edge', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/pinAcrossContainer.html');
+
+  type End = string | { dwell: number } | { at: number };
+  type FixtureWindow = Window & {
+    __topsAroundRelease: (pinId: string, end: End) => {
+      release: number;
+      atRelease: number;
+      after: number;
+    };
+  };
+
+  const cases: [string, End][] = [
+    ['outer', 'innerEnd'],
+    ['inner', 'outerEnd'],
+    ['dwell', { dwell: 1100 }],
+    ['absolute', { at: 1500 }],
+  ];
+
+  for (const [pinId, end] of cases) {
+    const tops = await page.evaluate(
+      ([pin, until]) => (window as unknown as FixtureWindow).__topsAroundRelease(pin, until),
+      [pinId, end] as const,
+    );
+
+    expect(tops.atRelease, `#${pinId} at ${tops.release}`).toBeCloseTo(0, 0);
+    expect(tops.after, `#${pinId} a pixel later`).toBeCloseTo(-1, 0);
+  }
+});
+
 // Each pin holds through the scroll its end names and moves a pixel later, whatever its margins,
 // negative and percentage ones included.
 test('createStickyPin releases at the scroll its end names, whatever trigger\'s margins', async ({

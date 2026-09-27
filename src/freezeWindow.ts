@@ -291,6 +291,17 @@ export const dwellBeforeReach = (
   return counted;
 };
 
+// How much Scene layer dwell has gone by at a given scroll position: the distance the shared
+// container has stood still for, and so how far anything inside it lags behind the document.
+export const dwellConsumedAt = (
+  scroll: number,
+  windows: readonly { freezeStart: number; freezeEnd: number }[],
+): number => windows.reduce(
+  (consumed, { freezeStart, freezeEnd }) =>
+    consumed + Math.min(Math.max(scroll - freezeStart, 0), freezeEnd - freezeStart),
+  0,
+);
+
 // Finalizes every layer's freeze window and style values, from measurements laid out in DOM order.
 // Most end modes settle in one pass. Two kinds of clause end need more:
 //

@@ -65,7 +65,7 @@ Nested sticky introduces visual lag: during a Scene layer's dwell, screen positi
 
 GSAP string `start`/`end` values (for example `'top 80%'`) do not account for this lag, so plain ScrollTriggers inside the shared container can be off by large distances. `resolveScrollPosition` returns absolute px values with lag correction applied.
 
-Its target element isn't guaranteed to share stuck ancestors with anything else, for the same reason [`createStickyPin`](#why-createstickypin-is-unaffected-by-nested-sticky-lag)'s trigger/endTrigger need the same protection. Once `refresh()` has applied a Scene/Cover wrapper's `position:sticky` CSS, the browser keeps engaging and disengaging it natively as scroll changes, with no further `refresh()` involved. So `resolveScrollPosition` hits an actively-stuck ancestor whenever it runs while scroll sits inside an earlier Scene layer's freeze window, including its documented use as a function-valued `start`/`end` that GSAP re-evaluates during its own refresh. It therefore resets every Scene/Cover wrapper's sticky state before measuring `documentTop` and restores it afterwards, the same way `#refreshPins` does.
+Its target element isn't guaranteed to share stuck ancestors with anything else, for the same reason [`createStickyPin`](#how-createstickypin-accounts-for-nested-sticky-lag)'s trigger/endTrigger need the same protection. Once `refresh()` has applied a Scene/Cover wrapper's `position:sticky` CSS, the browser keeps engaging and disengaging it natively as scroll changes, with no further `refresh()` involved. So `resolveScrollPosition` hits an actively-stuck ancestor whenever it runs while scroll sits inside an earlier Scene layer's freeze window, including its documented use as a function-valued `start`/`end` that GSAP re-evaluates during its own refresh. It therefore resets every Scene/Cover wrapper's sticky state before measuring `documentTop` and restores it afterwards, the same way `#refreshPins` does.
 
 ## Why scroll-margin-top carries the correction
 
@@ -107,13 +107,13 @@ With default `pinType: 'fixed'`, GSAP extrapolates pin position from scroll stat
 
 `pinType: 'transform'` avoids the jump but shifts pin tracking to JS updates on scroll, which can visibly lag during fast scrolling. In practice, no `pin: true` setup provides both accurate starts and smooth pinning inside nested sticky.
 
-If you just want to pin part of the shared container without going through GSAP, use `createStickyPin` (in `README.md`). It works purely off `position:sticky`, following the same rules regardless of the nested-sticky ancestor structure, so it needs no correction and doesn't run into this `pin: true` issue either.
+If you just want to pin part of the shared container without going through GSAP, use `createStickyPin` (in `README.md`). It works purely off `position:sticky`, so it doesn't run into this `pin: true` issue; how it allows for the lag is below.
 
-## Why `createStickyPin` is unaffected by nested-sticky lag
+## How `createStickyPin` accounts for nested-sticky lag
 
-`resolveScrollPosition` (in `README.md`) and `createStickyTrigger` need lag correction because they hand absolute scroll positions to GSAP.
+A pin hands GSAP no scroll positions, but its release still depends on the lag: `trigger` and `endTrigger` can sit on opposite sides of the shared container, and only the one inside lags. `#refreshPinLayers` finds the scroll at which the pin has to let go the way `resolveScrollPosition` does, then sizes `inner` in the container's own coordinates. A pin inside the container stands still with it through every freeze, so the dwell gone by at the release scroll comes off the range. With both elements on the same side, the two corrections cancel out.
 
-`createStickyPin` doesn't: it uses only the static `documentTop` distance between `trigger` and `endTrigger` to size its spacer. Before taking that measurement, `#refreshPins` snapshots and resets every Scene/Cover wrapper's sticky state, the same way pass 1 of [Two-pass position measurement](#two-pass-position-measurement) does for Scene/Cover layers' own positions, so neither `documentTop` call is ever taken while an ancestor is actively stuck. That holds regardless of whether `trigger` and `endTrigger` share ancestors or sit outside the shared container entirely (see `createStickyPin`'s options in `README.md`). There's no stuck-ancestor shift left to correct for.
+Before measuring, `#refreshPins` snapshots and resets every Scene/Cover wrapper's sticky state, the same way pass 1 of [Two-pass position measurement](#two-pass-position-measurement) does for Scene/Cover layers' own positions, so no `documentTop` call is taken while an ancestor is actively stuck.
 
 ### Why `trigger` needs to be wrapped
 

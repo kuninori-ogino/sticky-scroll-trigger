@@ -290,7 +290,7 @@ Clauses resolve exactly as they do elsewhere, including the one-token forms that
 
 Internally, the element wrapping `trigger` renders beyond its own section's bounds, into the visual area of following elements. Make sure the ancestor section containing `trigger` isn't hidden behind a later section in DOM order (e.g. via `position: relative; z-index: ...`).
 
-See the repository's `ARCHITECTURE.md` ("Why `createStickyPin` is unaffected by nested-sticky lag") for why the lag never applies here, and why `trigger` needs two nested wrapper divs.
+See the repository's `ARCHITECTURE.md` ("How `createStickyPin` accounts for nested-sticky lag") for how a pin's release allows for the dwell of Scene layers between `trigger` and `endTrigger`, and why `trigger` needs two nested wrapper divs.
 
 ### `createResolvedTrigger(options)`
 

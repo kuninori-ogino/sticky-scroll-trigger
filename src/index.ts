@@ -23,7 +23,7 @@ import {
 } from './dom';
 import { createScrollMarginSync } from './scrollMargin';
 import { buildStructure, isDomOrderStale, unbuildStructure } from './structure';
-import { dwellBeforeReach, planLayers } from './freezeWindow';
+import { dwellBeforeReach, dwellConsumedAt, planLayers } from './freezeWindow';
 import type { LayerMeasurement } from './freezeWindow';
 import { measureLayer } from './measure';
 import {
@@ -74,14 +74,14 @@ const topToStartClause = (top: number | (() => number)): PositionInput => {
 };
 
 // Converts createStickyPin's resolved end into the absolute scroll position where the pin lets go.
-// engageTop is where position:sticky takes hold, trigger's own top less the sticky top. That is
-// what a dwell counts from, the same as a Scene layer's freezeStart (freezeWindow.ts's EndSpec).
-// Each form is read the way GSAP reads it:
-// - a dwell ('+=400', '+=100%', the latter against the viewport): that distance past engageTop,
+// engageScroll is where position:sticky takes hold, which a dwell counts from, the same as a Scene
+// layer's freezeStart (freezeWindow.ts's EndSpec). toScroll turns an element's natural reach
+// point into the scroll that really gets it there. Each form is read the way GSAP reads it:
+// - a dwell ('+=400', '+=100%', the latter against the viewport): that distance past engageScroll,
 //   with endTrigger ignored. Only a value that both starts with '+=' and holds no space is one, so
 //   an ordinary clause carrying an offset ('bottom top+=40') resolves against endTrigger below, as
 //   does the spaced '+=' form once prefixSpacedRelativeEnd has given it the start's element token.
-// - an absolute scroll position (a bare number): that position, independent of engageTop and
+// - an absolute scroll position (a bare number): that position, independent of engageScroll and
 //   endTrigger alike. Same idea as an absolute start for Scene/Cover layers (see measure.ts's
 //   resolveStartSpec).
 // - a position clause: where endTrigger's own side reaches the viewport's.
@@ -89,22 +89,26 @@ const topToStartClause = (top: number | (() => number)): PositionInput => {
 // first: the pin's own spacer height is self-referential the same way a Scene layer's dwell
 // padding is. The exclusion makes that rejection a precondition the compiler checks. A 'max'
 // branch here would instead be dead code that starts running if the caller ever moves its throw.
-const resolvePinReleaseTop = (
+const resolvePinReleaseScroll = (
   endTrigger: HTMLElement,
   classifiedEnd: Exclude<ClassifiedPosition, { kind: 'max' }>,
-  engageTop: number,
+  engageScroll: number,
   viewportHeight: number,
+  toScroll: (element: HTMLElement, reachedAt: number) => number,
 ): number => {
   switch (classifiedEnd.kind) {
     case 'dwell':
-      return engageTop + resolveDwell(classifiedEnd.value, viewportHeight);
+      return engageScroll + resolveDwell(classifiedEnd.value, viewportHeight);
 
     case 'absolute':
       return classifiedEnd.value;
 
     case 'clause':
-      return documentTop(endTrigger)
-        - resolveAnchorTop(classifiedEnd.value, measureUsedHeight(endTrigger), viewportHeight);
+      return toScroll(
+        endTrigger,
+        documentTop(endTrigger)
+        - resolveAnchorTop(classifiedEnd.value, measureUsedHeight(endTrigger), viewportHeight),
+      );
   }
 };
 
@@ -417,10 +421,11 @@ export default class StickyScrollTrigger {
   // Pass 2 of the pin refresh, run once #resetPinState has stripped the previous values.
   // Recomputes pin layers' sticky top and spacer height. Pinning here is plain position:sticky, so
   // unlike Scene/Cover layers this never hands GSAP an absolute scroll position. The spacer height
-  // spans from the natural position where pinning begins to the release position
-  // resolvePinReleaseTop returns, plus the sticky top, trigger's own height and its bottom margin
-  // (a sticky element unpins once its margin box catches up to the bottom of its containing
-  // block).
+  // spans from trigger's natural top to the release scroll resolvePinReleaseScroll returns, plus
+  // the sticky top, trigger's own height and its bottom margin (a sticky element unpins once its
+  // margin box catches up to the bottom of its containing block). A pin inside the shared
+  // container stands still with it through every freeze, so its range, measured in the
+  // container's own coordinates, leaves out the dwell gone by at release.
   #refreshPinLayers(viewportHeight: number) {
     this.#pinLayers.forEach((layer) => {
       if (!layer.inner) return;
@@ -433,8 +438,8 @@ export default class StickyScrollTrigger {
 
       // The same self-reference measure.ts's resolveEndSpec rejects for Scene layers: the pin's
       // own spacer (layer.inner) adds to the document's max scroll position. Rejecting it here
-      // is what lets resolvePinReleaseTop take an end that excludes 'max'. Its place ahead of the
-      // absolute-start check below decides which error a pin with both bad values reports.
+      // is what lets resolvePinReleaseScroll take an end that excludes 'max'. Its place ahead of
+      // the absolute-start check below decides which error a pin with both bad values reports.
       if (classifiedEnd.kind === 'max') {
         throw new Error(
           `StickyScrollTrigger: createStickyPin's end "${resolvedEnd}" uses GSAP's 'max' keyword, `
@@ -469,13 +474,20 @@ export default class StickyScrollTrigger {
       // 'max' and a dwell reach resolveAnchorTop here for the reason measure.ts's resolveStartSpec
       // gives.
       const topPx = resolveAnchorTop(classifiedStart.value, triggerHeight, viewportHeight);
-      const releaseTop = resolvePinReleaseTop(
+      const toScroll = (element: HTMLElement, reachedAt: number) =>
+        this.#addDwellBeforeReach(element, reachedAt);
+      const releaseScroll = resolvePinReleaseScroll(
         layer.endTrigger,
         classifiedEnd,
-        triggerTop - topPx,
+        toScroll(layer.trigger, triggerTop - topPx),
         viewportHeight,
+        toScroll,
       );
-      const height = releaseTop - triggerTop + topPx + triggerHeight + triggerMarginBottom;
+      const frozenAtRelease = this.#rootElement.contains(layer.trigger)
+        ? dwellConsumedAt(releaseScroll, this.#sceneLayers())
+        : 0;
+      const height = releaseScroll - frozenAtRelease - triggerTop + topPx + triggerHeight
+        + triggerMarginBottom;
 
       applyStickyPosition(layer.trigger, topPx);
       layer.inner.style.height = `${Math.max(0, height)}px`;
@@ -657,9 +669,7 @@ export default class StickyScrollTrigger {
   // resolveScrollPosition measures its element, with every wrapper's sticky state reset.
   #syncScrollMargins(): void {
     this.#scrollMarginSync.sync(
-      this.#layers
-        .filter((layer): layer is SceneLayer => layer.kind === 'scene')
-        .map(({ freezeStart, freezeEnd }) => ({ freezeStart, freezeEnd })),
+      this.#sceneLayers().map(({ freezeStart, freezeEnd }) => ({ freezeStart, freezeEnd })),
       this.#outermostContainer,
       (targets) => {
         if (!targets.length) return [];
@@ -1075,13 +1085,20 @@ export default class StickyScrollTrigger {
 
     restoreSceneCoverStickyState();
 
-    // Only elements inside the shared container lag behind the nesting. One after it already has
-    // every layer's dwell padding in its documentTop, so adding the dwell would count it twice.
+    return this.#addDwellBeforeReach(element, reachedAt);
+  }
+
+  // The scroll that really brings element to reachedAt, its natural reach point. Only elements
+  // inside the shared container lag behind the nesting. One after it already has every layer's
+  // dwell padding in its documentTop, so adding the dwell would count it twice.
+  #addDwellBeforeReach(element: HTMLElement, reachedAt: number): number {
     if (!this.#rootElement.contains(element)) return reachedAt;
 
-    const sceneLayers = this.#layers.filter((layer): layer is SceneLayer => layer.kind === 'scene');
+    return reachedAt + dwellBeforeReach(reachedAt, this.#sceneLayers());
+  }
 
-    return reachedAt + dwellBeforeReach(reachedAt, sceneLayers);
+  #sceneLayers(): SceneLayer[] {
+    return this.#layers.filter((layer): layer is SceneLayer => layer.kind === 'scene');
   }
 
   // Returns the absolute scroll position (px) at which element's own top edge reaches the
@@ -1133,7 +1150,7 @@ export default class StickyScrollTrigger {
         const classifiedEnd = classifyPosition(resolvedEnd);
 
         // A dwell counts its distance from the resolved start with endTrigger ignored, the way
-        // GSAP and every other end path here read it (resolvePinReleaseTop, measure.ts's
+        // GSAP and every other end path here read it (resolvePinReleaseScroll, measure.ts's
         // resolveEndSpec).
         // resolveScrollPosition has no dwell branch, so without this a '+=' end resolves against
         // endTrigger, and a '%' one scales against its height rather than the viewport.
