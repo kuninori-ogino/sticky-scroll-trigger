@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>freezeOrder fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      section {
+        box-sizing: border-box;
+      }
+      .tail {
+        height: 400vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="before"></div>
+    <div class="root"></div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const block = (height, id = '', inner = '') =>
+        `<section${id ? ` id="${id}"` : ''} style="height:${height}px">${inner}</section>`;
+      const tall = (inner) =>
+        `<section id="tall" style="height:2000px;padding-top:200px">${inner}</section>`;
+
+      // Each layout lists its scenes as [selector, start, end, endTrigger]; end null takes the
+      // default, and endTrigger is optional.
+      const layouts = {
+        // .tall, first in DOM, freezes at its bottom edge long after #inner, inside it.
+        nested: {
+          html: block(500) + tall(block(300, 'inner')),
+          scenes: [['#tall', 'bottom bottom', '+=500'], ['#inner', 'top top', '+=500']],
+        },
+        // The same, with content before the shared container.
+        offsetRoot: {
+          before: 300,
+          html: block(500) + tall(block(300, 'inner')),
+          scenes: [['#tall', 'bottom bottom', '+=500'], ['#inner', 'top top', '+=500']],
+        },
+        // The middle of three layers freezes first, the outermost second, the innermost last.
+        threeLayers: {
+          html: block(500)
+            + `<section id="tall" style="height:3000px;padding-top:200px">${block(300, 'first')}${block(500)}${block(300, 'second')}</section>`,
+          scenes: [
+            ['#tall', 'bottom bottom', '+=500'],
+            ['#first', 'top top', '+=500'],
+            ['#second', 'top top', '+=500'],
+          ],
+        },
+        // #late freezes at 'top bottom' before #early, above it, reaches the top.
+        overlap: {
+          html: block(1000) + block(200, 'early') + block(100) + block(300, 'late'),
+          scenes: [['#early', 'top top', '+=500'], ['#late', 'top bottom', '+=500']],
+        },
+        // #early's default end is its own bottom edge, which #late's earlier freeze holds back as
+        // far as it holds back #early's start.
+        overlapClauseEnd: {
+          html: block(1000) + block(200, 'early') + block(100) + block(300, 'late'),
+          scenes: [['#early', 'top top', null], ['#late', 'top bottom', '+=500']],
+        },
+        // #early ends where #gap reaches the top, which #late's earlier freeze holds back as far as
+        // it holds back #early's start.
+        overlapEndTrigger: {
+          html: block(1000) + block(200, 'early') + block(100, 'gap') + block(300, 'late'),
+          scenes: [['#early', 'top top', 'top top', '#gap'], ['#late', 'top bottom', '+=500']],
+        },
+        // #inner's default end is its own bottom edge, which .tall's later freeze doesn't delay.
+        nestedClauseEnd: {
+          html: block(500) + tall(block(300, 'inner')),
+          scenes: [['#tall', 'bottom bottom', '+=500'], ['#inner', 'top top', null]],
+        },
+        // #deep, a marker inside #outer, freezes first at 'top bottom'. Both take their default end.
+        nestedDefaultEnds: {
+          html: block(1000)
+            + `<section id="outer" style="height:800px;padding-top:200px">${block(0, 'deep')}</section>`,
+          scenes: [['#outer', 'top top', null], ['#deep', 'top bottom', null]],
+        },
+      };
+      const layout = layouts[new URLSearchParams(location.search).get('layout')];
+
+      document.querySelector('.before').style.height = `${layout.before ?? 0}px`;
+
+      const root = document.querySelector('.root');
+
+      root.innerHTML = layout.html;
+
+      const sticky = new StickyScrollTrigger(root);
+      const scenes = layout.scenes.map(([selector, start, end, endTrigger]) => ({
+        selector,
+        start,
+        vars: sticky.createStickyTrigger({
+          trigger: selector,
+          start,
+          ...(end ? { end } : {}),
+          ...(endTrigger ? { endTrigger } : {}),
+        }),
+      }));
+
+      sticky.refresh();
+
+      // The reported windows, where each trigger sits in the viewport as its window opens, and
+      // the scroll ranges over which the page actually stands still.
+      window.__freezeOrder = () => {
+        const edgeAt = ({ selector, start }, scroll) => {
+          window.scrollTo(0, scroll);
+
+          const rect = document.querySelector(selector).getBoundingClientRect();
+
+          return start.startsWith('bottom') ? rect.bottom : rect.top;
+        };
+        const reported = scenes.map((scene) => ({
+          selector: scene.selector,
+          window: [scene.vars.start(), scene.vars.end()],
+          edge: edgeAt(scene, scene.vars.start()),
+        }));
+        const probe = root.firstElementChild;
+        const max = document.documentElement.scrollHeight - window.innerHeight;
+        const stillRuns = [];
+        let previous = null;
+        let runStart = null;
+
+        for (let scroll = 0; scroll <= max; scroll += 1) {
+          window.scrollTo(0, scroll);
+
+          const top = probe.getBoundingClientRect().top;
+
+          if (previous !== null && top === previous) runStart ??= scroll - 1;
+          else if (runStart !== null) {
+            stillRuns.push([runStart, scroll - 1]);
+            runStart = null;
+          }
+
+          previous = top;
+        }
+
+        return { reported, stillRuns, viewportHeight: window.innerHeight };
+      };
+    </script>
+  </body>
+</html>

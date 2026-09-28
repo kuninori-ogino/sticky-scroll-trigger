@@ -19,7 +19,8 @@ export const isDomOrderStale = (layers: readonly Layer[]): boolean => {
 };
 
 /**
- * Sorts layers into DOM order (earlier = deeper = freezes first) and builds the nesting.
+ * Sorts layers into DOM order (earlier = deeper) and builds the nesting. Depth doesn't decide
+ * when a Scene layer freezes; freezeWindow.ts's planLayers sets each sticky top for that.
  * Cover layers wrap "the start up to trigger" inside the shared container;
  * Scene layers wrap the entire shared container from the outside.
  * @returns The outermost container of the Scene layer nesting (null if there are no Scene layers)

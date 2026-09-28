@@ -20,7 +20,8 @@ import { resolveAnchorTop, resolveElementAnchor } from './position';
 // The result of resolving start during refresh()'s first pass.
 export type StartSpec
   // The usual case: a position clause resolved relative to trigger's own natural position.
-  = | { mode: 'clause'; anchorOffset: number }
+  // elementAnchor is how far below trigger's top edge the clause's element side points.
+  = | { mode: 'clause'; anchorOffset: number; elementAnchor: number }
     // A bare number, which GSAP reads as an absolute scroll position unrelated to trigger's own
     // natural position. See position.ts's isAbsoluteFormat.
     | { mode: 'absolute'; value: number };
@@ -52,6 +53,8 @@ export interface LayerMeasurement {
   start: StartSpec;
   triggerTop: number;
   triggerHeight: number;
+  // Indices of the layers whose trigger encloses (or is) trigger.
+  triggerEnclosedBy: readonly number[];
   wrapperTop: number;
   coverTop: number; // Only meaningful for cover layers (0 for Scene layers).
   end: EndSpec;
@@ -88,78 +91,142 @@ export interface PlanDeps {
 // null before the very first pass.
 interface PreviousPass {
   paddings: readonly (number | null)[];
+  freezeStarts: readonly (number | null)[];
 }
 
 // Total dwell before the point an endTrigger's end clause names (anchorPosition, which
 // reaches the viewport's anchor at reachedAt, both unpadded), counted the way GSAP's pins would
 // delay it. A Scene layer whose trigger encloses the endTrigger counts only if it freezes first,
 // since a pin holds its contents only while engaged; any other counts if its trigger ends above
-// that point, since its spacer pushes the point down. `measurements` order doesn't matter. A layer
-// already handled this pass contributes its fresh value from `paddingHeightsSoFar`; one not yet
-// reached contributes the previous pass's (null on the very first). Reading a fresh value where a
-// stale one belongs, or the reverse, double-counts or drops a layer relative to the sequential
-// `precedingGaps` below, which makes the iteration oscillate instead of converge.
+// that point, since its spacer pushes the point down. `measurements` order doesn't matter.
+// windows holds every Scene window known so far (see runPass's knownWindows); an absolute start's
+// unpadded position is its value less the dwell of the windows that end before it.
 const gapsBeforeEndAnchor = (
   measurements: readonly LayerMeasurement[],
-  paddingHeightsSoFar: readonly (number | null | undefined)[],
-  previous: PreviousPass | null,
+  windows: readonly KnownWindow[],
   anchorPosition: number,
   reachedAt: number,
   enclosedBy: readonly number[],
   ownIndex: number,
+): number => windows.reduce((total, { index, freezeStart, freezeEnd }) => {
+  if (index === ownIndex) return total;
+
+  const measurement = measurements[index];
+  const unpaddedFreezeStart = measurement.start.mode === 'absolute'
+    ? freezeStart - windows.reduce((earlier, other) => (
+      other.index !== index && other.freezeEnd <= freezeStart + TIE_TOLERANCE_PX
+        ? earlier + other.freezeEnd - other.freezeStart
+        : earlier
+    ), 0)
+    : measurement.triggerTop - measurement.start.anchorOffset;
+  const counts = enclosedBy.includes(index)
+    ? unpaddedFreezeStart < reachedAt - TIE_TOLERANCE_PX
+    : measurement.triggerTop + measurement.triggerHeight <= anchorPosition + TIE_TOLERANCE_PX;
+
+  return counts ? total + freezeEnd - freezeStart : total;
+}, 0);
+
+// A Scene layer's window as runPass knows it: this pass's if already handled, else the previous
+// pass's (none on the very first).
+interface KnownWindow {
+  index: number;
+  freezeStart: number;
+  freezeEnd: number;
+}
+
+// Where a clause start freezes: its unpadded reach point plus the dwell of every Scene layer that
+// freezes first. Everything inside the container lags by the same dwell, so clause starts freeze
+// in reach-point order (DOM order breaks a tie) and an absolute start slots in by its value. A
+// freeze beginning just as trigger arrives counts, since the layer waits it out. Ordering by reach
+// point rather than by the previous pass's windows keeps two layers from swapping places on
+// alternate passes.
+const clauseFreezeStart = (
+  measurements: readonly LayerMeasurement[],
+  index: number,
+  paddingOf: (k: number) => number,
 ): number => {
-  let total = 0;
-  // Dwell before each layer in DOM order, to put an absolute start in unpadded terms.
-  let precedingGaps = 0;
+  const reachOf = (k: number) => {
+    const { start, triggerTop } = measurements[k];
 
-  measurements.forEach((measurement, i) => {
-    const paddingHeight = paddingHeightsSoFar[i] !== undefined
-      ? paddingHeightsSoFar[i]
-      : (previous ? previous.paddings[i] : null);
-    const triggerBottom = measurement.triggerTop + measurement.triggerHeight;
-    const unpaddedFreezeStart = measurement.start.mode === 'absolute'
-      ? measurement.start.value - precedingGaps
-      : measurement.triggerTop - measurement.start.anchorOffset;
-    const counts = enclosedBy.includes(i)
-      ? unpaddedFreezeStart < reachedAt - TIE_TOLERANCE_PX
-      : triggerBottom <= anchorPosition + TIE_TOLERANCE_PX;
+    return start.mode === 'clause' ? triggerTop - start.anchorOffset : null;
+  };
 
-    if (paddingHeight !== null && paddingHeight !== undefined) {
-      if (i !== ownIndex && counts) total += paddingHeight;
+  const scenes = measurements.flatMap(({ kind }, k) => (kind === 'scene' ? [k] : []));
+  const clauses = scenes
+    .filter((k) => reachOf(k) !== null)
+    .sort((a, b) => {
+      const gap = reachOf(a)! - reachOf(b)!;
 
-      precedingGaps += paddingHeight;
+      return Math.abs(gap) <= TIE_TOLERANCE_PX ? a - b : gap;
+    });
+  const absolutes = scenes
+    .flatMap((k) => {
+      const { start } = measurements[k];
+
+      return start.mode === 'absolute' ? [{ k, value: start.value }] : [];
+    })
+    .sort((a, b) => a.value - b.value);
+  let dwell = 0;
+  let nextAbsolute = 0;
+
+  for (const k of clauses) {
+    const reachedAt = reachOf(k)!;
+
+    while (
+      nextAbsolute < absolutes.length
+      && absolutes[nextAbsolute].value < reachedAt + dwell + TIE_TOLERANCE_PX
+    ) {
+      dwell += paddingOf(absolutes[nextAbsolute].k);
+      nextAbsolute += 1;
     }
-  });
 
-  return total;
+    if (k === index) return reachedAt + dwell;
+
+    dwell += paddingOf(k);
+  }
+
+  throw new Error(
+    'StickyScrollTrigger: internal error: clauseFreezeStart was given a layer without a clause '
+    + 'start.',
+  );
 };
 
 // One full sequential pass over every Scene layer, in DOM order. A cover layer gets a null plan
-// here and is planned by planCover once the Scene windows settle.
-// precedingGaps accumulates Scene layer dwell only (cover layers never increase document height),
-// and only from layers already processed this pass, which is exactly right for a layer's own
-// natural position because `measurements` is already DOM-ordered. An endTrigger other than trigger
-// itself reaches beyond those layers through gapsBeforeEndAnchor.
+// here and is planned by planCover once the Scene windows settle. Other layers are read as
+// KnownWindow describes. stickyTop is filled in by planLayers once the windows settle.
 const runPass = (
   measurements: readonly LayerMeasurement[],
-  { viewportHeight, structureTop, measureLiveEndTriggerTop }: PlanDeps,
+  { viewportHeight, measureLiveEndTriggerTop }: PlanDeps,
   previous: PreviousPass | null,
 ): (LayerPlan | null)[] => {
-  const paddingHeightsSoFar: (number | null)[] = [];
-  let precedingGaps = 0;
+  const fresh: (LayerPlan | null)[] = [];
+  const knownWindows = (): KnownWindow[] => measurements.flatMap((measurement, k) => {
+    if (measurement.kind !== 'scene') return [];
+
+    const plan = fresh[k];
+
+    if (plan) return [{ index: k, freezeStart: plan.freezeStart, freezeEnd: plan.freezeEnd }];
+
+    const freezeStart = previous?.freezeStarts[k] ?? null;
+    const paddingHeight = previous?.paddings[k] ?? null;
+
+    return freezeStart === null || paddingHeight === null
+      ? []
+      : [{ index: k, freezeStart, freezeEnd: freezeStart + paddingHeight }];
+  });
+  const paddingOf = (k: number) => fresh[k]?.paddingHeight ?? previous?.paddings[k] ?? 0;
 
   return measurements.map((measurement, index) => {
-    const naturalAbsoluteTop = measurement.triggerTop + precedingGaps;
-
-    paddingHeightsSoFar[index] = null;
+    fresh[index] = null;
 
     if (measurement.kind === 'cover') return null;
 
     // An absolute start is a fixed scroll position, so unlike a clause start, trigger's own
-    // natural position and precedingGaps play no part in it.
-    const freezeStart = measurement.start.mode === 'absolute'
-      ? measurement.start.value
-      : naturalAbsoluteTop - measurement.start.anchorOffset;
+    // natural position plays no part in it.
+    const { start } = measurement;
+    const freezeStart = start.mode === 'absolute'
+      ? start.value
+      : clauseFreezeStart(measurements, index, paddingOf);
     let freezeEnd: number;
 
     switch (measurement.end.mode) {
@@ -187,11 +254,33 @@ const runPass = (
           measurement.endTriggerHeight,
           viewportHeight,
         );
+
+        // Nothing inside the container moves during a freeze, so trigger reaches its end anchor the
+        // same scroll distance after its start anchor however much freezes around it. An absolute
+        // start has no anchor on trigger, so its end moves only by the spacers GSAP would put above
+        // trigger: the dwell of every layer ending above it. Layers nested in or around trigger
+        // count in neither case.
+        if (measurement.endTriggerIsSelf) {
+          if (start.mode === 'clause') {
+            freezeEnd = freezeStart + Math.max(0, start.anchorOffset - anchorOffsetEnd);
+            break;
+          }
+
+          const dwellAbove = measurements.reduce((total, other, k) => (
+            k !== index
+            && other.kind === 'scene'
+            && other.triggerTop + other.triggerHeight <= measurement.triggerTop + TIE_TOLERANCE_PX
+              ? total + paddingOf(k)
+              : total
+          ), 0);
+
+          freezeEnd = Math.max(freezeStart, measurement.triggerTop - anchorOffsetEnd + dwellAbove);
+          break;
+        }
+
         let endTop: number;
 
-        if (measurement.endTriggerIsSelf) {
-          endTop = naturalAbsoluteTop;
-        } else if (measurement.end.measureLive) {
+        if (measurement.end.measureLive) {
           endTop = measureLiveEndTriggerTop(index);
         } else {
           // A registered endTrigger is measured unpadded like any other element, rather than
@@ -204,8 +293,7 @@ const runPass = (
             ? 0
             : rawTop + gapsBeforeEndAnchor(
               measurements,
-              paddingHeightsSoFar,
-              previous,
+              knownWindows(),
               rawTop + resolveElementAnchor(measurement.end.clause, measurement.endTriggerHeight),
               rawTop - anchorOffsetEnd,
               measurement.endTriggerEnclosedBy,
@@ -213,19 +301,32 @@ const runPass = (
             );
         }
 
-        // An end that falls before the start (endTrigger sitting above trigger, say) collapses to
-        // a zero-length window, the same behavior as GSAP ScrollTrigger.
-        freezeEnd = Math.max(freezeStart, endTop - anchorOffsetEnd);
+        // The window is as long as GSAP's pins would make it, measured from where they would put
+        // the start, and opens at freezeStart. An end that falls before that start (endTrigger
+        // sitting above trigger, say) collapses to a zero-length window, the same behavior as
+        // GSAP ScrollTrigger.
+        const layoutStart = start.mode === 'absolute'
+          ? start.value
+          : measurement.triggerTop - start.anchorOffset + gapsBeforeEndAnchor(
+            measurements,
+            knownWindows(),
+            measurement.triggerTop + start.elementAnchor,
+            measurement.triggerTop - start.anchorOffset,
+            measurement.triggerEnclosedBy,
+            index,
+          );
+
+        freezeEnd = freezeStart + Math.max(0, endTop - anchorOffsetEnd - layoutStart);
         break;
       }
     }
 
     const paddingHeight = Math.max(0, freezeEnd - freezeStart);
+    const plan = { freezeStart, freezeEnd, stickyTop: 0, paddingHeight };
 
-    precedingGaps += paddingHeight;
-    paddingHeightsSoFar[index] = paddingHeight;
+    fresh[index] = plan;
 
-    return { freezeStart, freezeEnd, stickyTop: structureTop - freezeStart, paddingHeight };
+    return plan;
   });
 };
 
@@ -325,8 +426,8 @@ export const TIE_TOLERANCE_PX = 0.05;
 // With windows that don't overlap, which "nothing moves" already assumes, the layers that count
 // are always the earliest ones. So each layer's test can assume every earlier one counted, making
 // it a comparison against a constant, which scrollMargin.ts can write as CSS without repeating the
-// earlier tests inside the later ones. planLayers can still produce an overlap: a scene with start
-// 'top bottom' can open its window before a short scene above it closes its own.
+// earlier tests inside the later ones. planLayers can still produce an overlap: an absolute start
+// can fall inside another layer's window.
 //
 // A Scene trigger resolving its own start lands exactly on its freezeStart, which the tolerance
 // keeps on the not-counted side.
@@ -367,30 +468,25 @@ export const dwellConsumedAt = (
 );
 
 // Finalizes every layer's freeze window and style values, from measurements laid out in DOM order.
-// Most end modes settle in one pass. One kind of clause end needs more:
+// A single Scene layer settles in one pass. With more, a pass reads the previous pass's plan for
+// every layer it hasn't reached yet (see runPass):
 //
-// - A clause with an endTrigger other than trigger needs gapsBeforeEndAnchor's lookup, whose
-//   inputs aren't all known on the first pass (see runPass). That lookup's non-cancelling
-//   dependencies run from layer i to a later layer j, which can't close into a cycle, with one
-//   exception: an endTrigger above an earlier layer's trigger leaves that layer out even though
-//   its dwell moves i's start. With that layer's own end reaching past i's trigger, each pass
-//   flips the pair between two answers that straddle the one they share, so a pass that returns
-//   to the answer before last feeds the next one their average instead.
+// - A clause start counts the padding of a layer later in DOM order that freezes first.
+// - A clause with an endTrigger other than trigger needs gapsBeforeEndAnchor's lookup. An
+//   endTrigger above an earlier layer's trigger leaves that layer out even though its dwell moves
+//   i's start. With that layer's own end reaching past i's trigger, each pass flips the pair
+//   between two answers that straddle the one they share, so a pass that returns to the answer
+//   before last feeds the next one their average instead. Two nested layers whose endTriggers
+//   each count the other's dwell never settle and throw.
 //
-// Re-running the full pass with the previous pass's results settles a chain within one iteration
+// Re-running the full pass with the previous pass's results settles a chain within two iterations
 // per layer and such a flip within two more; anything still moving after that throws (see
 // freezeWindow.test.ts's DOM-order-scrambled stress test and the flip test beside it).
 export const planLayers = (
   measurements: readonly LayerMeasurement[],
   deps: PlanDeps,
 ): LayerPlan[] => {
-  const needsConvergence = measurements.some((measurement) => {
-    if (measurement.kind !== 'scene') return false;
-
-    if (measurement.end.mode !== 'clause' || measurement.endTriggerIsSelf) return false;
-
-    return measurement.endTriggerIndex !== null || measurement.end.rawTop !== null;
-  });
+  const needsConvergence = measurements.filter(({ kind }) => kind === 'scene').length > 1;
   // onPlanned, the only thing that writes DOM or layer state, runs once after the loop, so no
   // shared state changes between passes and a live remeasurement gives the same answer every time.
   // Without this cache, an endTrigger outside the container costs one forced-layout read per pass
@@ -410,30 +506,39 @@ export const planLayers = (
       return value;
     },
   };
-  const paddingsOf = (passPlans: readonly (LayerPlan | null)[]) =>
-    passPlans.map((plan) => plan?.paddingHeight ?? null);
-  const samePaddings = (a: PreviousPass['paddings'], b: PreviousPass['paddings']) =>
+  const stateOf = (passPlans: readonly (LayerPlan | null)[]): PreviousPass => ({
+    paddings: passPlans.map((plan) => plan?.paddingHeight ?? null),
+    freezeStarts: passPlans.map((plan) => plan?.freezeStart ?? null),
+  });
+  const sameValues = (a: readonly (number | null)[], b: readonly (number | null)[]) =>
     a.every((value, i) => value === b[i]
       || (value !== null && b[i] !== null && Math.abs(value - b[i]!) <= TIE_TOLERANCE_PX));
+  const sameState = (a: PreviousPass, b: PreviousPass) =>
+    sameValues(a.paddings, b.paddings) && sameValues(a.freezeStarts, b.freezeStarts);
+  const average = (a: readonly (number | null)[], b: readonly (number | null)[]) =>
+    a.map((value, i) => (value === null ? null : (value + b[i]!) / 2));
   let plans = runPass(measurements, passDeps, null);
 
   if (needsConvergence) {
-    const budget = measurements.length + 2;
-    let fed = paddingsOf(plans);
-    let fedBefore: PreviousPass['paddings'] | null = null;
+    const budget = 2 * measurements.length + 2;
+    let fed = stateOf(plans);
+    let fedBefore: PreviousPass | null = null;
 
     for (let pass = 0; pass < budget; pass += 1) {
-      plans = runPass(measurements, passDeps, { paddings: fed });
+      plans = runPass(measurements, passDeps, fed);
 
-      const out = paddingsOf(plans);
+      const out = stateOf(plans);
 
-      if (samePaddings(out, fed)) break;
+      if (sameState(out, fed)) break;
 
-      const flipped = fedBefore !== null && samePaddings(out, fedBefore);
+      const flipped = fedBefore !== null && sameState(out, fedBefore);
 
       fedBefore = fed;
       fed = flipped
-        ? out.map((value, i) => (value === null ? null : (value + fed[i]!) / 2))
+        ? {
+            paddings: average(out.paddings, fed.paddings),
+            freezeStarts: average(out.freezeStarts, fed.freezeStarts),
+          }
         : out;
 
       if (pass === budget - 1) {
@@ -446,8 +551,22 @@ export const planLayers = (
     }
   }
 
-  const windows = plans.filter((plan): plan is LayerPlan => plan !== null);
-  const finalPlans = plans.map(
+  // Each Scene wrapper sits inside the wrappers of the Scene layers after it in DOM order. Sticky
+  // offsets add up down the nesting, so it engages late by the dwell of every one of them already
+  // frozen, and its sticky top subtracts that dwell to engage at freezeStart.
+  const withTops = plans.map((plan, index) => {
+    if (plan === null) return null;
+
+    const outerDwell = plans.reduce((total, outer, k) => (
+      k > index && outer !== null && outer.freezeEnd <= plan.freezeStart + TIE_TOLERANCE_PX
+        ? total + outer.paddingHeight!
+        : total
+    ), 0);
+
+    return { ...plan, stickyTop: deps.structureTop - (plan.freezeStart - outerDwell) };
+  });
+  const windows = withTops.filter((plan): plan is LayerPlan => plan !== null);
+  const finalPlans = withTops.map(
     (plan, index) => plan ?? planCover(measurements, index, windows, passDeps),
   );
 

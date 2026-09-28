@@ -483,7 +483,7 @@ export default class StickyScrollTrigger {
 
       // A bare number keeps GSAP's meaning, an absolute scroll position, which a pin can't act on.
       // A Scene layer honors one because its freeze window is a scroll range to begin with and its
-      // sticky top follows from that range (freezeWindow.ts's `structureTop - freezeStart`). A pin
+      // sticky top follows from that range (see freezeWindow.ts's planLayers). A pin
       // runs the other way: topPx below is the only value it has, and the scroll position it
       // engages at (triggerTop - topPx) follows from that. Inverting it would mean already knowing
       // triggerTop, and anyone who does would write the px distance directly, which is what `top`
@@ -554,8 +554,8 @@ export default class StickyScrollTrigger {
     }
   }
 
-  // Pass 1 measures every layer's natural position, then pass 2 (planLayers) applies sticky and
-  // padding while accumulating precedingGaps in DOM order. Keeping them separate is what stops an
+  // Pass 1 measures every layer's natural position, then pass 2 (planLayers) works out every
+  // window and applies sticky and padding. Keeping them separate is what stops an
   // earlier layer's applied sticky from throwing off a later layer's measurement.
   // Forward references are resolved inside planLayers rather than by this pass ordering. An
   // endTrigger outside the shared container isn't at the right position until padding

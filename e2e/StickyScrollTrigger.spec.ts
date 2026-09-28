@@ -335,6 +335,42 @@ test('two Scene ends that feed each other settle on windows the page freezes for
   expect(stillRuns).toEqual(windows);
 });
 
+// A Scene layer freezes when its trigger reaches its start anchor, after every freeze that began
+// first, whatever the DOM order. The reported windows have to be where the page stands still,
+// each trigger at its anchor as its window opens.
+for (const layout of [
+  'nested',
+  'offsetRoot',
+  'threeLayers',
+  'overlap',
+  'overlapClauseEnd',
+  'overlapEndTrigger',
+  'nestedClauseEnd',
+  'nestedDefaultEnds',
+]) {
+  test(`Scene layers freeze in the order their triggers arrive (${layout})`, async ({ page }) => {
+    await page.goto(`/fixtures/freezeOrder.html?layout=${layout}`);
+
+    type Reported = { selector: string; window: [number, number]; edge: number };
+    type Result = { reported: Reported[]; stillRuns: [number, number][]; viewportHeight: number };
+    type FixtureWindow = Window & { __freezeOrder: () => Result };
+
+    const { reported, stillRuns, viewportHeight } = await page.evaluate(() =>
+      (window as unknown as FixtureWindow).__freezeOrder());
+    const expectedEdge: Record<string, number> = {
+      '#tall': viewportHeight,
+      '#late': viewportHeight,
+      '#deep': viewportHeight,
+    };
+
+    reported.forEach(({ selector, window: [start, end], edge }) => {
+      expect(end, selector).toBeGreaterThan(start);
+      expect(edge, selector).toBeCloseTo(expectedEdge[selector] ?? 0, 0);
+    });
+    expect(stillRuns).toEqual(reported.map(({ window }) => window).sort((a, b) => a[0] - b[0]));
+  });
+}
+
 // A cover layer's window counts a Scene layer's dwell only when the scene freezes first. Counted by
 // DOM order, insideTallScene ran 500px late and midRise ended 500px early.
 for (const layout of ['insideTallScene', 'midRise', 'handover']) {

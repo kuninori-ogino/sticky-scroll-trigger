@@ -208,7 +208,7 @@ describe('resolveStartSpec', () => {
   // 200 * 0.25 - 800.
   it('scales the element side against the element and the viewport side against the viewport', () => {
     expect(resolveStartSpec(scene(), 'bottom 25%', 200, VIEWPORT))
-      .toEqual<StartSpec>({ mode: 'clause', anchorOffset: 0 });
+      .toEqual<StartSpec>({ mode: 'clause', anchorOffset: 0, elementAnchor: 200 });
   });
 
   // A Scene layer takes either, since its stickyTop is already document-absolute; index.test.ts
@@ -225,7 +225,7 @@ describe('resolveStartSpec', () => {
   // The two end notations reaching a start, both deliberately handled by the clause branch.
   it('resolves a dwell start as a clause with an implicit base of 0', () => {
     expect(resolveStartSpec(scene(), '+=100', 200, VIEWPORT))
-      .toEqual<StartSpec>({ mode: 'clause', anchorOffset: -100 });
+      .toEqual<StartSpec>({ mode: 'clause', anchorOffset: -100, elementAnchor: 100 });
   });
 
   it('rejects a \'max\' start as position.ts\'s end-only keyword', () => {
@@ -248,9 +248,10 @@ describe('measureLayer', () => {
     expect(measure(scene({ endTrigger: query('.b'), end: 'top top' })))
       .toEqual<LayerMeasurement>({
         kind: 'scene',
-        start: { mode: 'clause', anchorOffset: 0 },
+        start: { mode: 'clause', anchorOffset: 0, elementAnchor: 0 },
         triggerTop: 0,
         triggerHeight: 0,
+        triggerEnclosedBy: [],
         wrapperTop: 0,
         coverTop: 0,
         end: { mode: 'clause', clause: 'top top', rawTop: 0, measureLive: false },
@@ -274,7 +275,7 @@ describe('measureLayer', () => {
     const layer = scene({ start: () => 'center center', end: () => `+=${dwell}` });
 
     expect(measure(layer).end).toEqual<EndSpec>({ mode: 'dwell', distancePx: 500 });
-    expect(measure(layer).start).toEqual<StartSpec>({ mode: 'clause', anchorOffset: 400 });
+    expect(measure(layer).start).toEqual<StartSpec>({ mode: 'clause', anchorOffset: 400, elementAnchor: 0 });
 
     dwell = 900;
     expect(measure(layer).end).toEqual<EndSpec>({ mode: 'dwell', distancePx: 900 });

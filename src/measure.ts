@@ -15,6 +15,7 @@ import {
   prefixSpacedRelativeEnd,
   resolveAnchorTop,
   resolveDwell,
+  resolveElementAnchor,
   resolveMaxOffset,
   resolveMaybeFn,
 } from './position';
@@ -144,6 +145,7 @@ export const resolveStartSpec = (
       return {
         mode: 'clause',
         anchorOffset: resolveAnchorTop(classified.value, elementHeight, viewportHeight),
+        elementAnchor: resolveElementAnchor(classified.value, elementHeight),
       };
   }
 };
@@ -179,6 +181,9 @@ export const measureLayer = (
     start,
     triggerTop: documentTop(layer.trigger),
     triggerHeight: elementHeight,
+    triggerEnclosedBy: [...indexByTrigger]
+      .filter(([trigger]) => trigger.contains(layer.trigger))
+      .map(([, index]) => index),
     wrapperTop: layer.wrapper ? documentTop(layer.wrapper) : 0,
     coverTop: layer.kind === 'cover' ? documentTop(layer.cover) : 0,
     end,

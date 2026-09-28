@@ -6,8 +6,8 @@ import type { LayerMeasurement, LayerPlan, PlanDeps } from './freezeWindow';
 // so every branch of pass 2 can be verified just by feeding it numeric measurements.
 // A real browser is only needed for "the part that measures those numbers" (documentTop, etc.).
 
-const clauseStart = (anchorOffset: number): LayerMeasurement['start'] =>
-  ({ mode: 'clause', anchorOffset });
+const clauseStart = (anchorOffset: number, elementAnchor = 0): LayerMeasurement['start'] =>
+  ({ mode: 'clause', anchorOffset, elementAnchor });
 const absoluteStart = (value: number): LayerMeasurement['start'] =>
   ({ mode: 'absolute', value });
 const absoluteEnd = (value: number): LayerMeasurement['end'] =>
@@ -17,6 +17,7 @@ const scene = (over: Partial<LayerMeasurement> = {}): LayerMeasurement => ({
   start: clauseStart(0),
   triggerTop: 0,
   triggerHeight: 0,
+  triggerEnclosedBy: [],
   wrapperTop: 0,
   coverTop: 0,
   end: { mode: 'dwell', distancePx: 0 },
@@ -59,7 +60,7 @@ describe('dwell end', () => {
 });
 
 describe('absolute end', () => {
-  it('freezeEnd is the fixed value itself, ignoring freezeStart and precedingGaps entirely', () => {
+  it('freezeEnd is the fixed value itself, ignoring freezeStart and every other layer\'s dwell', () => {
     const { plans } = run([
       scene({ triggerTop: 1000, start: clauseStart(200), end: absoluteEnd(5000) }),
     ]);
@@ -81,9 +82,9 @@ describe('absolute end', () => {
 });
 
 describe('absolute start', () => {
-  it('freezeStart is the fixed value itself, ignoring triggerTop and precedingGaps entirely', () => {
+  it('freezeStart is the fixed value itself, ignoring triggerTop and every other layer\'s dwell', () => {
     const { plans } = run([
-      scene({ triggerTop: 0, end: dwell(300) }), // contributes 300 to precedingGaps
+      scene({ triggerTop: 0, end: dwell(300) }), // freezes first, for 300
       scene({ triggerTop: 9999, start: absoluteStart(500), end: dwell(200) }),
     ]);
 
@@ -102,7 +103,7 @@ describe('absolute start', () => {
   });
 });
 
-describe('accumulating precedingGaps', () => {
+describe('dwell before a layer\'s start', () => {
   it('later layers\' natural position drops by exactly the preceding Scene layers\' dwell', () => {
     const { plans } = run([
       scene({ triggerTop: 1000, end: dwell(300) }),
@@ -115,6 +116,133 @@ describe('accumulating precedingGaps', () => {
       2300, // 2000 + 300
       3700, // 3000 + 300 + 400
     ]);
+  });
+
+  // S's trigger sits 200px into T's 2000px one. T freezes at its bottom edge, long after S freezes
+  // at its top. S's wrapper is the outer one, so T's sticky top makes up for S's dwell.
+  it('counts only the layers that freeze first, whatever the DOM order, and offsets sticky tops to match', () => {
+    const { plans } = run([
+      scene({ triggerTop: 500, triggerHeight: 2000, start: clauseStart(-1280), end: dwell(500) }),
+      scene({ triggerTop: 700, triggerHeight: 300, end: dwell(500) }),
+    ]);
+
+    expect(plans).toEqual<LayerPlan[]>([
+      { freezeStart: 2280, freezeEnd: 2780, stickyTop: -1780, paddingHeight: 500 },
+      { freezeStart: 700, freezeEnd: 1200, stickyTop: -700, paddingHeight: 500 },
+    ]);
+  });
+
+  // K's 'top bottom' freezes it as it enters the viewport, before J (above K) reaches the top.
+  it('keeps windows apart when a later layer freezes before an earlier one reaches its anchor', () => {
+    const { plans } = run([
+      scene({ triggerTop: 1000, triggerHeight: 200, end: dwell(500) }),
+      scene({ triggerTop: 1300, start: clauseStart(720), end: dwell(500) }),
+    ]);
+
+    expect(plans.map(({ freezeStart, freezeEnd }) => [freezeStart, freezeEnd]))
+      .toEqual([[1500, 2000], [580, 1080]]);
+  });
+
+  // J ends where an element between J and K reaches the top. K freezes first and holds J back by
+  // K's dwell, start and end alike, so J keeps the length GSAP's pins would give it.
+  it('moves a clause end along with the start a later-in-DOM freeze delays', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 1000,
+        triggerHeight: 200,
+        triggerEnclosedBy: [0],
+        end: { mode: 'clause', clause: 'top top', rawTop: 1200, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 100,
+      }),
+      scene({ triggerTop: 1300, start: clauseStart(720), end: dwell(500) }),
+    ]);
+
+    expect(plans[0]).toMatchObject({ freezeStart: 1500, freezeEnd: 1700 }); // not collapsed at 1500
+  });
+
+  // No window closes before layer 1's absolute start (300), so that is its unpadded position too,
+  // after layer 2's endTrigger inside it arrives (100), and layer 1 doesn't count. Subtracting the
+  // dwell of every earlier layer in DOM order (500) made it look as if it froze first.
+  it('places an enclosing layer\'s absolute start by the windows that close before it', () => {
+    const { plans } = run([
+      scene({ triggerTop: 100, triggerHeight: 100, start: clauseStart(-900), end: dwell(500) }),
+      scene({ triggerTop: 300, triggerHeight: 1000, start: absoluteStart(300), end: dwell(400) }),
+      scene({
+        triggerTop: 1400,
+        start: absoluteStart(0),
+        end: { mode: 'clause', clause: 'top 250', rawTop: 350, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerIndex: null,
+        endTriggerEnclosedBy: [1],
+      }),
+    ]);
+
+    // 350 - 250, plus layer 0's dwell (its trigger ends above the endTrigger), not layer 1's
+    expect(plans[2].paddingHeight).toBe(600);
+  });
+
+  // A scene frozen at its bottom edge, and one starting right below it at 'top bottom': the second
+  // arrives just as the first freezes, and waits it out instead of freezing alongside.
+  it('counts a freeze that starts just as trigger arrives', () => {
+    const { plans } = run([
+      scene({ triggerTop: 500, triggerHeight: 600, start: clauseStart(120), end: dwell(800) }),
+      scene({ triggerTop: 1100, start: clauseStart(720), end: dwell(500) }),
+    ]);
+
+    expect(plans.map(({ freezeStart }) => freezeStart)).toEqual([380, 1180]);
+  });
+
+  // Layer 2 sits inside layer 1 and freezes first. Counted the way GSAP's pins would, each default
+  // end took in the other's dwell, and both windows grew on every pass until refresh() threw.
+  it('keeps a default end as long as its own geometry when nested layers freeze around it', () => {
+    const { plans } = run([
+      scene({ triggerTop: 154, triggerHeight: 82, start: clauseStart(800), end: clause('bottom top'), endTriggerHeight: 82 }),
+      scene({
+        triggerTop: 685,
+        triggerHeight: 772,
+        triggerEnclosedBy: [1],
+        end: clause('bottom top'),
+        endTriggerHeight: 772,
+        endTriggerEnclosedBy: [1],
+      }),
+      scene({
+        triggerTop: 911,
+        start: clauseStart(800),
+        triggerEnclosedBy: [1, 2],
+        end: clause('bottom top'),
+        endTriggerEnclosedBy: [1, 2],
+      }),
+    ]);
+
+    expect(plans.map(({ freezeStart, freezeEnd }) => [freezeStart, freezeEnd]))
+      .toEqual([[-646, 236], [2367, 3139], [993, 1793]]);
+  });
+
+  // Layers 1 to 3 sit inside layer 0. Read from the previous pass's windows, layers 1 and 2 each
+  // counted the other as freezing first on alternate passes, and refresh() threw.
+  it('orders nested layers by where their triggers reach their anchors', () => {
+    const { plans } = run([
+      scene({ triggerTop: 173, triggerHeight: 1436, end: clause('bottom top'), endTriggerHeight: 1436 }),
+      scene({ triggerTop: 230, triggerHeight: 67, triggerEnclosedBy: [0, 1], end: clause('bottom top'), endTriggerHeight: 67 }),
+      scene({
+        triggerTop: 500,
+        triggerHeight: 304,
+        start: clauseStart(248, 152),
+        triggerEnclosedBy: [0, 2],
+        end: clause('bottom top'),
+        endTriggerHeight: 304,
+      }),
+      scene({
+        triggerTop: 1031,
+        start: clauseStart(800),
+        triggerEnclosedBy: [0, 3],
+        end: dwell(132),
+      }),
+    ]);
+
+    expect(plans.map(({ freezeStart, freezeEnd }) => [freezeStart, freezeEnd]))
+      .toEqual([[173, 1609], [1666, 1733], [1887, 2439], [1734, 1866]]);
   });
 
   it('a cover layer never increases document height, so it never shifts later layers', () => {
@@ -158,6 +286,37 @@ describe('auto end (a cover layer\'s auto-computed value)', () => {
 });
 
 describe('position-clause end', () => {
+  // Layer 0's trigger ends above layer 1's, so its spacer would push layer 1's end down under GSAP,
+  // however late layer 0 freezes here.
+  it('counts a layer above trigger for an absolute start ending at trigger itself', () => {
+    const { plans } = run([
+      scene({ triggerTop: 150, end: dwell(300) }),
+      scene({ triggerTop: 500, start: absoluteStart(100), end: clause('top top') }),
+    ]);
+
+    expect(plans.map(({ freezeStart, freezeEnd }) => [freezeStart, freezeEnd]))
+      .toEqual([[850, 1150], [100, 800]]);
+  });
+
+  // Layer 1 sits inside layer 0. Counted the way GSAP's pins would, each end took in the other's
+  // dwell, and both windows grew on every pass until refresh() threw.
+  it('leaves nested layers out of an absolute start\'s end at trigger itself', () => {
+    const { plans } = run([
+      scene({ triggerHeight: 3000, start: absoluteStart(100), end: clause('bottom top'), endTriggerHeight: 3000 }),
+      scene({
+        triggerTop: 1000,
+        triggerHeight: 500,
+        triggerEnclosedBy: [0, 1],
+        start: absoluteStart(200),
+        end: clause('bottom top'),
+        endTriggerHeight: 500,
+      }),
+    ]);
+
+    expect(plans.map(({ freezeStart, freezeEnd }) => [freezeStart, freezeEnd]))
+      .toEqual([[100, 3000], [200, 1500]]);
+  });
+
   it('uses its own natural position as the reference when endTrigger is trigger itself', () => {
     const { plans } = run([
       scene({
@@ -194,7 +353,7 @@ describe('position-clause end', () => {
     expect(plans[1].freezeEnd).toBe(1900); // 1400 + 500, not a collapsed 1600
   });
 
-  it('adds precedingGaps onto the raw position for an unregistered endTrigger inside the shared container', () => {
+  it('adds an earlier layer\'s dwell onto the raw position for an unregistered endTrigger inside the shared container', () => {
     const { plans } = run([
       scene({ triggerTop: 0, end: dwell(200) }),
       scene({
@@ -324,15 +483,13 @@ describe('position-clause end', () => {
     expect(plans[1].freezeEnd).toBe(4700); // freezeStart(3100) + paddingHeight(1600)
   });
 
-  it('converges even when DOM order and trigger position disagree, using the full iteration budget without throwing', () => {
+  it('converges even when DOM order and trigger position disagree, within the iteration budget', () => {
     // Array order is deliberately NOT sorted by triggerTop (unlike real usage, where
-    // structure.ts guarantees that) to stress-test gapsBeforeEndAnchor's position-based
-    // lookup against runPass's index-based one. Each layer's endTrigger raw position reaches
-    // past the other two, so resolving layer 0 needs layer 1's dwell, which itself needs layer
-    // 2's, so this needs exactly 3 runPass calls (the full budget for 3 layers) to settle, verified
-    // by hand: layer 2's dwell is a constant 2600 (both other layers cancel out of its own
-    // difference), layer 1's settles at 2100 + layer 2's dwell = 4700, and layer 0's at
-    // 2200 + layer 1's + layer 2's dwell = 9500.
+    // structure.ts guarantees that) to stress-test the position-based lookups against runPass's
+    // index-based one. The layers freeze in the order 1, 2, 0, and each endTrigger sits past the
+    // other two triggers, so each end counts both other dwells and each start the dwell of the
+    // layers freezing before it. Verified by hand: layer 0's dwell is a constant 2200 (both other
+    // layers cancel out), layer 2's is 2600 + layer 0's, and layer 1's is 2100 + the other two.
     const { plans } = run([
       scene({
         triggerTop: 300,
@@ -356,15 +513,15 @@ describe('position-clause end', () => {
     // Expressed as the same derivation the comment above walks through by hand, rather than
     // bare literals, so a future edit to any of the three rawTop values above must also update
     // the math that justifies the expectation, not just the numbers.
-    const layer2Dwell = 2600; // constant: both other layers cancel out of its own difference
-    const layer1Dwell = 2100 + layer2Dwell;
-    const layer0Dwell = 2200 + layer1Dwell + layer2Dwell;
+    const layer0Dwell = 2200; // constant: both other layers cancel out of its own difference
+    const layer2Dwell = 2600 + layer0Dwell;
+    const layer1Dwell = 2100 + layer0Dwell + layer2Dwell;
 
     expect(plans.map((plan) => plan.paddingHeight))
       .toEqual([layer0Dwell, layer1Dwell, layer2Dwell]);
   });
 
-  it('re-measures on the spot for an endTrigger outside the shared container, without adding precedingGaps', () => {
+  it('re-measures on the spot for an endTrigger outside the shared container, without adding any dwell', () => {
     const measureLiveEndTriggerTop = vi.fn(() => 5000);
     const { plans } = run(
       [
@@ -585,7 +742,7 @@ describe('max end', () => {
     expect(plans[0].freezeEnd).toBe(plans[0].freezeStart);
   });
 
-  it('never adds to precedingGaps (a cover layer never creates padding)', () => {
+  it('never adds dwell to later layers (a cover layer never creates padding)', () => {
     const { plans } = run(
       [
         cover({ triggerTop: 500, end: max(0) }),

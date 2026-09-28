@@ -14,7 +14,7 @@ This library solves both issues by wrapping the shared container in nested stick
 
 ### Scene layer (`createStickyTrigger`)
 
-The shared container gets wrapped in as many nested `stickyContainer > { stickyWrapper(sticky), stickyPadding }` layers as there are triggers. Scenes earlier in DOM order end up nested more deeply, and freeze first.
+The shared container gets wrapped in as many nested `stickyContainer > { stickyWrapper(sticky), stickyPadding }` layers as there are triggers. Scenes earlier in DOM order end up nested more deeply, but depth doesn't decide when they freeze. Sticky offsets add up down the nesting, so a wrapper would engage late by the dwell of every enclosing wrapper that has already frozen, and its sticky top makes up for that. Each scene freezes when its trigger reaches its `start` anchor, after every freeze that began first.
 
 ```
 container2                         ← layer for the 2nd scene
