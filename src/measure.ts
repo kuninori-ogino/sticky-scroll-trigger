@@ -15,7 +15,7 @@ import {
   prefixSpacedRelativeEnd,
   resolveAnchorTop,
   resolveDwell,
-  resolveElementAnchor,
+  resolveElementFraction,
   resolveMaxOffset,
   resolveMaybeFn,
 } from './position';
@@ -145,7 +145,7 @@ export const resolveStartSpec = (
       return {
         mode: 'clause',
         anchorOffset: resolveAnchorTop(classified.value, elementHeight, viewportHeight),
-        elementAnchor: resolveElementAnchor(classified.value, elementHeight),
+        elementFraction: resolveElementFraction(classified.value),
       };
   }
 };
@@ -194,6 +194,11 @@ export const measureLayer = (
     endTriggerEnclosedBy: end.mode === 'clause' && !end.measureLive && !endTriggerIsSelf
       ? [...indexByTrigger]
           .filter(([trigger]) => trigger.contains(layer.endTrigger))
+          .map(([, index]) => index)
+      : [],
+    endTriggerNests: end.mode === 'clause' && !end.measureLive && !endTriggerIsSelf
+      ? [...indexByTrigger]
+          .filter(([trigger]) => trigger !== layer.endTrigger && layer.endTrigger.contains(trigger))
           .map(([, index]) => index)
       : [],
   };

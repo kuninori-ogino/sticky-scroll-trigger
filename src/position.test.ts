@@ -8,6 +8,7 @@ import {
   prefixSpacedRelativeEnd,
   resolveAnchorTop,
   resolveElementAnchor,
+  resolveElementFraction,
   resolveDwell,
   resolveMaxOffset,
   resolveMaybeFn,
@@ -192,6 +193,15 @@ describe('resolveElementAnchor', () => {
     expect(resolveElementAnchor('bottom top', 300)).toBe(300);
     expect(resolveElementAnchor('center+=10 bottom', 300)).toBe(160);
     expect(resolveElementAnchor('top', 300)).toBe(0);
+  });
+});
+
+describe('resolveElementFraction', () => {
+  it('returns the share of the element\'s height in the element side, with \'%\' offsets and without px ones', () => {
+    expect(resolveElementFraction('center top')).toBe(0.5);
+    expect(resolveElementFraction('bottom-=50 top')).toBe(1);
+    expect(resolveElementFraction('top+=25% center')).toBe(0.25);
+    expect(resolveElementFraction('100px top')).toBe(0);
   });
 });
 

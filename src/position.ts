@@ -144,6 +144,12 @@ export const resolveElementAnchor = (position: string, elementHeight: number): n
   return elementHeight * elementClause.fraction + elementClause.offsetPx;
 };
 
+// The share of the element's height in resolveElementAnchor's answer: 0.5 for 'center top', 0.6
+// for 'center+=10% top', 0 for '100px top'. A spacer inside the element moves the point it names by
+// this share of the spacer's height.
+export const resolveElementFraction = (position: string): number =>
+  resolveElementAnchor(position, 1) - resolveElementAnchor(position, 0);
+
 // Back-calculates the top position (px) at which the element's anchor point lines up with
 // the viewport's anchor point, from a GSAP-standard position clause (e.g. 'center center').
 // When only one clause is given, the viewport side defaults to 'top' (matching GSAP).

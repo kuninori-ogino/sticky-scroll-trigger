@@ -6,8 +6,8 @@ import type { LayerMeasurement, LayerPlan, PlanDeps } from './freezeWindow';
 // so every branch of pass 2 can be verified just by feeding it numeric measurements.
 // A real browser is only needed for "the part that measures those numbers" (documentTop, etc.).
 
-const clauseStart = (anchorOffset: number, elementAnchor = 0): LayerMeasurement['start'] =>
-  ({ mode: 'clause', anchorOffset, elementAnchor });
+const clauseStart = (anchorOffset: number, elementFraction = 0): LayerMeasurement['start'] =>
+  ({ mode: 'clause', anchorOffset, elementFraction });
 const absoluteStart = (value: number): LayerMeasurement['start'] =>
   ({ mode: 'absolute', value });
 const absoluteEnd = (value: number): LayerMeasurement['end'] =>
@@ -25,6 +25,7 @@ const scene = (over: Partial<LayerMeasurement> = {}): LayerMeasurement => ({
   endTriggerIndex: null,
   endTriggerHeight: 0,
   endTriggerEnclosedBy: [],
+  endTriggerNests: [],
   ...over,
 });
 const cover = (over: Partial<LayerMeasurement> = {}): LayerMeasurement =>
@@ -228,7 +229,7 @@ describe('dwell before a layer\'s start', () => {
       scene({
         triggerTop: 500,
         triggerHeight: 304,
-        start: clauseStart(248, 152),
+        start: clauseStart(248, 0.5),
         triggerEnclosedBy: [0, 2],
         end: clause('bottom top'),
         endTriggerHeight: 304,
@@ -457,7 +458,7 @@ describe('position-clause end', () => {
         triggerTop: 2242,
         triggerHeight: 50,
         triggerEnclosedBy: [0, 1],
-        start: clauseStart(335, 25),
+        start: clauseStart(335, 0.5),
         end: { mode: 'clause', clause: 'top bottom', rawTop: 3814, measureLive: false },
         endTriggerIsSelf: false,
         endTriggerIndex: null,
@@ -478,6 +479,7 @@ describe('position-clause end', () => {
         endTriggerIsSelf: false,
         endTriggerIndex: null,
         endTriggerHeight: 1000,
+        endTriggerNests: [1],
       }),
       scene({ triggerTop: 1200, triggerHeight: 300, end: dwell(500) }),
     ]);
@@ -712,6 +714,125 @@ describe('position-clause end', () => {
 
 // Fallback results are raw GSAP 3.15.0's, with pins created in the fallback order, measured on
 // chromium, webkit and firefox at a 720px viewport.
+// Every expected value here is GSAP's own, measured with the other pins created first.
+describe('spacers above, inside and below the element a point is on', () => {
+  const vh720 = { viewportHeight: 720 };
+
+  // i (1000, 200px) ends at a marker at 2000; k's 300px dwell sits above, inside or below it.
+  it.each([
+    ['above a zero-height marker, point above k', 1800, 180, 0, 'bottom-=50 top', 1250],
+    ['below a zero-height marker', 2020, 50, 0, 'top+=100 top', 1100],
+    ['inside, with a px offset from the top', 2010, 50, 400, 'top+=100 top', 1100],
+    ['inside the upper half, at center', 2010, 50, 400, 'center top', 1350],
+    ['inside the lower half, at center', 2300, 50, 400, 'center top', 1350],
+    ['inside, below a point at bottom-=50', 2340, 50, 400, 'bottom-=50 top', 1650],
+    ['inside, with a px anchor', 2010, 50, 400, '100px top', 1100],
+  ])('weights a spacer %s', (_, kTop, kHeight, markerHeight, text, expected) => {
+    const { plans } = run([
+      scene({
+        triggerTop: 1000,
+        triggerHeight: 200,
+        triggerEnclosedBy: [0],
+        end: { mode: 'clause', clause: text, rawTop: 2000, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: markerHeight,
+        endTriggerNests: markerHeight > 0 ? [1] : [],
+      }),
+      scene({ triggerTop: kTop, triggerHeight: kHeight, triggerEnclosedBy: [1], end: dwell(300) }),
+    ], vh720);
+
+    expect(plans[0].paddingHeight).toBe(expected);
+  });
+
+  // Layer 1 sits in the upper half of layer 0's trigger, so it moves the 'center center' start's
+  // point by half its dwell and the end's marker below by all of it: 2000 + 300 - (1040 + 150).
+  it('weights a spacer inside trigger toward the start its layout counts from', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 1000,
+        triggerHeight: 800,
+        triggerEnclosedBy: [0],
+        start: clauseStart(-40, 0.5),
+        end: { mode: 'clause', clause: 'top top', rawTop: 2000, measureLive: false },
+        endTriggerIsSelf: false,
+      }),
+      scene({ triggerTop: 1100, triggerHeight: 100, triggerEnclosedBy: [0, 1], end: dwell(300) }),
+    ], vh720);
+
+    expect(plans[0].paddingHeight).toBe(1110);
+  });
+
+  // Layer 2 sits inside layer 1's trigger, which is layer 0's endTrigger, and moves its center by
+  // half of 300. Layer 1 starts after that point, so its own dwell doesn't count.
+  it('weights a spacer inside a registered endTrigger', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 1000,
+        triggerHeight: 200,
+        triggerEnclosedBy: [0],
+        end: clause('center top'),
+        endTriggerIsSelf: false,
+        endTriggerIndex: 1,
+        endTriggerHeight: 400,
+        endTriggerEnclosedBy: [1],
+        endTriggerNests: [2],
+      }),
+      scene({
+        triggerTop: 2000,
+        triggerHeight: 400,
+        triggerEnclosedBy: [1],
+        start: clauseStart(-400, 1),
+        end: dwell(200),
+      }),
+      scene({ triggerTop: 2100, triggerHeight: 50, triggerEnclosedBy: [1, 2], end: dwell(300) }),
+    ], vh720);
+
+    expect(plans[0].paddingHeight).toBe(1350); // 2200 - 1000 + 300 / 2
+  });
+
+  it('weights a spacer inside the endTrigger of an absolute start', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 1000,
+        triggerHeight: 200,
+        triggerEnclosedBy: [0],
+        start: absoluteStart(1100),
+        end: { mode: 'clause', clause: 'center top', rawTop: 2000, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 400,
+        endTriggerNests: [1],
+      }),
+      scene({ triggerTop: 2010, triggerHeight: 50, triggerEnclosedBy: [1], end: dwell(300) }),
+    ], vh720);
+
+    expect(plans[0].paddingHeight).toBe(1250); // 2200 - 1100 + 300 / 2
+  });
+
+  // A zero-height trigger with a 300px dwell on an edge of the 1000/800 endTrigger, as a child or a
+  // sibling, which only the DOM tells apart. Values are GSAP's own.
+  it.each([
+    ['a child at the top edge', 1000, true, 1050],
+    ['a sibling right before', 1000, false, 1200],
+    ['a child at the bottom edge', 1800, true, 1050],
+    ['a sibling right after', 1800, false, 900],
+  ])('reads %s from the DOM', (_, kTop, inside, markerEnd) => {
+    const { plans } = run([
+      scene({
+        triggerTop: 500,
+        triggerHeight: 100,
+        triggerEnclosedBy: [0],
+        end: { mode: 'clause', clause: 'center top', rawTop: 1000, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 800,
+        endTriggerNests: inside ? [1] : [],
+      }),
+      scene({ triggerTop: kTop, triggerEnclosedBy: [1], end: dwell(300) }),
+    ], vh720);
+
+    expect(plans[0].paddingHeight).toBe(markerEnd);
+  });
+});
+
 describe('endTriggers that never settle', () => {
   const nestedPair = (tEnd: number, tEndEnclosedBy: number[], sEnd: LayerMeasurement['end']) => [
     scene({
@@ -764,7 +885,7 @@ describe('endTriggers that never settle', () => {
         triggerTop: 2631,
         triggerHeight: 128,
         triggerEnclosedBy: [0, 2],
-        start: clauseStart(592, 128),
+        start: clauseStart(592, 1),
         end: { mode: 'clause', clause: 'top top', rawTop: 4618, measureLive: false },
         endTriggerIsSelf: false,
       }),

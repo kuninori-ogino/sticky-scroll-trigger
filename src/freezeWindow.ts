@@ -8,21 +8,22 @@
  *
  * Two others are resolved in memory instead, by iterating the whole pass to a fixed point. An
  * unregistered endTrigger inside the container depends on the dwell of every Scene layer that
- * would delay it under GSAP's pins with pinnedContainer set, including layers that come later in
- * `measurements` order; a Scene layer's registered endTrigger later in DOM order (a forward
- * reference) depends on that layer's natural position. When endTriggers depend on each other in a
- * cycle that never settles, planLayers falls back to the answer GSAP gives when it refreshes the
- * pins in dependency order (see fallbackOrder). Cover layers are planned last, from the settled
- * Scene windows, since nothing depends on a cover's own window.
+ * would move the point it names under GSAP's pins with pinnedContainer set, including layers that
+ * come later in `measurements` order; a Scene layer's registered endTrigger later in DOM order (a
+ * forward reference) depends on that layer's natural position. When endTriggers depend on each
+ * other in a cycle that never settles, planLayers falls back to the answer GSAP gives when it
+ * refreshes the pins in dependency order (see fallbackOrder). Cover layers are planned last, from
+ * the settled Scene windows, since nothing depends on a cover's own window.
  */
 
-import { resolveAnchorTop, resolveElementAnchor } from './position';
+import { resolveAnchorTop, resolveElementFraction } from './position';
 
 // The result of resolving start during refresh()'s first pass.
 export type StartSpec
   // The usual case: a position clause resolved relative to trigger's own natural position.
-  // elementAnchor is how far below trigger's top edge the clause's element side points.
-  = | { mode: 'clause'; anchorOffset: number; elementAnchor: number }
+  // elementFraction is the clause's element side as a share of trigger's height (see
+  // position.ts's resolveElementFraction).
+  = | { mode: 'clause'; anchorOffset: number; elementFraction: number }
     // A bare number, which GSAP reads as an absolute scroll position unrelated to trigger's own
     // natural position. See position.ts's isAbsoluteFormat.
     | { mode: 'absolute'; value: number };
@@ -64,6 +65,9 @@ export interface LayerMeasurement {
   endTriggerHeight: number; // Only used for a position-clause end.
   // Indices of the layers whose trigger encloses (or is) an endTrigger inside the container.
   endTriggerEnclosedBy: readonly number[];
+  // Indices of the layers whose trigger sits inside an endTrigger in the container, other than
+  // the endTrigger's own.
+  endTriggerNests: readonly number[];
 }
 
 export interface LayerPlan {
@@ -115,22 +119,37 @@ const isHeldIn = (
   && order.isBefore(m, index)
   && !(enclosedBy.includes(m) && m !== anchorElement));
 
-// Whether layer `index`'s dwell comes before the point an end or layout start names
-// (anchorPosition, reaching the viewport anchor at reachedAt, both unpadded), the way GSAP's pins
-// would place it. A layer whose trigger ends above that point counts, since its spacer pushes the
-// point down. A Scene layer whose trigger encloses the anchor's element counts only if it freezes
-// first, as GSAP's pinnedContainer would count it, but judged at this point rather than at start.
-const countsTowardAnchor = (
+// The element an end or layout start names a point on: its unpadded top, the clause's share of its
+// height (resolveElementFraction), and the layers whose trigger sits inside it in the DOM.
+interface AnchorBox {
+  top: number;
+  fraction: number;
+  nests: readonly number[];
+}
+
+// The layers whose trigger sits inside layer `index`'s own trigger in the DOM.
+const nestedIn = (measurements: readonly LayerMeasurement[], index: number): number[] =>
+  measurements.flatMap(({ triggerEnclosedBy }, k) => (
+    k !== index && triggerEnclosedBy.includes(index) ? [k] : []
+  ));
+
+// The share of layer `index`'s dwell that comes before the point an end or layout start names on
+// `box` (reaching the viewport anchor at reachedAt, unpadded). Under GSAP's pins a spacer above the
+// element moves the point in full, one inside it grows the element and moves the point by
+// box.fraction, and one below moves nothing. Inside is read from the DOM, since a zero-height
+// trigger on the element's edge can sit on either side. A Scene layer enclosing the element counts
+// in full only if it freezes first, as pinnedContainer would count it, but judged at this point.
+const anchorShare = (
   measurements: readonly LayerMeasurement[],
   windows: readonly KnownWindow[],
   index: number,
   freezeStart: number,
-  anchorPosition: number,
+  box: AnchorBox,
   reachedAt: number,
   enclosedBy: readonly number[],
   anchorElement: number | null,
   order: RefreshOrder | null,
-): boolean => {
+): number => {
   const measurement = measurements[index];
 
   if (enclosedBy.includes(index)) {
@@ -142,19 +161,22 @@ const countsTowardAnchor = (
       ), 0)
       : measurement.triggerTop - measurement.start.anchorOffset;
 
-    return unpaddedFreezeStart < reachedAt - TIE_TOLERANCE_PX;
+    return unpaddedFreezeStart < reachedAt - TIE_TOLERANCE_PX ? 1 : 0;
   }
 
-  return measurement.triggerTop + measurement.triggerHeight <= anchorPosition + TIE_TOLERANCE_PX
-    && !(order && isHeldIn(measurements, index, enclosedBy, anchorElement, order));
+  if (order && isHeldIn(measurements, index, enclosedBy, anchorElement, order)) return 0;
+
+  if (box.nests.includes(index)) return box.fraction;
+
+  return measurement.triggerTop + measurement.triggerHeight <= box.top + TIE_TOLERANCE_PX ? 1 : 0;
 };
 
-// Total dwell of the layers countsTowardAnchor counts, other than ownIndex and, under a refresh
-// order, the layers after it. Adds each counted layer to `counted` when given.
+// Total dwell anchorShare counts, leaving out ownIndex and, under a refresh order, the layers
+// after it. Adds each layer with a share to `counted` when given.
 const gapsBeforeEndAnchor = (
   measurements: readonly LayerMeasurement[],
   windows: readonly KnownWindow[],
-  anchorPosition: number,
+  box: AnchorBox,
   reachedAt: number,
   enclosedBy: readonly number[],
   ownIndex: number,
@@ -164,14 +186,15 @@ const gapsBeforeEndAnchor = (
 ): number => windows.reduce((total, { index, freezeStart, freezeEnd }) => {
   if (index === ownIndex || (order && order.isBefore(ownIndex, index))) return total;
 
-  if (!countsTowardAnchor(
-    measurements, windows, index, freezeStart, anchorPosition, reachedAt, enclosedBy,
-    anchorElement, order,
-  )) return total;
+  const weight = anchorShare(
+    measurements, windows, index, freezeStart, box, reachedAt, enclosedBy, anchorElement, order,
+  );
+
+  if (weight === 0) return total;
 
   counted?.add(index);
 
-  return total + freezeEnd - freezeStart;
+  return total + weight * (freezeEnd - freezeStart);
 }, 0);
 
 // A Scene layer's window as runPass knows it: this pass's if already handled, else the previous
@@ -360,12 +383,15 @@ const runPass = (
           if (rawTop === null) {
             endTop = 0;
           } else {
-            const anchorPosition = rawTop
-              + resolveElementAnchor(measurement.end.clause, measurement.endTriggerHeight);
+            const box = {
+              top: rawTop,
+              fraction: resolveElementFraction(measurement.end.clause),
+              nests: measurement.endTriggerNests,
+            };
             const gaps = (w: readonly KnownWindow[], counted?: Set<number>) => gapsBeforeEndAnchor(
               measurements,
               w,
-              anchorPosition,
+              box,
               rawTop - anchorOffsetEnd,
               measurement.endTriggerEnclosedBy,
               index,
@@ -391,7 +417,11 @@ const runPass = (
           const gaps = (w: readonly KnownWindow[], counted?: Set<number>) => gapsBeforeEndAnchor(
             measurements,
             w,
-            measurement.triggerTop + start.elementAnchor,
+            {
+              top: measurement.triggerTop,
+              fraction: start.elementFraction,
+              nests: nestedIn(measurements, index),
+            },
             measurement.triggerTop - start.anchorOffset,
             measurement.triggerEnclosedBy,
             index,
@@ -647,9 +677,12 @@ const fallbackOrder = (
 //
 // Re-running the full pass with the previous pass's results settles a chain within two iterations
 // per layer and such a flip within two more (see freezeWindow.test.ts's DOM-order-scrambled stress
-// test and the flip test beside it). Anything still moving after that is planned again in
-// fallbackOrder's refresh order, which only an absolute start that flips what an end counts can
-// keep from settling; planLayers throws then.
+// test and the flip test beside it). Ends that count a share of each other's dwell close the gap
+// only by that share per pass, so the first settle gets at least 64 passes. A share near 1 needs
+// more (about 90 at 0.9) and gets the fallback below instead, on purpose: its fixed point grows as
+// 1 / (1 - share), into windows many times the page's height. Anything still moving after that is
+// planned again in fallbackOrder's refresh order, which only an absolute start that flips what an
+// end counts can keep from settling; planLayers throws then.
 export const planLayers = (
   measurements: readonly LayerMeasurement[],
   deps: PlanDeps,
@@ -695,7 +728,9 @@ export const planLayers = (
 
     if (!needsConvergence) return plans;
 
-    const budget = 2 * measurements.length + 2;
+    const budget = order === null
+      ? Math.max(64, 2 * measurements.length + 2)
+      : 2 * measurements.length + 2;
     let fed = stateOf(plans);
     let fedBefore: PreviousPass | null = null;
 

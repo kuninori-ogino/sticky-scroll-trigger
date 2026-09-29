@@ -208,7 +208,7 @@ describe('resolveStartSpec', () => {
   // 200 * 0.25 - 800.
   it('scales the element side against the element and the viewport side against the viewport', () => {
     expect(resolveStartSpec(scene(), 'bottom 25%', 200, VIEWPORT))
-      .toEqual<StartSpec>({ mode: 'clause', anchorOffset: 0, elementAnchor: 200 });
+      .toEqual<StartSpec>({ mode: 'clause', anchorOffset: 0, elementFraction: 1 });
   });
 
   // A Scene layer takes either, since its stickyTop is already document-absolute; index.test.ts
@@ -225,7 +225,7 @@ describe('resolveStartSpec', () => {
   // The two end notations reaching a start, both deliberately handled by the clause branch.
   it('resolves a dwell start as a clause with an implicit base of 0', () => {
     expect(resolveStartSpec(scene(), '+=100', 200, VIEWPORT))
-      .toEqual<StartSpec>({ mode: 'clause', anchorOffset: -100, elementAnchor: 100 });
+      .toEqual<StartSpec>({ mode: 'clause', anchorOffset: -100, elementFraction: 0 });
   });
 
   it('rejects a \'max\' start as position.ts\'s end-only keyword', () => {
@@ -248,7 +248,7 @@ describe('measureLayer', () => {
     expect(measure(scene({ endTrigger: query('.b'), end: 'top top' })))
       .toEqual<LayerMeasurement>({
         kind: 'scene',
-        start: { mode: 'clause', anchorOffset: 0, elementAnchor: 0 },
+        start: { mode: 'clause', anchorOffset: 0, elementFraction: 0 },
         triggerTop: 0,
         triggerHeight: 0,
         triggerEnclosedBy: [],
@@ -259,6 +259,7 @@ describe('measureLayer', () => {
         endTriggerIndex: null,
         endTriggerHeight: 0,
         endTriggerEnclosedBy: [],
+        endTriggerNests: [],
       });
   });
 
@@ -275,7 +276,7 @@ describe('measureLayer', () => {
     const layer = scene({ start: () => 'center center', end: () => `+=${dwell}` });
 
     expect(measure(layer).end).toEqual<EndSpec>({ mode: 'dwell', distancePx: 500 });
-    expect(measure(layer).start).toEqual<StartSpec>({ mode: 'clause', anchorOffset: 400, elementAnchor: 0 });
+    expect(measure(layer).start).toEqual<StartSpec>({ mode: 'clause', anchorOffset: 400, elementFraction: 0.5 });
 
     dwell = 900;
     expect(measure(layer).end).toEqual<EndSpec>({ mode: 'dwell', distancePx: 900 });
@@ -339,5 +340,23 @@ describe('measureLayer', () => {
     // A registered endTrigger encloses itself.
     expect(measure(scene({ trigger: query('.b'), endTrigger: query('.a'), end: 'top top' }), 1, indexByTrigger)
       .endTriggerEnclosedBy).toEqual([0]);
+  });
+
+  // The other way round: a trigger with no height on the endTrigger's edge may sit inside it or
+  // right beside it, and only one inside grows it.
+  it('lists the registered triggers inside an endTrigger, other than the endTrigger itself', () => {
+    const box = document.createElement('div');
+    const inner = document.createElement('section');
+    const after = document.createElement('section');
+
+    box.append(inner);
+    query('.root').append(box, after);
+
+    const indexByTrigger = new Map([[query('.a'), 0], [query('.b'), 1], [inner, 2], [after, 3]]);
+
+    expect(measure(scene({ endTrigger: box, end: 'top top' }), 0, indexByTrigger)
+      .endTriggerNests).toEqual([2]);
+    expect(measure(scene({ trigger: query('.b'), endTrigger: query('.a'), end: 'top top' }), 1, indexByTrigger)
+      .endTriggerNests).toEqual([]);
   });
 });
