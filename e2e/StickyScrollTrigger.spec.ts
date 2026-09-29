@@ -347,25 +347,25 @@ for (const layout of [
   'overlapEndTrigger',
   'nestedClauseEnd',
   'nestedDefaultEnds',
+  'nestedMutualEnds',
+  'nestedMutualEndsInside',
+  'nestedMutualEndsThree',
 ]) {
   test(`Scene layers freeze in the order their triggers arrive (${layout})`, async ({ page }) => {
     await page.goto(`/fixtures/freezeOrder.html?layout=${layout}`);
 
-    type Reported = { selector: string; window: [number, number]; edge: number };
+    type Reported = { selector: string; start: string; window: [number, number]; edge: number };
     type Result = { reported: Reported[]; stillRuns: [number, number][]; viewportHeight: number };
     type FixtureWindow = Window & { __freezeOrder: () => Result };
 
     const { reported, stillRuns, viewportHeight } = await page.evaluate(() =>
       (window as unknown as FixtureWindow).__freezeOrder());
-    const expectedEdge: Record<string, number> = {
-      '#tall': viewportHeight,
-      '#late': viewportHeight,
-      '#deep': viewportHeight,
-    };
+    const anchorOf = { top: 0, center: viewportHeight / 2, bottom: viewportHeight };
 
-    reported.forEach(({ selector, window: [start, end], edge }) => {
+    reported.forEach(({ selector, start: clause, window: [start, end], edge }) => {
       expect(end, selector).toBeGreaterThan(start);
-      expect(edge, selector).toBeCloseTo(expectedEdge[selector] ?? 0, 0);
+      expect(edge, selector)
+        .toBeCloseTo(anchorOf[clause.split(' ')[1] as keyof typeof anchorOf], 0);
     });
     expect(stillRuns).toEqual(reported.map(({ window }) => window).sort((a, b) => a[0] - b[0]));
   });

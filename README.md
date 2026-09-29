@@ -497,6 +497,8 @@ If `endTrigger` points to another registered layer's `trigger`, it's resolved li
 
 For any `endTrigger` inside the container, registered or not, its raw DOM position is measured directly, then adjusted the way GSAP's own pins would delay it: by the dwell of every other registered Scene layer, including ones registered after this call, whose `trigger` ends above the point on `endTrigger` that `end` names, or encloses `endTrigger` and freezes before that point reaches its viewport anchor. No other scene counts, even one that freezes first.
 
+Some sets of Scene layers have no layout where every `end` agrees with what it counts, such as two nested scenes whose `endTrigger`s each lie past the other's `trigger`. Those resolve the way GSAP's pins would if created in dependency order: each layer after the layers its `end` counts and after the scenes whose `trigger` encloses its own. Each `end` then counts only the layers before it, and a scene enclosed by an earlier one no longer pushes points outside that scene.
+
 A `createOverlapScroll` cover layer's `end` instead counts a scene's dwell exactly when that scene freezes before the point arrives, for any `endTrigger` inside the container, registered or not: its window describes the rise on screen, and a cover has no pin spacer to match.
 
 > Keep `createStickyTrigger`'s `endTrigger` inside the shared container: pointing at an element outside it throws. If you need to reference something outside the container, use a dwell distance (e.g. `'+=500'`) instead.
@@ -531,7 +533,7 @@ sticky.createOverlapScroll({
 - GSAP's `clamp()` position wrapper isn't accepted, and a function-valued `start`/`end` is called with no arguments rather than with the `ScrollTrigger` instance GSAP passes (see [Position syntax](#position-syntax))
 - A `createStickyTrigger` Scene layer can't point `endTrigger` at a registered layer later in DOM order; `createOverlapScroll`'s cover layer can (see [End syntax](#end-syntax))
 - If a Scene layer's `end` uses a position clause, don't set `endTrigger` to an element that gets pushed down by that same scene's own dwell; the value won't converge
-- If Scene layers' `endTrigger`s depend on each other in a way that never settles, `refresh()` throws instead of settling on a wrong value. Two layers whose ends each move the other settle on the one answer they share
+- If Scene layers' `endTrigger`s depend on each other in a way that never settles, the layers resolve in dependency order (see [End syntax](#end-syntax)). `refresh()` still throws when an absolute `start` keeps changing which scenes an `end` counts. Two layers whose ends each move the other settle on the one answer they share
 - `end: 'max'` throws on `createStickyTrigger` and `createStickyPin` for the same reason (their own padding/spacer would depend on itself); use `createOverlapScroll` instead
 - Using the same element as the `trigger` of two different `createStickyTrigger`/`createOverlapScroll`/`createStickyPin` calls throws
 - You must call `refresh()` once manually after registration. Window resize/load recomputation is automatically wired to GSAP's own `refreshInit`, but for layout changes that don't involve those (e.g. content height changes), call `ScrollTrigger.refresh()` yourself (see [Calling refresh](#calling-refresh))

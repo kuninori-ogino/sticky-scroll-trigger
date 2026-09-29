@@ -10,9 +10,10 @@
  * unregistered endTrigger inside the container depends on the dwell of every Scene layer that
  * would delay it under GSAP's pins, including layers that come later in `measurements` order; a
  * Scene layer's registered endTrigger later in DOM order (a forward reference) depends on that
- * layer's natural position. Iteration only fails to converge when two or more endTriggers
- * genuinely depend on each other in a cycle. Cover layers are planned last, from the settled
- * Scene windows, since nothing depends on a cover's own window.
+ * layer's natural position. When endTriggers depend on each other in a cycle that never settles,
+ * planLayers falls back to the answer GSAP gives when it refreshes the pins in dependency order
+ * (see fallbackOrder). Cover layers are planned last, from the settled Scene windows, since nothing
+ * depends on a cover's own window.
  */
 
 import { resolveAnchorTop, resolveElementAnchor } from './position';
@@ -94,13 +95,62 @@ interface PreviousPass {
   freezeStarts: readonly (number | null)[];
 }
 
-// Total dwell before the point an endTrigger's end clause names (anchorPosition, which
-// reaches the viewport's anchor at reachedAt, both unpadded), counted the way GSAP's pins would
-// delay it. A Scene layer whose trigger encloses the endTrigger counts only if it freezes first,
-// since a pin holds its contents only while engaged; any other counts if its trigger ends above
-// that point, since its spacer pushes the point down. `measurements` order doesn't matter.
-// windows holds every Scene window known so far (see runPass's knownWindows); an absolute start's
-// unpadded position is its value less the dwell of the windows that end before it.
+// The refresh order planLayers falls back to when no layout satisfies every Scene layer at once. A
+// layer counts only layers before it, and a layer's trigger stops growing once it has been
+// refreshed, so a later layer it holds pushes nothing outside it.
+interface RefreshOrder {
+  isBefore: (a: number, b: number) => boolean;
+}
+
+// Whether a trigger refreshed earlier holds layer `index` in, keeping its spacer from reaching an
+// anchor outside that trigger. anchorElement is the layer whose own trigger the anchor sits on.
+const isHeldIn = (
+  measurements: readonly LayerMeasurement[],
+  index: number,
+  enclosedBy: readonly number[],
+  anchorElement: number | null,
+  order: RefreshOrder,
+): boolean => measurements[index].triggerEnclosedBy.some((m) => m !== index
+  && measurements[m].kind === 'scene'
+  && order.isBefore(m, index)
+  && !(enclosedBy.includes(m) && m !== anchorElement));
+
+// Whether layer `index`'s dwell comes before the point an end or layout start names
+// (anchorPosition, reaching the viewport anchor at reachedAt, both unpadded), the way GSAP's pins
+// would place it. A Scene layer whose trigger encloses the anchor's element counts only if it
+// freezes first, since a pin holds its contents only while engaged; any other counts if its
+// trigger ends above that point, since its spacer pushes the point down.
+const countsTowardAnchor = (
+  measurements: readonly LayerMeasurement[],
+  windows: readonly KnownWindow[],
+  index: number,
+  freezeStart: number,
+  anchorPosition: number,
+  reachedAt: number,
+  enclosedBy: readonly number[],
+  anchorElement: number | null,
+  order: RefreshOrder | null,
+): boolean => {
+  const measurement = measurements[index];
+
+  if (enclosedBy.includes(index)) {
+    const unpaddedFreezeStart = measurement.start.mode === 'absolute'
+      ? freezeStart - windows.reduce((earlier, other) => (
+        other.index !== index && other.freezeEnd <= freezeStart + TIE_TOLERANCE_PX
+          ? earlier + other.freezeEnd - other.freezeStart
+          : earlier
+      ), 0)
+      : measurement.triggerTop - measurement.start.anchorOffset;
+
+    return unpaddedFreezeStart < reachedAt - TIE_TOLERANCE_PX;
+  }
+
+  return measurement.triggerTop + measurement.triggerHeight <= anchorPosition + TIE_TOLERANCE_PX
+    && !(order && isHeldIn(measurements, index, enclosedBy, anchorElement, order));
+};
+
+// Total dwell of the layers countsTowardAnchor counts, other than ownIndex and, under a refresh
+// order, the layers after it. Adds each counted layer to `counted` when given.
 const gapsBeforeEndAnchor = (
   measurements: readonly LayerMeasurement[],
   windows: readonly KnownWindow[],
@@ -108,22 +158,20 @@ const gapsBeforeEndAnchor = (
   reachedAt: number,
   enclosedBy: readonly number[],
   ownIndex: number,
+  anchorElement: number | null,
+  order: RefreshOrder | null,
+  counted?: Set<number>,
 ): number => windows.reduce((total, { index, freezeStart, freezeEnd }) => {
-  if (index === ownIndex) return total;
+  if (index === ownIndex || (order && order.isBefore(ownIndex, index))) return total;
 
-  const measurement = measurements[index];
-  const unpaddedFreezeStart = measurement.start.mode === 'absolute'
-    ? freezeStart - windows.reduce((earlier, other) => (
-      other.index !== index && other.freezeEnd <= freezeStart + TIE_TOLERANCE_PX
-        ? earlier + other.freezeEnd - other.freezeStart
-        : earlier
-    ), 0)
-    : measurement.triggerTop - measurement.start.anchorOffset;
-  const counts = enclosedBy.includes(index)
-    ? unpaddedFreezeStart < reachedAt - TIE_TOLERANCE_PX
-    : measurement.triggerTop + measurement.triggerHeight <= anchorPosition + TIE_TOLERANCE_PX;
+  if (!countsTowardAnchor(
+    measurements, windows, index, freezeStart, anchorPosition, reachedAt, enclosedBy,
+    anchorElement, order,
+  )) return total;
 
-  return counts ? total + freezeEnd - freezeStart : total;
+  counted?.add(index);
+
+  return total + freezeEnd - freezeStart;
 }, 0);
 
 // A Scene layer's window as runPass knows it: this pass's if already handled, else the previous
@@ -191,6 +239,12 @@ const clauseFreezeStart = (
   );
 };
 
+interface Recount {
+  index: number;
+  counted: Set<number>;
+  runs: ((windows: KnownWindow[]) => void)[];
+}
+
 // One full sequential pass over every Scene layer, in DOM order. A cover layer gets a null plan
 // here and is planned by planCover once the Scene windows settle. Other layers are read as
 // KnownWindow describes. stickyTop is filled in by planLayers once the windows settle.
@@ -198,6 +252,8 @@ const runPass = (
   measurements: readonly LayerMeasurement[],
   { viewportHeight, measureLiveEndTriggerTop }: PlanDeps,
   previous: PreviousPass | null,
+  order: RefreshOrder | null,
+  record: ((index: number, counted: ReadonlySet<number>) => void) | null,
 ): (LayerPlan | null)[] => {
   const fresh: (LayerPlan | null)[] = [];
   const knownWindows = (): KnownWindow[] => measurements.flatMap((measurement, k) => {
@@ -215,11 +271,17 @@ const runPass = (
       : [{ index: k, freezeStart, freezeEnd: freezeStart + paddingHeight }];
   });
   const paddingOf = (k: number) => fresh[k]?.paddingHeight ?? previous?.paddings[k] ?? 0;
-
-  return measurements.map((measurement, index) => {
+  // What each layer counted, taken again once the pass is over: counting against knownWindows
+  // mid-pass mixes this pass's windows with the previous one's.
+  const recounts: Recount[] = [];
+  const plans = measurements.map((measurement, index) => {
     fresh[index] = null;
 
     if (measurement.kind === 'cover') return null;
+
+    const recount: Recount = { index, counted: new Set(), runs: [] };
+
+    recounts.push(recount);
 
     // An absolute start is a fixed scroll position, so unlike a clause start, trigger's own
     // natural position plays no part in it.
@@ -266,13 +328,19 @@ const runPass = (
             break;
           }
 
-          const dwellAbove = measurements.reduce((total, other, k) => (
-            k !== index
-            && other.kind === 'scene'
-            && other.triggerTop + other.triggerHeight <= measurement.triggerTop + TIE_TOLERANCE_PX
-              ? total + paddingOf(k)
-              : total
-          ), 0);
+          const dwellAbove = measurements.reduce((total, other, k) => {
+            if (
+              k === index
+              || other.kind !== 'scene'
+              || other.triggerTop + other.triggerHeight > measurement.triggerTop + TIE_TOLERANCE_PX
+              || (order && (order.isBefore(index, k)
+                || isHeldIn(measurements, k, measurement.triggerEnclosedBy, index, order)))
+            ) return total;
+
+            recount.counted.add(k);
+
+            return total + paddingOf(k);
+          }, 0);
 
           freezeEnd = Math.max(freezeStart, measurement.triggerTop - anchorOffsetEnd + dwellAbove);
           break;
@@ -289,32 +357,52 @@ const runPass = (
             ? measurement.end.rawTop
             : measurements[measurement.endTriggerIndex].triggerTop;
 
-          endTop = rawTop === null
-            ? 0
-            : rawTop + gapsBeforeEndAnchor(
+          if (rawTop === null) {
+            endTop = 0;
+          } else {
+            const anchorPosition = rawTop
+              + resolveElementAnchor(measurement.end.clause, measurement.endTriggerHeight);
+            const gaps = (w: readonly KnownWindow[], counted?: Set<number>) => gapsBeforeEndAnchor(
               measurements,
-              knownWindows(),
-              rawTop + resolveElementAnchor(measurement.end.clause, measurement.endTriggerHeight),
+              w,
+              anchorPosition,
               rawTop - anchorOffsetEnd,
               measurement.endTriggerEnclosedBy,
               index,
+              measurement.endTriggerIndex,
+              order,
+              counted,
             );
+
+            endTop = rawTop + gaps(knownWindows());
+            recount.runs.push((w) => gaps(w, recount.counted));
+          }
         }
 
         // The window is as long as GSAP's pins would make it, measured from where they would put
         // the start, and opens at freezeStart. An end that falls before that start (endTrigger
         // sitting above trigger, say) collapses to a zero-length window, the same behavior as
         // GSAP ScrollTrigger.
-        const layoutStart = start.mode === 'absolute'
-          ? start.value
-          : measurement.triggerTop - start.anchorOffset + gapsBeforeEndAnchor(
+        let layoutStart: number;
+
+        if (start.mode === 'absolute') {
+          layoutStart = start.value;
+        } else {
+          const gaps = (w: readonly KnownWindow[], counted?: Set<number>) => gapsBeforeEndAnchor(
             measurements,
-            knownWindows(),
+            w,
             measurement.triggerTop + start.elementAnchor,
             measurement.triggerTop - start.anchorOffset,
             measurement.triggerEnclosedBy,
             index,
+            index,
+            order,
+            counted,
           );
+
+          layoutStart = measurement.triggerTop - start.anchorOffset + gaps(knownWindows());
+          recount.runs.push((w) => gaps(w, recount.counted));
+        }
 
         freezeEnd = freezeStart + Math.max(0, endTop - anchorOffsetEnd - layoutStart);
         break;
@@ -328,6 +416,17 @@ const runPass = (
 
     return plan;
   });
+
+  if (record) {
+    const windows = knownWindows();
+
+    recounts.forEach(({ index, counted, runs }) => {
+      runs.forEach((run) => run(windows));
+      record(index, counted);
+    });
+  }
+
+  return plans;
 };
 
 // A cover layer's freeze window, from the Scene layers' settled ones. A cover never freezes the
@@ -467,6 +566,73 @@ export const dwellConsumedAt = (
   0,
 );
 
+// Strongly connected components of a dependency graph (i -> k: i depends on k), numbered so that a
+// component comes after every component it depends on.
+const componentsOf = (edges: readonly (readonly number[])[]): number[] => {
+  const visitOrder: number[] = edges.map(() => -1);
+  const lowLink: number[] = edges.map(() => 0);
+  const component: number[] = edges.map(() => -1);
+  const stack: number[] = [];
+  let visited = 0;
+  let components = 0;
+
+  const visit = (v: number) => {
+    visitOrder[v] = visited;
+    lowLink[v] = visited;
+    visited += 1;
+    stack.push(v);
+
+    for (const w of edges[v]) {
+      if (visitOrder[w] === -1) {
+        visit(w);
+        lowLink[v] = Math.min(lowLink[v], lowLink[w]);
+      } else if (component[w] === -1) {
+        lowLink[v] = Math.min(lowLink[v], visitOrder[w]);
+      }
+    }
+
+    if (lowLink[v] === visitOrder[v]) {
+      let w: number;
+
+      do {
+        w = stack.pop()!;
+        component[w] = components;
+      } while (w !== v);
+
+      components += 1;
+    }
+  };
+
+  edges.forEach((_, v) => {
+    if (visitOrder[v] === -1) visit(v);
+  });
+
+  return component;
+};
+
+// The refresh order for layers that never settle: every layer after the ones it counted and after
+// the Scene layers whose triggers hold it, and DOM order within a cycle. Holders first
+// keeps GSAP from growing a trigger by a spacer inside it, which the counting can't express.
+const fallbackOrder = (
+  measurements: readonly LayerMeasurement[],
+  counted: readonly ReadonlySet<number>[],
+): RefreshOrder => {
+  const component = componentsOf(measurements.map(({ triggerEnclosedBy }, i) => [
+    ...counted[i],
+    ...triggerEnclosedBy.filter((m) => m !== i && measurements[m].kind === 'scene'),
+  ]));
+  const rank: number[] = [];
+
+  measurements
+    .map((_, i) => i)
+    .sort((a, b) => component[a] - component[b] || a - b)
+    .forEach((layer, position) => {
+      rank[layer] = position;
+    });
+
+  return { isBefore: (a, b) => rank[a] < rank[b] };
+};
+
 // Finalizes every layer's freeze window and style values, from measurements laid out in DOM order.
 // A single Scene layer settles in one pass. With more, a pass reads the previous pass's plan for
 // every layer it hasn't reached yet (see runPass):
@@ -477,11 +643,13 @@ export const dwellConsumedAt = (
 //   i's start. With that layer's own end reaching past i's trigger, each pass flips the pair
 //   between two answers that straddle the one they share, so a pass that returns to the answer
 //   before last feeds the next one their average instead. Two nested layers whose endTriggers
-//   each count the other's dwell never settle and throw.
+//   each count the other's dwell never settle.
 //
 // Re-running the full pass with the previous pass's results settles a chain within two iterations
-// per layer and such a flip within two more; anything still moving after that throws (see
-// freezeWindow.test.ts's DOM-order-scrambled stress test and the flip test beside it).
+// per layer and such a flip within two more (see freezeWindow.test.ts's DOM-order-scrambled stress
+// test and the flip test beside it). Anything still moving after that is planned again in
+// fallbackOrder's refresh order, which only an absolute start that flips what an end counts can
+// keep from settling; planLayers throws then.
 export const planLayers = (
   measurements: readonly LayerMeasurement[],
   deps: PlanDeps,
@@ -517,19 +685,26 @@ export const planLayers = (
     sameValues(a.paddings, b.paddings) && sameValues(a.freezeStarts, b.freezeStarts);
   const average = (a: readonly (number | null)[], b: readonly (number | null)[]) =>
     a.map((value, i) => (value === null ? null : (value + b[i]!) / 2));
-  let plans = runPass(measurements, passDeps, null);
 
-  if (needsConvergence) {
+  // Runs passes until the plans stop changing, or returns null once the budget runs out.
+  const settle = (
+    order: RefreshOrder | null,
+    record: ((index: number, counted: ReadonlySet<number>) => void) | null,
+  ): (LayerPlan | null)[] | null => {
+    let plans = runPass(measurements, passDeps, null, order, record);
+
+    if (!needsConvergence) return plans;
+
     const budget = 2 * measurements.length + 2;
     let fed = stateOf(plans);
     let fedBefore: PreviousPass | null = null;
 
     for (let pass = 0; pass < budget; pass += 1) {
-      plans = runPass(measurements, passDeps, fed);
+      plans = runPass(measurements, passDeps, fed, order, record);
 
       const out = stateOf(plans);
 
-      if (sameState(out, fed)) break;
+      if (sameState(out, fed)) return plans;
 
       const flipped = fedBefore !== null && sameState(out, fedBefore);
 
@@ -540,17 +715,25 @@ export const planLayers = (
             freezeStarts: average(out.freezeStarts, fed.freezeStarts),
           }
         : out;
-
-      if (pass === budget - 1) {
-        throw new Error(
-          'StickyScrollTrigger: could not resolve endTrigger positions: some endTrigger '
-          + 'references form a circular structural dependency that never settles. Point each '
-          + 'endTrigger at an element that doesn\'t depend on it.',
-        );
-      }
     }
+
+    return null;
+  };
+
+  const counted: Set<number>[] = measurements.map(() => new Set());
+  let settled = settle(null, (index, layers) => layers.forEach((k) => counted[index].add(k)));
+
+  if (settled === null) settled = settle(fallbackOrder(measurements, counted), null);
+
+  if (settled === null) {
+    throw new Error(
+      'StickyScrollTrigger: could not resolve endTrigger positions: some endTrigger '
+      + 'references form a circular structural dependency that never settles. Point each '
+      + 'endTrigger at an element that doesn\'t depend on it.',
+    );
   }
 
+  const plans = settled;
   // Each Scene wrapper sits inside the wrappers of the Scene layers after it in DOM order. Sticky
   // offsets add up down the nesting, so it engages late by the dwell of every one of them already
   // frozen, and its sticky top subtracts that dwell to engage at freezeStart.

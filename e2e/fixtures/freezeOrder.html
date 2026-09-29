@@ -83,6 +83,39 @@
             + `<section id="outer" style="height:800px;padding-top:200px">${block(0, 'deep')}</section>`,
           scenes: [['#outer', 'top top', null], ['#deep', 'top bottom', null]],
         },
+        // #inner sits inside #outer, and each ends at a marker past the other's trigger, so each
+        // end counts the other's dwell and no layout satisfies both.
+        nestedMutualEnds: {
+          html: block(1000)
+            + `<section id="outer" style="height:1000px;padding-top:200px">${block(100, 'inner')}</section>`
+            + block(300) + block(0, 'outerEnd') + block(200) + block(0, 'innerEnd'),
+          scenes: [
+            ['#outer', 'top top', 'top top', '#outerEnd'],
+            ['#inner', 'top center', 'top top', '#innerEnd'],
+          ],
+        },
+        // The same, with #outer's marker inside #outer.
+        nestedMutualEndsInside: {
+          html: block(1000)
+            + `<section id="outer" style="height:1000px;padding-top:200px">${block(100, 'inner')}${block(500)}${block(0, 'outerEnd')}</section>`
+            + block(500) + block(0, 'innerEnd'),
+          scenes: [
+            ['#outer', 'top top', 'top top', '#outerEnd'],
+            ['#inner', 'top center', 'top top', '#innerEnd'],
+          ],
+        },
+        // #outer and #second end past each other's triggers, and #second's spacer, inside #outer,
+        // doesn't reach #outer's marker once #outer is refreshed first.
+        nestedMutualEndsThree: {
+          html: block(2252)
+            + `<section id="outer" style="height:548px;padding-top:303px">${block(50, 'first')}${block(26)}${block(128, 'second')}</section>`
+            + block(1818) + block(0, 'secondEnd') + block(445) + block(205, 'outerEnd'),
+          scenes: [
+            ['#outer', 'top top', 'top bottom', '#outerEnd'],
+            ['#first', 'top top', '+=293'],
+            ['#second', 'bottom bottom', 'top top', '#secondEnd'],
+          ],
+        },
       };
       const layout = layouts[new URLSearchParams(location.search).get('layout')];
 
@@ -118,6 +151,7 @@
         };
         const reported = scenes.map((scene) => ({
           selector: scene.selector,
+          start: scene.start,
           window: [scene.vars.start(), scene.vars.end()],
           edge: edgeAt(scene, scene.vars.start()),
         }));

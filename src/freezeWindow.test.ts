@@ -664,6 +664,132 @@ describe('position-clause end', () => {
   });
 });
 
+// Fallback results are raw GSAP 3.15.0's, with pins created in the fallback order, measured on
+// chromium, webkit and firefox at a 720px viewport.
+describe('endTriggers that never settle', () => {
+  const nestedPair = (tEnd: number, tEndEnclosedBy: number[], sEnd: LayerMeasurement['end']) => [
+    scene({
+      triggerTop: 1000,
+      triggerHeight: 1000,
+      triggerEnclosedBy: [0],
+      end: { mode: 'clause', clause: 'top top', rawTop: tEnd, measureLive: false },
+      endTriggerIsSelf: false,
+      endTriggerEnclosedBy: tEndEnclosedBy,
+    }),
+    scene({
+      triggerTop: 1200,
+      triggerHeight: 100,
+      triggerEnclosedBy: [0, 1],
+      start: clauseStart(360),
+      end: sEnd,
+      endTriggerIsSelf: sEnd.mode === 'dwell',
+    }),
+  ];
+  const markerAt2500: LayerMeasurement['end']
+    = { mode: 'clause', clause: 'top top', rawTop: 2500, measureLive: false };
+  const paddings = (measurements: LayerMeasurement[]) =>
+    run(measurements, { viewportHeight: 720 }).plans.map(({ paddingHeight }) => paddingHeight);
+
+  // S sits inside T, and each end's marker lies past the other's trigger, so each end counts the
+  // other's dwell. Refreshed with T first, T's end doesn't count S.
+  it('resolves two nested layers whose ends count each other in the order GSAP would refresh them', () => {
+    expect(paddings(nestedPair(2300, [], markerAt2500))).toEqual([1300, 2960]);
+    expect(paddings(nestedPair(1800, [0], markerAt2500))).toEqual([800, 2460]);
+  });
+
+  it('leaves a pair that settles as it was', () => {
+    expect(paddings(nestedPair(1800, [0], dwell(500)))).toEqual([1300, 500]);
+  });
+
+  // S1 and S2 sit inside T. T was refreshed first, so S2's spacer grows T but stops short of T's
+  // end marker. Counting it would make S2's padding 4670.
+  it('keeps a spacer inside an earlier-refreshed layer from reaching an end outside it', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 2252,
+        triggerHeight: 548,
+        triggerEnclosedBy: [0],
+        end: { mode: 'clause', clause: 'top bottom', rawTop: 5063, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 205,
+      }),
+      scene({ triggerTop: 2555, triggerHeight: 50, triggerEnclosedBy: [0, 1], end: dwell(293) }),
+      scene({
+        triggerTop: 2631,
+        triggerHeight: 128,
+        triggerEnclosedBy: [0, 2],
+        start: clauseStart(592, 128),
+        end: { mode: 'clause', clause: 'top top', rawTop: 4618, measureLive: false },
+        endTriggerIsSelf: false,
+      }),
+    ], { viewportHeight: 720 });
+
+    expect(plans.map(({ freezeStart, freezeEnd }) => [freezeStart, freezeEnd]))
+      .toEqual([[6629, 8720], [9023, 9316], [2039, 6416]]);
+  });
+
+  // The fallback order is 3, 0, 1, 2, not DOM order. Layers 1 and 2 sit inside layer 0, which is
+  // refreshed before them; counting them toward layer 2's marker outside it would make layer 2's
+  // padding 2673.
+  it('refreshes layers after the ones they count, whatever the DOM order', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 1883,
+        triggerHeight: 311,
+        triggerEnclosedBy: [0],
+        end: { mode: 'clause', clause: 'top bottom', rawTop: 2717, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 186,
+        endTriggerEnclosedBy: [3],
+      }),
+      scene({
+        triggerTop: 1974,
+        triggerHeight: 171,
+        triggerEnclosedBy: [0, 1],
+        end: clause('bottom top'),
+        endTriggerHeight: 171,
+      }),
+      scene({
+        triggerTop: 1993,
+        triggerHeight: 149,
+        triggerEnclosedBy: [0, 1, 2],
+        start: clauseStart(720),
+        end: { mode: 'clause', clause: 'bottom bottom', rawTop: 3692, measureLive: false },
+        endTriggerIsSelf: false,
+      }),
+      scene({
+        triggerTop: 2457,
+        triggerHeight: 576,
+        triggerEnclosedBy: [3],
+        start: clauseStart(360),
+        end: dwell(689),
+      }),
+    ], { viewportHeight: 720 });
+
+    expect(plans.map(({ freezeStart, freezeEnd }) => [freezeStart, freezeEnd]))
+      .toEqual([[4385, 4499], [4590, 4761], [1273, 3775], [4884, 5573]]);
+  });
+
+  // Layer 1's end counts layer 0 only while layer 0's absolute start, less layer 1's window
+  // before it, comes before 1100. Counting it moves layer 1's window past 1500, which stops it
+  // counting, whatever the refresh order.
+  it('throws when an absolute start keeps flipping what an end counts', () => {
+    expect(() => run([
+      scene({ triggerTop: 500, triggerHeight: 2000, start: absoluteStart(1500), end: dwell(1000) }),
+      scene({
+        triggerTop: 3000,
+        triggerHeight: 500,
+        start: absoluteStart(100),
+        end: clause('center center'),
+        endTriggerIsSelf: false,
+        endTriggerIndex: 0,
+        endTriggerHeight: 2000,
+        endTriggerEnclosedBy: [0],
+      }),
+    ])).toThrow(/circular structural dependency/);
+  });
+});
+
 // Every cover point is where its element reaches the anchor with no dwell, plus the dwell of each
 // Scene layer that freezes before it gets there, whatever the DOM order.
 describe('cover layer freeze window', () => {
