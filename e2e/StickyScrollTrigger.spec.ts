@@ -272,7 +272,8 @@ test('an unregistered endTrigger inside a scene\'s trigger doesn\'t count a dwel
 
 // .second ends where .first's bottom edge would leave the top of the viewport without .second's
 // own dwell, and .first's own freeze delays that edge. Left out, the end fell before .second's
-// start and the window collapsed.
+// start and the window collapsed, as it does under plain GSAP pins (1680-1680); GSAP's pins with
+// `pinnedContainer: '.first'` give 1680-1900, the same as here.
 test('a registered endTrigger counts its own dwell when it freezes before the point the end names', async ({
   page,
 }) => {

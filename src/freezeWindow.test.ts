@@ -333,7 +333,9 @@ describe('position-clause end', () => {
   });
 
   // S1 freezes at 1000, before its own bottom edge (raw 1400) reaches the top, so that edge gets
-  // there one S1 dwell late, the same as for any element S1's trigger encloses.
+  // there one S1 dwell late, the same as for any element S1's trigger encloses. Plain GSAP pins
+  // collapse this window to its start; with pinnedContainer set to S1's trigger they give this end
+  // (measured 1680-1900 in the e2e registeredEndTrigger fixture).
   it('counts a registered endTrigger\'s own dwell when it freezes before the point the end names', () => {
     const { plans } = run([
       scene({ triggerTop: 1000, triggerHeight: 400, end: dwell(500) }),
@@ -403,23 +405,67 @@ describe('position-clause end', () => {
     expect(plans[1].freezeStart).toBe(2900); // 1000 + 700 + 1200
   });
 
-  // S2's 'top bottom' freezes it before the endTrigger reaches the top, but its pin spacer would
-  // sit after the endTrigger, so GSAP's end wouldn't move.
-  // A pin holds what's inside it while engaged: S2 freezes at 1000, before the endTrigger 500px
-  // into its trigger reaches the top at 1500.
+  // A pin holds what's inside it while engaged: S2 freezes at 2000, before the endTrigger 500px
+  // into its trigger reaches the top at 2500. S1's window is 1500 long under plain GSAP pins and
+  // with pinnedContainer (S2 pins after S1's start); the arrival distance under GSAP's pins is
+  // 2000. S1 starts at 1000 because GSAP shifts a pin starting at 0 by -0.001.
   it('counts the dwell of a Scene layer that encloses the endTrigger and freezes first', () => {
     const { plans } = run([
       scene({
-        triggerTop: 0,
-        end: { mode: 'clause', clause: 'top top', rawTop: 1500, measureLive: false },
+        triggerTop: 1000,
+        triggerHeight: 100,
+        end: { mode: 'clause', clause: 'top top', rawTop: 2500, measureLive: false },
         endTriggerIsSelf: false,
         endTriggerIndex: null,
         endTriggerEnclosedBy: [1],
       }),
-      scene({ triggerTop: 1000, triggerHeight: 1000, end: dwell(500) }),
+      scene({ triggerTop: 2000, triggerHeight: 1000, end: dwell(500) }),
     ]);
 
-    expect(plans[0].freezeEnd).toBe(2000); // 1500 + 500
+    expect(plans[0].freezeStart).toBe(1000);
+    expect(plans[0].freezeEnd).toBe(3000); // 2500 + 500
+  });
+
+  // A encloses B, which freezes at 1834, before the endTrigger 481px into B reaches the top at
+  // 2315. A's window is 764 long under plain GSAP pins and with pinnedContainer; the arrival
+  // distance under GSAP's pins is 1437.
+  it('counts the dwell of a Scene layer inside trigger that encloses the endTrigger and freezes first', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 1551,
+        triggerHeight: 1552,
+        end: { mode: 'clause', clause: 'top top', rawTop: 2315, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerIndex: null,
+        endTriggerEnclosedBy: [0, 1],
+      }),
+      scene({ triggerTop: 1834, triggerHeight: 935, triggerEnclosedBy: [0, 1], end: dwell(673) }),
+    ], { viewportHeight: 720 });
+
+    expect(plans[0].freezeStart).toBe(1551);
+    expect(plans[0].freezeEnd).toBe(2988); // 2315 + 673
+  });
+
+  // E ('top center') freezes at 1821, before S ('center center') reaches its anchor at 1907, so
+  // E's dwell delays S's start (the rule's triggerEnclosedBy side) and its end at the marker after
+  // E. Plain GSAP pins start S early, making its window 1976 long; with pinnedContainer it's 1187,
+  // the same as the arrival distance under GSAP's pins.
+  it('counts an enclosing Scene layer that freezes first toward both start and end', () => {
+    const { plans } = run([
+      scene({ triggerTop: 2181, triggerHeight: 291, start: clauseStart(360), end: dwell(789) }),
+      scene({
+        triggerTop: 2242,
+        triggerHeight: 50,
+        triggerEnclosedBy: [0, 1],
+        start: clauseStart(335, 25),
+        end: { mode: 'clause', clause: 'top bottom', rawTop: 3814, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerIndex: null,
+      }),
+    ], { viewportHeight: 720 });
+
+    expect(plans[1].freezeStart).toBe(2696); // 2242 - 335 + 789
+    expect(plans[1].freezeEnd).toBe(3883); // 3814 - 720 + 789
   });
 
   // S2's trigger sits inside the 1000px endTrigger, above its bottom edge, so GSAP's spacer for S2

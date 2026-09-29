@@ -163,6 +163,8 @@ Registers a layer that pins a scene and advances its effect, and returns `Scroll
 | `pin` / `pinSpacing` / `anticipatePin` / `pinnedContainer` / `pinReparent` / `pinSpacer` / `pinType` | Pinning is handled by `position:sticky`, not GSAP pinning, so these have no effect   |
 | `horizontal` / `scroller` / `containerAnimation`                                                     | This module assumes vertical, window-based scrolling; setting these shifts positions |
 
+Nested Scene layers are accounted for automatically, so `pinnedContainer` isn't needed (see [End syntax](#end-syntax)).
+
 You can specify `onKill`, `invalidateOnRefresh`, and `onRefreshInit`; the module also uses them internally. `invalidateOnRefresh` defaults to `true` (GSAP defaults to `false`) so function-valued tween props are re-measured on refresh, and an explicit value is respected. Freeze-window tracking is independent of the flag, so `invalidateOnRefresh: false` won't break it.
 
 | option       | default        | description                                                                                                                                                                                                 |
@@ -496,6 +498,8 @@ One pair can't compose: a `start` whose element token already carries an offset 
 If `endTrigger` points to another registered layer's `trigger`, it's resolved like any other element, by the rules in the next paragraph, and that layer's own `trigger` counts as enclosing it. A forward reference (pointing to a layer later in DOM order) only works from `createOverlapScroll`'s cover layer; a `createStickyTrigger` Scene layer throws instead.
 
 For any `endTrigger` inside the container, registered or not, its raw DOM position is measured directly, then adjusted the way GSAP's own pins would delay it: by the dwell of every other registered Scene layer, including ones registered after this call, whose `trigger` ends above the point on `endTrigger` that `end` names, or encloses `endTrigger` and freezes before that point reaches its viewport anchor. No other scene counts, even one that freezes first.
+
+Counting an enclosing scene departs from plain GSAP pins, which measure a point inside a pinned element as if the pin weren't there, so whichever of `start` and `end` sits inside it lands early by the pin's duration unless `pinnedContainer` names that element. This module finds the nesting itself and counts an enclosing scene the way `pinnedContainer` does, but decides at each point rather than once at `start`, and for every enclosing scene rather than one. So it also counts a scene that freezes after `start` but before the point `end` names arrives, which `pinnedContainer` leaves out.
 
 Some sets of Scene layers have no layout where every `end` agrees with what it counts, such as two nested scenes whose `endTrigger`s each lie past the other's `trigger`. Those resolve the way GSAP's pins would if created in dependency order: each layer after the layers its `end` counts and after the scenes whose `trigger` encloses its own. Each `end` then counts only the layers before it, and a scene enclosed by an earlier one no longer pushes points outside that scene.
 

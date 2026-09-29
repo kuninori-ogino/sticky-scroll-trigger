@@ -8,12 +8,12 @@
  *
  * Two others are resolved in memory instead, by iterating the whole pass to a fixed point. An
  * unregistered endTrigger inside the container depends on the dwell of every Scene layer that
- * would delay it under GSAP's pins, including layers that come later in `measurements` order; a
- * Scene layer's registered endTrigger later in DOM order (a forward reference) depends on that
- * layer's natural position. When endTriggers depend on each other in a cycle that never settles,
- * planLayers falls back to the answer GSAP gives when it refreshes the pins in dependency order
- * (see fallbackOrder). Cover layers are planned last, from the settled Scene windows, since nothing
- * depends on a cover's own window.
+ * would delay it under GSAP's pins with pinnedContainer set, including layers that come later in
+ * `measurements` order; a Scene layer's registered endTrigger later in DOM order (a forward
+ * reference) depends on that layer's natural position. When endTriggers depend on each other in a
+ * cycle that never settles, planLayers falls back to the answer GSAP gives when it refreshes the
+ * pins in dependency order (see fallbackOrder). Cover layers are planned last, from the settled
+ * Scene windows, since nothing depends on a cover's own window.
  */
 
 import { resolveAnchorTop, resolveElementAnchor } from './position';
@@ -117,9 +117,9 @@ const isHeldIn = (
 
 // Whether layer `index`'s dwell comes before the point an end or layout start names
 // (anchorPosition, reaching the viewport anchor at reachedAt, both unpadded), the way GSAP's pins
-// would place it. A Scene layer whose trigger encloses the anchor's element counts only if it
-// freezes first, since a pin holds its contents only while engaged; any other counts if its
-// trigger ends above that point, since its spacer pushes the point down.
+// would place it. A layer whose trigger ends above that point counts, since its spacer pushes the
+// point down. A Scene layer whose trigger encloses the anchor's element counts only if it freezes
+// first, as GSAP's pinnedContainer would count it, but judged at this point rather than at start.
 const countsTowardAnchor = (
   measurements: readonly LayerMeasurement[],
   windows: readonly KnownWindow[],
