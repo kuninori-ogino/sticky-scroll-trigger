@@ -194,9 +194,10 @@ describe('dwell before a layer\'s start', () => {
     expect(plans.map(({ freezeStart }) => freezeStart)).toEqual([380, 1180]);
   });
 
-  // Layer 2 sits inside layer 1 and freezes first. Counted the way GSAP's pins would, each default
-  // end took in the other's dwell, and both windows grew on every pass until refresh() threw.
-  it('keeps a default end as long as its own geometry when nested layers freeze around it', () => {
+  // Layer 2 sits inside layer 1, so under GSAP its spacer grows layer 1's trigger by its 800px
+  // dwell between the 'top top' start and the 'bottom top' end. Layer 1 only encloses layer 2, so
+  // it adds nothing to layer 2's end.
+  it('grows a default end by the dwell of a layer nested inside trigger', () => {
     const { plans } = run([
       scene({ triggerTop: 154, triggerHeight: 82, start: clauseStart(800), end: clause('bottom top'), endTriggerHeight: 82 }),
       scene({
@@ -217,11 +218,12 @@ describe('dwell before a layer\'s start', () => {
     ]);
 
     expect(plans.map(({ freezeStart, freezeEnd }) => [freezeStart, freezeEnd]))
-      .toEqual([[-646, 236], [2367, 3139], [993, 1793]]);
+      .toEqual([[-646, 236], [2367, 3939], [993, 1793]]);
   });
 
   // Layers 1 to 3 sit inside layer 0. Read from the previous pass's windows, layers 1 and 2 each
-  // counted the other as freezing first on alternate passes, and refresh() threw.
+  // counted the other as freezing first on alternate passes, and refresh() threw. Layer 0's default
+  // end also takes in all three dwells (67 + 552 + 132), since their spacers grow its trigger.
   it('orders nested layers by where their triggers reach their anchors', () => {
     const { plans } = run([
       scene({ triggerTop: 173, triggerHeight: 1436, end: clause('bottom top'), endTriggerHeight: 1436 }),
@@ -243,7 +245,7 @@ describe('dwell before a layer\'s start', () => {
     ]);
 
     expect(plans.map(({ freezeStart, freezeEnd }) => [freezeStart, freezeEnd]))
-      .toEqual([[173, 1609], [1666, 1733], [1887, 2439], [1734, 1866]]);
+      .toEqual([[173, 2360], [2417, 2484], [2638, 3190], [2485, 2617]]);
   });
 
   it('a cover layer never increases document height, so it never shifts later layers', () => {
@@ -299,9 +301,10 @@ describe('position-clause end', () => {
       .toEqual([[850, 1150], [100, 800]]);
   });
 
-  // Layer 1 sits inside layer 0. Counted the way GSAP's pins would, each end took in the other's
-  // dwell, and both windows grew on every pass until refresh() threw.
-  it('leaves nested layers out of an absolute start\'s end at trigger itself', () => {
+  // Layer 1 sits inside layer 0, so its 1300px dwell grows layer 0's trigger under GSAP and pushes
+  // layer 0's 'bottom top' end down by all of it. Layer 0 only encloses layer 1, so layer 1's end
+  // stays put.
+  it('counts layers nested inside trigger, not around it, toward an absolute start\'s end at trigger itself', () => {
     const { plans } = run([
       scene({ triggerHeight: 3000, start: absoluteStart(100), end: clause('bottom top'), endTriggerHeight: 3000 }),
       scene({
@@ -315,7 +318,7 @@ describe('position-clause end', () => {
     ]);
 
     expect(plans.map(({ freezeStart, freezeEnd }) => [freezeStart, freezeEnd]))
-      .toEqual([[100, 3000], [200, 1500]]);
+      .toEqual([[100, 4300], [200, 1500]]);
   });
 
   it('uses its own natural position as the reference when endTrigger is trigger itself', () => {
@@ -808,6 +811,18 @@ describe('spacers above, inside and below the element a point is on', () => {
     expect(plans[0].paddingHeight).toBe(1250); // 2200 - 1100 + 300 / 2
   });
 
+  // Layer 1's trigger fills layer 0's exactly. Layer 1's spacer grows layer 0's trigger, but layer
+  // 0's wraps layer 1's from outside, so only layer 0's default end takes in the other's dwell.
+  it('counts a trigger filling its encloser toward the encloser\'s self end only', () => {
+    const box = { triggerTop: 1000, triggerHeight: 800, end: clause('bottom top'), endTriggerHeight: 800 };
+    const { plans } = run([
+      scene({ ...box, triggerEnclosedBy: [0] }),
+      scene({ ...box, triggerEnclosedBy: [0, 1] }),
+    ], vh720);
+
+    expect(plans.map(({ paddingHeight }) => paddingHeight)).toEqual([1600, 800]);
+  });
+
   // A zero-height trigger with a 300px dwell on an edge of the 1000/800 endTrigger, as a child or a
   // sibling, which only the DOM tells apart. Values are GSAP's own.
   it.each([
@@ -830,6 +845,83 @@ describe('spacers above, inside and below the element a point is on', () => {
     ], vh720);
 
     expect(plans[0].paddingHeight).toBe(markerEnd);
+  });
+
+  // The same edges of a 1000/800 trigger ending at 'bottom top' itself, from a 'top top' start and
+  // from an absolute one at 950. Values are GSAP's own.
+  it.each([
+    ['a child at the top edge', 1000, true, 1100, 1150],
+    ['a sibling right before', 1000, false, 800, 1150],
+    ['a child at the bottom edge', 1800, true, 1100, 1150],
+    ['a sibling right after', 1800, false, 800, 850],
+  ])('reads %s from the DOM for an end on trigger itself', (_, kTop, inside, clauseEnd, absoluteEnd) => {
+    const padding = (start: LayerMeasurement['start']) => run([
+      scene({
+        triggerTop: 1000,
+        triggerHeight: 800,
+        triggerEnclosedBy: [0],
+        start,
+        end: clause('bottom top'),
+        endTriggerHeight: 800,
+      }),
+      scene({ triggerTop: kTop, triggerEnclosedBy: inside ? [0, 1] : [1], end: dwell(300) }),
+    ], vh720).plans[0].paddingHeight;
+
+    expect(padding(clauseStart(0))).toBe(clauseEnd);
+    expect(padding(absoluteStart(950))).toBe(absoluteEnd);
+  });
+
+  // The same point, written as a self end and as a marker at trigger's bottom edge.
+  it('gives a self end the window an endTrigger at the same point gets', () => {
+    const inner = scene({
+      triggerTop: 1200,
+      triggerHeight: 100,
+      triggerEnclosedBy: [0, 1],
+      end: dwell(300),
+    });
+    const outer = { triggerTop: 1000, triggerHeight: 800, triggerEnclosedBy: [0] };
+    const self = run([
+      scene({ ...outer, end: clause('bottom top'), endTriggerHeight: 800 }),
+      inner,
+    ], vh720);
+    const marker = run([
+      scene({
+        ...outer,
+        end: { mode: 'clause', clause: 'top top', rawTop: 1800, measureLive: false },
+        endTriggerIsSelf: false,
+      }),
+      inner,
+    ], vh720);
+
+    expect(self.plans[0].paddingHeight).toBe(1100);
+    expect(marker.plans[0].paddingHeight).toBe(1100);
+  });
+
+  // Layer 0's 'center center' self end takes half of layer 1's dwell, and layer 1's marker past
+  // layer 0 takes all of layer 0's: x = (381.5 + x) / 2 - 122.5, so 136.5 and 518. Each pass
+  // halves the gap, which 2n + 2 passes don't close; planLayers then fell back and collapsed
+  // layer 0's window.
+  it('settles a pair that converges slowly within the first settle\'s budget', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 1864,
+        triggerHeight: 475,
+        triggerEnclosedBy: [0],
+        end: clause('center center'),
+        endTriggerHeight: 475,
+      }),
+      scene({
+        triggerTop: 2127,
+        triggerHeight: 173,
+        triggerEnclosedBy: [0, 1],
+        start: clauseStart(273.5, 0.5),
+        end: { mode: 'clause', clause: 'center center', rawTop: 2595, measureLive: false },
+        endTriggerIsSelf: false,
+      }),
+    ], vh720);
+
+    expect(plans[0].paddingHeight).toBeCloseTo(136.5, 1);
+    expect(plans[1].paddingHeight).toBeCloseTo(518, 1);
   });
 });
 

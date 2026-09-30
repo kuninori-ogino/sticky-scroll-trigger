@@ -859,9 +859,10 @@ export default class StickyScrollTrigger {
   // - start (ScrollTrigger.js:1339, `vars.start || (... pin ? "0 0" : "0 100%")`): trigger's own
   //   top reaching the viewport's top.
   // - end (ScrollTrigger.js:1401, `parsedEnd || (parsedEndTrigger ? "100% 0" : max)`): endTrigger's
-  //   own bottom edge reaching the viewport's top edge, so dwell for endTrigger's own height rather
-  //   than a fixed distance. parsedEndTrigger defaults to trigger itself and so is always truthy,
-  //   which makes "100% 0" GSAP's real default whether or not pinning is used.
+  //   own bottom edge reaching the viewport's top edge, so dwell for endTrigger's own height plus
+  //   the dwell of the Scene layers nested inside it, rather than a fixed distance.
+  //   parsedEndTrigger defaults to trigger itself and so is always truthy, which makes "100% 0"
+  //   GSAP's real default whether or not pinning is used.
   createStickyTrigger({
     trigger: triggerInput,
     start = '0 0',

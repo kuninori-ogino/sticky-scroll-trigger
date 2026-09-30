@@ -372,6 +372,28 @@ for (const layout of [
   });
 }
 
+// A default end takes in the dwell of the scenes nested inside trigger, and a self end and a
+// marker at the same point get the same window. Window lengths are GSAP's own, created
+// inner-first; nested starts aren't, since plain pins place a point inside a pinned element early.
+for (const [layout, expected] of [
+  ['twoLevels', [[1000, 1900], [2100, 2200]]],
+  ['threeLevels', [[1000, 3000], [3200, 3900], [4100, 4200]]],
+  ['selfEnd', [[1000, 2100], [2300, 2600]]],
+  ['markerEnd', [[1000, 2100], [2300, 2600]]],
+] as const) {
+  test(`nested scenes lengthen the ends that hold them (${layout})`, async ({ page }) => {
+    await page.goto(`/fixtures/nestedDefaults.html?layout=${layout}`);
+
+    type Result = { windows: [number, number][]; stillRuns: [number, number][] };
+
+    const { windows, stillRuns } = await page.evaluate(() =>
+      (window as unknown as { __nestedDefaults: () => Result }).__nestedDefaults());
+
+    expect(windows).toEqual(expected);
+    expect(stillRuns).toEqual(windows);
+  });
+}
+
 // A cover layer's window counts a Scene layer's dwell only when the scene freezes first. Counted by
 // DOM order, insideTallScene ran 500px late and midRise ended 500px early.
 for (const layout of ['insideTallScene', 'midRise', 'handover']) {

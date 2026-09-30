@@ -341,13 +341,32 @@ const runPass = (
         );
 
         // Nothing inside the container moves during a freeze, so trigger reaches its end anchor the
-        // same scroll distance after its start anchor however much freezes around it. An absolute
-        // start has no anchor on trigger, so its end moves only by the spacers GSAP would put above
-        // trigger: the dwell of every layer ending above it. Layers nested in or around trigger
-        // count in neither case.
+        // same scroll distance after its start anchor, plus what the spacers of the Scene layers
+        // nested inside trigger add to trigger's height between the two anchors. An absolute
+        // start has no anchor on trigger, so its end also moves by the spacers GSAP would put
+        // above trigger: the dwell of every layer ending above it. Layers around trigger count in
+        // neither case.
         if (measurement.endTriggerIsSelf) {
+          const nests = nestedIn(measurements, index);
+          const weight = resolveElementFraction(measurement.end.clause)
+            - (start.mode === 'clause' ? start.elementFraction : 0);
+          const dwellInside = measurements.reduce((total, other, k) => {
+            if (
+              weight === 0
+              || other.kind !== 'scene'
+              || !nests.includes(k)
+              || (order && (order.isBefore(index, k)
+                || isHeldIn(measurements, k, measurement.triggerEnclosedBy, index, order)))
+            ) return total;
+
+            recount.counted.add(k);
+
+            return total + weight * paddingOf(k);
+          }, 0);
+
           if (start.mode === 'clause') {
-            freezeEnd = freezeStart + Math.max(0, start.anchorOffset - anchorOffsetEnd);
+            freezeEnd = freezeStart
+              + Math.max(0, start.anchorOffset - anchorOffsetEnd + dwellInside);
             break;
           }
 
@@ -355,6 +374,7 @@ const runPass = (
             if (
               k === index
               || other.kind !== 'scene'
+              || nests.includes(k)
               || other.triggerTop + other.triggerHeight > measurement.triggerTop + TIE_TOLERANCE_PX
               || (order && (order.isBefore(index, k)
                 || isHeldIn(measurements, k, measurement.triggerEnclosedBy, index, order)))
@@ -365,7 +385,10 @@ const runPass = (
             return total + paddingOf(k);
           }, 0);
 
-          freezeEnd = Math.max(freezeStart, measurement.triggerTop - anchorOffsetEnd + dwellAbove);
+          freezeEnd = Math.max(
+            freezeStart,
+            measurement.triggerTop - anchorOffsetEnd + dwellAbove + dwellInside,
+          );
           break;
         }
 

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>nestedDefaults fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      section {
+        box-sizing: border-box;
+      }
+      .tail {
+        height: 400vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root"></div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const block = (height, id = '', inner = '') =>
+        `<section${id ? ` id="${id}"` : ''} style="height:${height}px">${inner}</section>`;
+      // Auto height, so the scenes inside grow it as they would under GSAP's pins.
+      const nested = (id, inner) =>
+        `<section id="${id}" style="padding-top:200px">${inner}</section>`;
+      // 800px tall, with #inner 200px in.
+      const outer = nested('outer', block(100, 'inner') + block(500));
+
+      // Each layout lists its scenes as [selector, end, endTrigger]; end null takes the default,
+      // and every start is 'top top'.
+      const layouts = {
+        // Two levels, both on the default end.
+        twoLevels: {
+          html: block(1000) + outer,
+          scenes: [['#outer', null], ['#inner', null]],
+        },
+        // Three levels, all on the default end.
+        threeLevels: {
+          html: block(1000)
+            + nested('a', nested('b', block(100, 'c') + block(300)) + block(400)),
+          scenes: [['#a', null], ['#b', null], ['#c', null]],
+        },
+        // #outer's default end, with #inner dwelling 300px.
+        selfEnd: {
+          html: block(1000) + outer,
+          scenes: [['#outer', null], ['#inner', '+=300']],
+        },
+        // The same point as selfEnd's, through a marker at #outer's bottom edge.
+        markerEnd: {
+          html: block(1000) + outer + block(0, 'marker'),
+          scenes: [['#outer', 'top top', '#marker'], ['#inner', '+=300']],
+        },
+      };
+      const layout = layouts[new URLSearchParams(location.search).get('layout')];
+      const root = document.querySelector('.root');
+
+      root.innerHTML = layout.html;
+
+      const sticky = new StickyScrollTrigger(root);
+      const scenes = layout.scenes.map(([selector, end, endTrigger]) => sticky.createStickyTrigger({
+        trigger: selector,
+        start: 'top top',
+        ...(end ? { end } : {}),
+        ...(endTrigger ? { endTrigger } : {}),
+      }));
+
+      sticky.refresh();
+
+      // The reported windows, and the scroll ranges over which the page actually stands still.
+      window.__nestedDefaults = () => {
+        const probe = root.firstElementChild;
+        const max = document.documentElement.scrollHeight - window.innerHeight;
+        const stillRuns = [];
+        let previous = null;
+        let runStart = null;
+
+        for (let scroll = 0; scroll <= max; scroll += 1) {
+          window.scrollTo(0, scroll);
+
+          const top = probe.getBoundingClientRect().top;
+
+          if (previous !== null && top === previous) runStart ??= scroll - 1;
+          else if (runStart !== null) {
+            stillRuns.push([runStart, scroll - 1]);
+            runStart = null;
+          }
+
+          previous = top;
+        }
+
+        return { windows: scenes.map((vars) => [vars.start(), vars.end()]), stillRuns };
+      };
+    </script>
+  </body>
+</html>
