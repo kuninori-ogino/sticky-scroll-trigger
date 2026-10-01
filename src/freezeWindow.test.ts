@@ -1029,11 +1029,11 @@ describe('endTriggers that never settle', () => {
       .toEqual([[4385, 4499], [4590, 4761], [1273, 3775], [4884, 5573]]);
   });
 
-  // Layer 1's end counts layer 0 only while layer 0's absolute start, less layer 1's window
-  // before it, comes before 1100. Counting it moves layer 1's window past 1500, which stops it
-  // counting, whatever the refresh order.
-  it('throws when an absolute start keeps flipping what an end counts', () => {
-    expect(() => run([
+  // Layer 0 freezes at 1500, after the center of its trigger reaches the center of the viewport
+  // (1140), so layer 1's end doesn't count it, however long layer 1's own window is. GSAP gives
+  // 1039.5-1040.1.
+  it('leaves an end\'s own window out of an enclosing absolute start', () => {
+    const { plans } = run([
       scene({ triggerTop: 500, triggerHeight: 2000, start: absoluteStart(1500), end: dwell(1000) }),
       scene({
         triggerTop: 3000,
@@ -1045,7 +1045,82 @@ describe('endTriggers that never settle', () => {
         endTriggerHeight: 2000,
         endTriggerEnclosedBy: [0],
       }),
-    ])).toThrow(/circular structural dependency/);
+    ], { viewportHeight: 720 });
+
+    expect(plans[1]).toMatchObject({ freezeStart: 100, freezeEnd: 1140 });
+  });
+
+  // These settle only in the refresh order [2, 0, 1]. Layer 0's end doesn't count layer 2, which
+  // freezes at 3796, after the center of layer 0's marker arrives (2711.5). Layer 1 isn't refreshed
+  // yet, so its window doesn't move that start. GSAP pins created in that order give 209, 2619 and
+  // 523, the 209 rounding the odd-height marker's center.
+  it('leaves layers later in the refresh order out of an enclosing absolute start', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 2265,
+        triggerHeight: 411,
+        triggerEnclosedBy: [0],
+        start: absoluteStart(2503),
+        end: { mode: 'clause', clause: 'center center', rawTop: 2981, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 181,
+        endTriggerEnclosedBy: [2],
+      }),
+      scene({
+        triggerTop: 2414,
+        triggerHeight: 50,
+        triggerEnclosedBy: [0, 1],
+        start: absoluteStart(1168),
+        end: { mode: 'clause', clause: 'top bottom', rawTop: 4298, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerEnclosedBy: [2],
+      }),
+      scene({
+        triggerTop: 2898,
+        triggerHeight: 1595,
+        triggerEnclosedBy: [2],
+        start: absoluteStart(3796),
+        end: dwell(523),
+      }),
+    ], { viewportHeight: 720 });
+
+    expect(plans.map(({ freezeStart, freezeEnd }) => [freezeStart, freezeEnd]))
+      .toEqual([[2503, 2711.5], [1168, 3786.5], [3796, 4319]]);
+  });
+
+  // Layer 2's end counts layer 1 only while layer 0's window closes before 3555, and layer 0
+  // freezes after layer 2, so its start moves with layer 2's padding. A refresh order changes
+  // only durations, never a clause start's freezeStart, so the pair keeps flipping.
+  it('throws when an absolute start keeps flipping what an end counts', () => {
+    expect(() => run([
+      scene({
+        triggerTop: 1854,
+        triggerHeight: 374,
+        triggerEnclosedBy: [0],
+        end: { mode: 'clause', clause: 'top bottom', rawTop: 4260, measureLive: false },
+        endTriggerIsSelf: false,
+      }),
+      scene({
+        triggerTop: 1916,
+        triggerHeight: 50,
+        triggerEnclosedBy: [0, 1],
+        start: absoluteStart(3555),
+        end: { mode: 'clause', clause: 'bottom top', rawTop: 4526, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 281,
+      }),
+      scene({
+        triggerTop: 2066,
+        triggerHeight: 66,
+        triggerEnclosedBy: [0, 2],
+        start: clauseStart(327, 0.5),
+        end: clause('bottom top'),
+        endTriggerIsSelf: false,
+        endTriggerIndex: 1,
+        endTriggerHeight: 50,
+        endTriggerEnclosedBy: [0, 1],
+      }),
+    ], { viewportHeight: 720 })).toThrow(/circular structural dependency/);
   });
 });
 

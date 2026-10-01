@@ -139,6 +139,9 @@ const nestedIn = (measurements: readonly LayerMeasurement[], index: number): num
 // box.fraction, and one below moves nothing. Inside is read from the DOM, since a zero-height
 // trigger on the element's edge can sit on either side. A Scene layer enclosing the element counts
 // in full only if it freezes first, as pinnedContainer would count it, but judged at this point.
+// An absolute start is placed by the windows that close before it, except ownIndex's (GSAP
+// measures a point with its own pin reverted) and, under a refresh order, those of the layers after
+// ownIndex, which have no spacer yet.
 const anchorShare = (
   measurements: readonly LayerMeasurement[],
   windows: readonly KnownWindow[],
@@ -149,13 +152,17 @@ const anchorShare = (
   enclosedBy: readonly number[],
   anchorElement: number | null,
   order: RefreshOrder | null,
+  ownIndex: number,
 ): number => {
   const measurement = measurements[index];
 
   if (enclosedBy.includes(index)) {
     const unpaddedFreezeStart = measurement.start.mode === 'absolute'
       ? freezeStart - windows.reduce((earlier, other) => (
-        other.index !== index && other.freezeEnd <= freezeStart + TIE_TOLERANCE_PX
+        other.index !== index
+        && other.index !== ownIndex
+        && !(order && order.isBefore(ownIndex, other.index))
+        && other.freezeEnd <= freezeStart + TIE_TOLERANCE_PX
           ? earlier + other.freezeEnd - other.freezeStart
           : earlier
       ), 0)
@@ -188,6 +195,7 @@ const gapsBeforeEndAnchor = (
 
   const weight = anchorShare(
     measurements, windows, index, freezeStart, box, reachedAt, enclosedBy, anchorElement, order,
+    ownIndex,
   );
 
   if (weight === 0) return total;
@@ -704,8 +712,9 @@ const fallbackOrder = (
 // only by that share per pass, so the first settle gets at least 64 passes. A share near 1 needs
 // more (about 90 at 0.9) and gets the fallback below instead, on purpose: its fixed point grows as
 // 1 / (1 - share), into windows many times the page's height. Anything still moving after that is
-// planned again in fallbackOrder's refresh order, which only an absolute start that flips what an
-// end counts can keep from settling; planLayers throws then.
+// planned again in fallbackOrder's refresh order. That fails only when whether an end counts an
+// absolute start depends on a window whose clause start moves with the end's own layer, and
+// planLayers throws then.
 export const planLayers = (
   measurements: readonly LayerMeasurement[],
   deps: PlanDeps,
