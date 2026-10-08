@@ -39,6 +39,8 @@ const scene = (over: Partial<SceneLayer> = {}): SceneLayer => ({
   end: '+=500',
   freezeStart: 0,
   freezeEnd: 0,
+  engagedStart: 0,
+  engagedEnd: 0,
   container: null,
   padding: null,
   ...over,
@@ -53,6 +55,8 @@ const cover = (over: Partial<CoverLayer> = {}): CoverLayer => ({
   end: null,
   freezeStart: 0,
   freezeEnd: 0,
+  engagedStart: 0,
+  engagedEnd: 0,
   ...over,
 });
 // ownIndex and endTriggerIndex are the pair the forward-reference check compares, so they're named

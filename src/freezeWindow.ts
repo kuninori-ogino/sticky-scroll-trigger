@@ -11,9 +11,13 @@
  * would move the point it names under GSAP's pins with pinnedContainer set, including layers that
  * come later in `measurements` order; a Scene layer's registered endTrigger later in DOM order (a
  * forward reference) depends on that layer's natural position. When endTriggers depend on each
- * other in a cycle that never settles, planLayers falls back to the answer GSAP gives when it
- * refreshes the pins in dependency order (see fallbackOrder). Cover layers are planned last, from
- * the settled Scene windows, since nothing depends on a cover's own window.
+ * other, planLayers gives the answer GSAP gives when it refreshes the pins in dependency order
+ * (see fallbackOrder). Cover layers are planned last, from the settled Scene windows, since
+ * nothing depends on a cover's own window.
+ *
+ * A Scene layer's window is what GSAP gets. The page can't freeze twice at once, so where an
+ * absolute start falls inside another window, the page freezes only for the part not already
+ * frozen (engagedStart/engagedEnd), and every page position follows that part.
  */
 
 import { resolveAnchorTop, resolveElementFraction } from './position';
@@ -71,8 +75,13 @@ export interface LayerMeasurement {
 }
 
 export interface LayerPlan {
+  // The window GSAP gets, and so self.start/self.end and the callbacks.
   freezeStart: number;
   freezeEnd: number;
+  // Where the page stands still for this layer. Equal to the window unless an absolute start puts
+  // it inside another Scene layer's, and always equal for a cover layer.
+  engagedStart: number;
+  engagedEnd: number;
   stickyTop: number;
   // Height (px) of a Scene layer's dwell spacer; null for cover layers.
   paddingHeight: number | null;
@@ -92,8 +101,8 @@ export interface PlanDeps {
 }
 
 // A previous full pass's results, used as the "best known so far" answer for anything a pass
-// can't resolve from layers it has already processed this same pass (see gapsBeforeEndAnchor).
-// null before the very first pass.
+// can't resolve from layers it has already processed this same pass (see gapsBeforeEndAnchor), and
+// for every clause start. null before the very first pass.
 interface PreviousPass {
   paddings: readonly (number | null)[];
   freezeStarts: readonly (number | null)[];
@@ -104,6 +113,15 @@ interface PreviousPass {
 // refreshed, so a later layer it holds pushes nothing outside it.
 interface RefreshOrder {
   isBefore: (a: number, b: number) => boolean;
+}
+
+// What a pass reads from the windows the previous pass placed (see placeWindows).
+interface PassWorld {
+  // Where an absolute start enclosing an end's element would freeze with no dwell before it, as
+  // ownIndex's end sees it.
+  unpaddedStart: (index: number, ownIndex: number, freezeStart: number) => number;
+  // The length an absolute end counts, or null for its written position.
+  absoluteEndLength: (index: number) => number | null;
 }
 
 // Whether a trigger refreshed earlier holds layer `index` in, keeping its spacer from reaching an
@@ -139,12 +157,10 @@ const nestedIn = (measurements: readonly LayerMeasurement[], index: number): num
 // box.fraction, and one below moves nothing. Inside is read from the DOM, since a zero-height
 // trigger on the element's edge can sit on either side. A Scene layer enclosing the element counts
 // in full only if it freezes first, as pinnedContainer would count it, but judged at this point.
-// An absolute start is placed by the windows that close before it, except ownIndex's (GSAP
-// measures a point with its own pin reverted) and, under a refresh order, those of the layers after
-// ownIndex, which have no spacer yet.
+// An absolute start is placed as PassWorld's unpaddedStart says.
 const anchorShare = (
   measurements: readonly LayerMeasurement[],
-  windows: readonly KnownWindow[],
+  world: PassWorld,
   index: number,
   freezeStart: number,
   box: AnchorBox,
@@ -158,14 +174,7 @@ const anchorShare = (
 
   if (enclosedBy.includes(index)) {
     const unpaddedFreezeStart = measurement.start.mode === 'absolute'
-      ? freezeStart - windows.reduce((earlier, other) => (
-        other.index !== index
-        && other.index !== ownIndex
-        && !(order && order.isBefore(ownIndex, other.index))
-        && other.freezeEnd <= freezeStart + TIE_TOLERANCE_PX
-          ? earlier + other.freezeEnd - other.freezeStart
-          : earlier
-      ), 0)
+      ? world.unpaddedStart(index, ownIndex, freezeStart)
       : measurement.triggerTop - measurement.start.anchorOffset;
 
     return unpaddedFreezeStart < reachedAt - TIE_TOLERANCE_PX ? 1 : 0;
@@ -182,6 +191,7 @@ const anchorShare = (
 // after it. Adds each layer with a share to `counted` when given.
 const gapsBeforeEndAnchor = (
   measurements: readonly LayerMeasurement[],
+  world: PassWorld,
   windows: readonly KnownWindow[],
   box: AnchorBox,
   reachedAt: number,
@@ -194,7 +204,7 @@ const gapsBeforeEndAnchor = (
   if (index === ownIndex || (order && order.isBefore(ownIndex, index))) return total;
 
   const weight = anchorShare(
-    measurements, windows, index, freezeStart, box, reachedAt, enclosedBy, anchorElement, order,
+    measurements, world, index, freezeStart, box, reachedAt, enclosedBy, anchorElement, order,
     ownIndex,
   );
 
@@ -278,19 +288,23 @@ interface Recount {
 
 // One full sequential pass over every Scene layer, in DOM order. A cover layer gets a null plan
 // here and is planned by planCover once the Scene windows settle. Other layers are read as
-// KnownWindow describes. stickyTop is filled in by planLayers once the windows settle.
+// KnownWindow describes, or only from previous with previousOnly. A clause start is the previous
+// pass's placement of it (the first pass places it itself). Only the window comes out of a pass:
+// planLayers places it and fills in the rest.
 const runPass = (
   measurements: readonly LayerMeasurement[],
   { viewportHeight, measureLiveEndTriggerTop }: PlanDeps,
   previous: PreviousPass | null,
   order: RefreshOrder | null,
+  world: PassWorld,
   record: ((index: number, counted: ReadonlySet<number>) => void) | null,
-): (LayerPlan | null)[] => {
-  const fresh: (LayerPlan | null)[] = [];
+  previousOnly = false,
+): ({ freezeStart: number; freezeEnd: number } | null)[] => {
+  const fresh: ({ freezeStart: number; freezeEnd: number; paddingHeight: number } | null)[] = [];
   const knownWindows = (): KnownWindow[] => measurements.flatMap((measurement, k) => {
     if (measurement.kind !== 'scene') return [];
 
-    const plan = fresh[k];
+    const plan = previousOnly ? null : fresh[k];
 
     if (plan) return [{ index: k, freezeStart: plan.freezeStart, freezeEnd: plan.freezeEnd }];
 
@@ -301,7 +315,8 @@ const runPass = (
       ? []
       : [{ index: k, freezeStart, freezeEnd: freezeStart + paddingHeight }];
   });
-  const paddingOf = (k: number) => fresh[k]?.paddingHeight ?? previous?.paddings[k] ?? 0;
+  const paddingOf = (k: number) =>
+    (previousOnly ? null : fresh[k]?.paddingHeight) ?? previous?.paddings[k] ?? 0;
   // What each layer counted, taken again once the pass is over: counting against knownWindows
   // mid-pass mixes this pass's windows with the previous one's.
   const recounts: Recount[] = [];
@@ -319,7 +334,7 @@ const runPass = (
     const { start } = measurement;
     const freezeStart = start.mode === 'absolute'
       ? start.value
-      : clauseFreezeStart(measurements, index, paddingOf);
+      : (previous?.freezeStarts[index] ?? clauseFreezeStart(measurements, index, paddingOf));
     let freezeEnd: number;
 
     switch (measurement.end.mode) {
@@ -328,10 +343,15 @@ const runPass = (
         break;
 
       // A fixed scroll position unrelated to freezeStart, clamped to it the way GSAP itself does
-      // (`end = Math.max(start, ...)` in ScrollTrigger.js).
-      case 'absolute':
-        freezeEnd = Math.max(freezeStart, measurement.end.value);
+      // (`end = Math.max(start, ...)` in ScrollTrigger.js), or at the length PassWorld gives.
+      case 'absolute': {
+        const length = world.absoluteEndLength(index);
+
+        freezeEnd = length === null
+          ? Math.max(freezeStart, measurement.end.value)
+          : freezeStart + length;
         break;
+      }
 
       // measure.ts's resolveEndSpec only lets a cover layer end at 'auto' or 'max'.
       case 'auto':
@@ -421,6 +441,7 @@ const runPass = (
             };
             const gaps = (w: readonly KnownWindow[], counted?: Set<number>) => gapsBeforeEndAnchor(
               measurements,
+              world,
               w,
               box,
               rawTop - anchorOffsetEnd,
@@ -447,6 +468,7 @@ const runPass = (
         } else {
           const gaps = (w: readonly KnownWindow[], counted?: Set<number>) => gapsBeforeEndAnchor(
             measurements,
+            world,
             w,
             {
               top: measurement.triggerTop,
@@ -470,8 +492,7 @@ const runPass = (
       }
     }
 
-    const paddingHeight = Math.max(0, freezeEnd - freezeStart);
-    const plan = { freezeStart, freezeEnd, stickyTop: 0, paddingHeight };
+    const plan = { freezeStart, freezeEnd, paddingHeight: Math.max(0, freezeEnd - freezeStart) };
 
     fresh[index] = plan;
 
@@ -566,6 +587,8 @@ const planCover = (
   return {
     freezeStart,
     freezeEnd: Math.max(freezeStart, freezeEnd),
+    engagedStart: freezeStart,
+    engagedEnd: Math.max(freezeStart, freezeEnd),
     stickyTop: measurement.start.anchorOffset - (measurement.triggerTop - measurement.wrapperTop),
     paddingHeight: null,
   };
@@ -586,8 +609,7 @@ export const TIE_TOLERANCE_PX = 0.05;
 // With windows that don't overlap, which "nothing moves" already assumes, the layers that count
 // are always the earliest ones. So each layer's test can assume every earlier one counted, making
 // it a comparison against a constant, which scrollMargin.ts can write as CSS without repeating the
-// earlier tests inside the later ones. planLayers can still produce an overlap: an absolute start
-// can fall inside another layer's window.
+// earlier tests inside the later ones. The engaged windows planLayers gives never overlap.
 //
 // A Scene trigger resolving its own start lands exactly on its freezeStart, which the tolerance
 // keeps on the not-counted side.
@@ -671,9 +693,10 @@ const componentsOf = (edges: readonly (readonly number[])[]): number[] => {
   return component;
 };
 
-// The refresh order for layers that never settle: every layer after the ones it counted and after
-// the Scene layers whose triggers hold it, and DOM order within a cycle. Holders first
-// keeps GSAP from growing a trigger by a spacer inside it, which the counting can't express.
+// The refresh order for layers that don't settle with every spacer counted: every layer after the
+// ones it counted in any pass and after the Scene layers whose triggers hold it, and DOM order
+// within a cycle. Holders first keeps GSAP from growing a trigger by a spacer inside it, which the
+// counting can't express.
 const fallbackOrder = (
   measurements: readonly LayerMeasurement[],
   counted: readonly ReadonlySet<number>[],
@@ -694,32 +717,112 @@ const fallbackOrder = (
   return { isBefore: (a, b) => rank[a] < rank[b] };
 };
 
+// Whether two Scene layers depend on each other, directly or through others.
+const hasCycle = (scenes: readonly number[], edges: readonly (readonly number[])[]): boolean => {
+  const component = componentsOf(edges);
+
+  return new Set(scenes.map((k) => component[k])).size < scenes.length;
+};
+
+type Span = [number, number];
+
+// The Scene windows a set of lengths gives, in the order they open: a clause start once its reach
+// point plus the dwell already gone by comes up, an absolute start at its value. At a tie an
+// absolute start opens first, then the earlier reach point, then DOM order. A window is reported at
+// its start and length, or at its written end where atWrittenEnd says so, and engages only past the
+// stretch the page already stands still for, so engaged windows never overlap and only they add to
+// the dwell.
+const placeWindows = (
+  measurements: readonly LayerMeasurement[],
+  scenes: readonly number[],
+  lengths: readonly number[],
+  atWrittenEnd: (index: number) => boolean,
+): { reported: Span[]; engaged: Span[] } => {
+  const rest = new Set(scenes);
+  const reported: Span[] = [];
+  const engaged: Span[] = [];
+  let consumed = 0;
+  let frozenUntil = -Infinity;
+
+  while (rest.size) {
+    let next = -1;
+    let opensAt = 0;
+    let nextIsAbsolute = false;
+    let nextReach = 0;
+
+    for (const k of rest) {
+      const { start, triggerTop } = measurements[k];
+      const isAbsolute = start.mode === 'absolute';
+      const reach = start.mode === 'clause' ? triggerTop - start.anchorOffset : 0;
+      const at = start.mode === 'absolute' ? start.value : reach + consumed;
+      const tied = Math.abs(at - opensAt) <= TIE_TOLERANCE_PX;
+
+      if (
+        next === -1
+        || at < opensAt - TIE_TOLERANCE_PX
+        || (tied && (isAbsolute
+          ? !nextIsAbsolute || at < opensAt
+          : !nextIsAbsolute && reach < nextReach - TIE_TOLERANCE_PX))
+      ) {
+        next = k;
+        opensAt = at;
+        nextIsAbsolute = isAbsolute;
+        nextReach = reach;
+      }
+    }
+
+    const { end } = measurements[next];
+    const reportedEnd = end.mode === 'absolute' && atWrittenEnd(next)
+      ? Math.max(opensAt, end.value)
+      : opensAt + lengths[next];
+    const engagedStart = Math.max(opensAt, frozenUntil);
+    const engagedEnd = Math.max(engagedStart, reportedEnd);
+
+    rest.delete(next);
+    reported[next] = [opensAt, reportedEnd];
+    engaged[next] = [engagedStart, engagedEnd];
+    consumed += engagedEnd - engagedStart;
+    frozenUntil = Math.max(frozenUntil, engagedEnd);
+  }
+
+  return { reported, engaged };
+};
+
+// How a stage of planLayers reads absolute starts and ends (see PassWorld). With endsAsRefreshed,
+// an absolute end counts the length its pin has when refreshed, from its start among the windows
+// present then; without it, its written length. With startsAsRefreshed, an enclosing absolute start
+// is judged among the windows ownIndex's pin sees when refreshed; without it, the reported ones.
+interface Reading {
+  endsAsRefreshed: boolean;
+  startsAsRefreshed: boolean;
+}
+
 // Finalizes every layer's freeze window and style values, from measurements laid out in DOM order.
-// A single Scene layer settles in one pass. With more, a pass reads the previous pass's plan for
-// every layer it hasn't reached yet (see runPass):
+// A single Scene layer settles in one pass. With more, planLayers runs the whole pass (see runPass)
+// until the lengths stop changing, placing the windows each pass gives (see placeWindows) for the
+// next pass to read:
 //
-// - A clause start counts the padding of a layer later in DOM order that freezes first.
-// - A clause with an endTrigger other than trigger needs gapsBeforeEndAnchor's lookup. An
-//   endTrigger above an earlier layer's trigger leaves that layer out even though its dwell moves
-//   i's start. With that layer's own end reaching past i's trigger, each pass flips the pair
-//   between two answers that straddle the one they share, so a pass that returns to the answer
-//   before last feeds the next one their average instead. Two nested layers whose endTriggers
-//   each count the other's dwell never settle.
+// - First every spacer counts. A clause with an endTrigger above an earlier layer's trigger can
+//   flip a pair between two answers that straddle the one they share, so a pass back at the state
+//   before last feeds the two's average. Some answers oscillate slowly before settling, so this
+//   gets at least 64 passes. The answer stands only if no two lengths move each other there,
+//   directly or through others (see activeEdges): GSAP's pins never count each other's dwell in
+//   any creation order, and a pair whose ends count a share of each other would grow toward
+//   1 / (1 - share) times their length.
+// - Otherwise, and when that never settles or runs away, the Scene layers are refreshed in
+//   fallbackOrder's dependency order, reading absolute starts and ends among the reported
+//   windows, as this fallback always has. Where that cycles, a cycle of up to four passes feeds its
+//   average and any other pass feeds half its change. Where it still doesn't settle, absolute
+//   starts and ends are read as each pin sees them when refreshed in that order, which settles
+//   the rest but would move answers the reported reading already gives.
 //
-// Re-running the full pass with the previous pass's results settles a chain within two iterations
-// per layer and such a flip within two more (see freezeWindow.test.ts's DOM-order-scrambled stress
-// test and the flip test beside it). Ends that count a share of each other's dwell close the gap
-// only by that share per pass, so the first settle gets at least 64 passes. A share near 1 needs
-// more (about 90 at 0.9) and gets the fallback below instead, on purpose: its fixed point grows as
-// 1 / (1 - share), into windows many times the page's height. Anything still moving after that is
-// planned again in fallbackOrder's refresh order. That fails only when whether an end counts an
-// absolute start depends on a window whose clause start moves with the end's own layer, and
-// planLayers throws then.
+// planLayers throws if none of these settles.
 export const planLayers = (
   measurements: readonly LayerMeasurement[],
   deps: PlanDeps,
 ): LayerPlan[] => {
-  const needsConvergence = measurements.filter(({ kind }) => kind === 'scene').length > 1;
+  const scenes = measurements.flatMap(({ kind }, k) => (kind === 'scene' ? [k] : []));
+  const needsConvergence = scenes.length > 1;
   // onPlanned, the only thing that writes DOM or layer state, runs once after the loop, so no
   // shared state changes between passes and a live remeasurement gives the same answer every time.
   // Without this cache, an endTrigger outside the container costs one forced-layout read per pass
@@ -739,60 +842,227 @@ export const planLayers = (
       return value;
     },
   };
-  const stateOf = (passPlans: readonly (LayerPlan | null)[]): PreviousPass => ({
-    paddings: passPlans.map((plan) => plan?.paddingHeight ?? null),
-    freezeStarts: passPlans.map((plan) => plan?.freezeStart ?? null),
-  });
   const sameValues = (a: readonly (number | null)[], b: readonly (number | null)[]) =>
     a.every((value, i) => value === b[i]
       || (value !== null && b[i] !== null && Math.abs(value - b[i]!) <= TIE_TOLERANCE_PX));
   const sameState = (a: PreviousPass, b: PreviousPass) =>
     sameValues(a.paddings, b.paddings) && sameValues(a.freezeStarts, b.freezeStarts);
-  const average = (a: readonly (number | null)[], b: readonly (number | null)[]) =>
-    a.map((value, i) => (value === null ? null : (value + b[i]!) / 2));
+  const lengthsOf = (windows: readonly ({ freezeStart: number; freezeEnd: number } | null)[]) =>
+    windows.map((window) => (window ? Math.max(0, window.freezeEnd - window.freezeStart) : 0));
+  const stateAt = (lengths: readonly number[], reported: readonly Span[]): PreviousPass => ({
+    paddings: measurements.map(({ kind }, k) => (kind === 'scene' ? lengths[k] : null)),
+    freezeStarts: measurements.map(({ kind }, k) => (kind === 'scene' ? reported[k][0] : null)),
+  });
 
-  // Runs passes until the plans stop changing, or returns null once the budget runs out.
-  const settle = (
+  const mix = (states: readonly PreviousPass[], weights: readonly number[]): PreviousPass => {
+    const of = (pick: (state: PreviousPass) => readonly (number | null)[]) =>
+      pick(states[0]).map((value, k) => (value === null
+        ? null
+        : states.reduce((sum, state, j) => sum + weights[j] * pick(state)[k]!, 0)));
+
+    return {
+      paddings: of((state) => state.paddings),
+      freezeStarts: of((state) => state.freezeStarts),
+    };
+  };
+
+  // The windows the last pass placed, which the next pass reads. A stage's first pass reads the
+  // last placement of the stage before. refreshTime caches refreshTimeOf.
+  let world: {
+    lengths: readonly number[];
+    order: RefreshOrder | null;
+    reported: readonly Span[];
+    refreshTime: (readonly Span[] | undefined)[];
+  } | null = null;
+
+  const place = (lengths: readonly number[], order: RefreshOrder | null, reading: Reading) => {
+    const placed = placeWindows(measurements, scenes, lengths, () => reading.endsAsRefreshed);
+
+    world = { lengths, order, reported: placed.reported, refreshTime: [] };
+
+    return placed;
+  };
+
+  // The reported windows ownIndex's pin sees when refreshed in the world's order: its own window
+  // and those of the layers refreshed after it have no spacer yet, and an absolute end sits at its
+  // written position.
+  const refreshTimeOf = (own: number): readonly Span[] | null => {
+    if (world === null) return null;
+
+    const { lengths, order, refreshTime } = world;
+    const absent = (k: number) => k === own || (order !== null && !order.isBefore(k, own));
+
+    refreshTime[own] ??= placeWindows(
+      measurements,
+      scenes,
+      lengths.map((length, k) => (absent(k) ? 0 : length)),
+      (k) => !absent(k),
+    ).reported;
+
+    return refreshTime[own];
+  };
+
+  const passWorld = (order: RefreshOrder | null, reading: Reading): PassWorld => ({
+    // freezeStart less the scroll before it that the page stands still for, among the windows
+    // ownIndex's end can see: not its own (GSAP measures a point with its own pin reverted), and
+    // under a refresh order, none refreshed after it, which have no spacer yet.
+    unpaddedStart: (index, ownIndex, freezeStart) => {
+      const windows = (reading.startsAsRefreshed ? refreshTimeOf(ownIndex) : null)
+        ?? world?.reported
+        ?? [];
+      const spans = scenes
+        .flatMap((k): Span[] => {
+          if (k === index || k === ownIndex || !windows[k]) return [];
+
+          if (order && !order.isBefore(k, ownIndex)) return [];
+
+          const [from, to] = windows[k];
+
+          return Math.min(to, freezeStart) > from ? [[from, Math.min(to, freezeStart)]] : [];
+        })
+        .sort((a, b) => a[0] - b[0]);
+      let frozen = 0;
+      let frozenUntil = -Infinity;
+
+      for (const [from, to] of spans) {
+        const lo = Math.max(from, frozenUntil);
+
+        if (to > lo) frozen += to - lo;
+
+        frozenUntil = Math.max(frozenUntil, to);
+      }
+
+      return freezeStart - frozen;
+    },
+    absoluteEndLength: (index) => {
+      const { end } = measurements[index];
+
+      if (!reading.endsAsRefreshed || end.mode !== 'absolute' || world === null) return null;
+
+      // With every spacer present, a layer's refresh-time start is its reported one: its own
+      // window moves nothing placed before it.
+      const windows = world.order === null ? world.reported : refreshTimeOf(index)!;
+
+      return Math.max(0, end.value - windows[index][0]);
+    },
+  });
+
+  // Runs passes in `order` until the lengths stop changing, or returns null after `cap` passes. A
+  // pass back at the state fed up to `cycle` passes before feeds that cycle's average; any other
+  // pass feeds `damping` of its change.
+  const solve = (
     order: RefreshOrder | null,
-    record: ((index: number, counted: ReadonlySet<number>) => void) | null,
-  ): (LayerPlan | null)[] | null => {
-    let plans = runPass(measurements, passDeps, null, order, record);
+    reading: Reading,
+    cap: number,
+    record: ((index: number, counted: ReadonlySet<number>) => void) | null = null,
+    cycle = 2,
+    damping = 1,
+  ) => {
+    const reads = passWorld(order, reading);
+    const fed: PreviousPass[] = [];
+    let previous: PreviousPass | null = null;
 
-    if (!needsConvergence) return plans;
+    for (let pass = 0; pass < cap; pass += 1) {
+      const lengths = lengthsOf(runPass(measurements, passDeps, previous, order, reads, record));
+      const placed = place(lengths, order, reading);
+      const next = stateAt(lengths, placed.reported);
 
-    const budget = order === null
-      ? Math.max(64, 2 * measurements.length + 2)
-      : 2 * measurements.length + 2;
-    let fed = stateOf(plans);
-    let fedBefore: PreviousPass | null = null;
+      if (!needsConvergence || (previous !== null && sameState(next, previous))) {
+        return { lengths, ...placed };
+      }
 
-    for (let pass = 0; pass < budget; pass += 1) {
-      plans = runPass(measurements, passDeps, fed, order, record);
+      let feed = next;
 
-      const out = stateOf(plans);
+      if (previous !== null) {
+        fed.push(previous);
 
-      if (sameState(out, fed)) return plans;
+        let back = -1;
 
-      const flipped = fedBefore !== null && sameState(out, fedBefore);
+        for (let j = 0; j < cycle - 1 && back === -1; j += 1) {
+          if (fed.length > j + 1 && sameState(next, fed[fed.length - j - 2])) back = j;
+        }
 
-      fedBefore = fed;
-      fed = flipped
-        ? {
-            paddings: average(out.paddings, fed.paddings),
-            freezeStarts: average(out.freezeStarts, fed.freezeStarts),
-          }
-        : out;
+        if (back !== -1) {
+          const states = [...fed.slice(fed.length - back - 1), next];
+
+          feed = mix(states, states.map(() => 1 / states.length));
+        } else if (damping < 1) {
+          feed = mix([next, previous], [damping, 1 - damping]);
+        }
+      }
+
+      previous = feed;
     }
 
     return null;
   };
 
+  // Which lengths each length moves at a solution: nudge one length, place the windows that gives
+  // and recompute every length from that state alone.
+  const activeEdges = (lengths: readonly number[], reading: Reading): number[][] => {
+    const reads = passWorld(null, reading);
+
+    const respond = (from: readonly number[]) => {
+      const { reported } = place(from, null, reading);
+
+      return lengthsOf(
+        runPass(measurements, passDeps, stateAt(from, reported), null, reads, null, true),
+      );
+    };
+
+    const base = respond(lengths);
+    const edges: number[][] = measurements.map(() => []);
+
+    scenes.forEach((k) => {
+      const nudged = lengths.slice();
+
+      // 2 ** -7: no length moves another by more than its own change, so this stays inside
+      // TIE_TOLERANCE_PX and can't tip an exact tie; a power of two keeps the response exact.
+      nudged[k] += 2 ** -7;
+      respond(nudged).forEach((length, i) => {
+        if (i !== k && Math.abs(length - base[i]) > 1e-6) edges[i].push(k);
+      });
+    });
+
+    return edges;
+  };
+
+  // A runaway that multiplies the spacers every pass looks settled once floating point stops
+  // registering the change, so a window that far out counts as unsettled.
+  const unsettled = (solved: ReturnType<typeof solve>) => solved === null
+    || solved.reported.some((window) => window.some((point) => !(Math.abs(point) <= 2 ** 48)));
   const counted: Set<number>[] = measurements.map(() => new Set());
-  let settled = settle(null, (index, layers) => layers.forEach((k) => counted[index].add(k)));
+  const everySpacer: Reading = { endsAsRefreshed: true, startsAsRefreshed: false };
+  let solved = solve(
+    null,
+    everySpacer,
+    Math.max(64, 2 * measurements.length + 2),
+    (index, layers) => layers.forEach((k) => counted[index].add(k)),
+  );
 
-  if (settled === null) settled = settle(fallbackOrder(measurements, counted), null);
+  if (
+    unsettled(solved)
+    || (needsConvergence && hasCycle(scenes, activeEdges(solved!.lengths, everySpacer)))
+  ) {
+    const order = fallbackOrder(measurements, counted);
+    const asReported: Reading = { endsAsRefreshed: false, startsAsRefreshed: false };
 
-  if (settled === null) {
+    solved = solve(order, asReported, 2 * measurements.length + 2);
+
+    if (unsettled(solved)) {
+      solved = solve(order, asReported, Math.max(64, 2 * measurements.length + 2), null, 4, 0.5);
+    }
+
+    if (unsettled(solved)) {
+      solved = solve(
+        order,
+        { endsAsRefreshed: true, startsAsRefreshed: true },
+        2 * measurements.length + 2,
+      );
+    }
+  }
+
+  if (unsettled(solved)) {
     throw new Error(
       'StickyScrollTrigger: could not resolve endTrigger positions: some endTrigger '
       + 'references form a circular structural dependency that never settles. Point each '
@@ -800,23 +1070,31 @@ export const planLayers = (
     );
   }
 
-  const plans = settled;
+  const { reported, engaged } = solved!;
   // Each Scene wrapper sits inside the wrappers of the Scene layers after it in DOM order. Sticky
   // offsets add up down the nesting, so it engages late by the dwell of every one of them already
-  // frozen, and its sticky top subtracts that dwell to engage at freezeStart.
-  const withTops = plans.map((plan, index) => {
-    if (plan === null) return null;
+  // frozen, and its sticky top subtracts that dwell to engage at engagedStart.
+  const scenePlans = measurements.map(({ kind }, index): LayerPlan | null => {
+    if (kind !== 'scene') return null;
 
-    const outerDwell = plans.reduce((total, outer, k) => (
-      k > index && outer !== null && outer.freezeEnd <= plan.freezeStart + TIE_TOLERANCE_PX
-        ? total + outer.paddingHeight!
+    const [engagedStart, engagedEnd] = engaged[index];
+    const outerDwell = scenes.reduce((total, k) => (
+      k > index && engaged[k][1] <= engagedStart + TIE_TOLERANCE_PX
+        ? total + (engaged[k][1] - engaged[k][0])
         : total
     ), 0);
 
-    return { ...plan, stickyTop: deps.structureTop - (plan.freezeStart - outerDwell) };
+    return {
+      freezeStart: reported[index][0],
+      freezeEnd: reported[index][1],
+      engagedStart,
+      engagedEnd,
+      stickyTop: deps.structureTop - (engagedStart - outerDwell),
+      paddingHeight: engagedEnd - engagedStart,
+    };
   });
-  const windows = withTops.filter((plan): plan is LayerPlan => plan !== null);
-  const finalPlans = withTops.map(
+  const windows = scenes.map((k) => ({ freezeStart: engaged[k][0], freezeEnd: engaged[k][1] }));
+  const finalPlans = scenePlans.map(
     (plan, index) => plan ?? planCover(measurements, index, windows, passDeps),
   );
 

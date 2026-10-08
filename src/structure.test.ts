@@ -17,6 +17,8 @@ const sceneLayer = (trigger: HTMLElement): SceneLayer => ({
   end: '+100%',
   freezeStart: 0,
   freezeEnd: 0,
+  engagedStart: 0,
+  engagedEnd: 0,
 });
 const coverLayer = (base: HTMLElement, cover: HTMLElement): CoverLayer => ({
   kind: 'cover',
@@ -28,6 +30,8 @@ const coverLayer = (base: HTMLElement, cover: HTMLElement): CoverLayer => ({
   end: null,
   freezeStart: 0,
   freezeEnd: 0,
+  engagedStart: 0,
+  engagedEnd: 0,
 });
 
 const setup = (html: string) => {

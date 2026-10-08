@@ -300,9 +300,9 @@ test('a registered endTrigger counts its own dwell when it freezes before the po
   expect(bottomAtTop).toBe(end + (end - start));
 });
 
-// refresh() used to flip these two windows between two answers until it threw. The answer they
-// settle on must match where the page actually stands still.
-test('two Scene ends that feed each other settle on windows the page freezes for', async ({ page }) => {
+// Each of these two windows moves with the other's dwell, so they resolve in dependency order.
+// Whatever they resolve to must match where the page actually stands still.
+test('two Scene windows that move each other resolve to windows the page freezes for', async ({ page }) => {
   await page.goto('/fixtures/endTriggerFlip.html');
 
   const windows = await page.evaluate(() =>
@@ -1753,6 +1753,39 @@ test('a native same-page anchor lands exactly on target, from any starting scrol
           `#${id} via ${how} from ${from}`,
         ).toEqual({ scroll: arrival, rectTop: 0 });
       }
+    }
+  }
+});
+
+// #second's absolute start falls inside #first's window. GSAP gets the written start and length,
+// but the page can't freeze twice at once: it stands still once, through both windows, and a
+// position counts only the part of #second's window #first hadn't frozen. Counting the whole
+// window, #early, which arrives before either freeze, landed 800px late.
+test('an absolute start inside another window freezes the page once, and positions follow it', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/absoluteOverlap.html');
+
+  type Result = {
+    windows: [number, number][];
+    stillRuns: [number, number][];
+    resolved: Record<string, number>;
+  };
+
+  const { windows, stillRuns, resolved } = await page.evaluate(() =>
+    (window as unknown as { __absoluteOverlap: () => Result }).__absoluteOverlap());
+
+  expect(windows).toEqual([[1000, 2000], [1500, 2300]]);
+  expect(stillRuns).toEqual([[1000, 2300]]);
+
+  for (const id of ['early', 'between', 'after']) {
+    const arrival = await findArrivalScroll(page, id);
+
+    expect(resolved[id], `resolveScrollPosition(#${id})`).toBe(arrival);
+
+    for (const how of ['anchorClick', 'scrollIntoView'] as const) {
+      expect(await jumpTo(page, id, 0, how), `#${id} via ${how}`)
+        .toEqual({ scroll: arrival, rectTop: 0 });
     }
   }
 });

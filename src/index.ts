@@ -45,7 +45,6 @@ import type {
   CreateStickyTriggerOptions,
   Layer,
   PinLayer,
-  SceneLayer,
   StickyScrollTriggerOptions,
 } from './types';
 
@@ -511,7 +510,7 @@ export default class StickyScrollTrigger {
         toScroll,
       );
       const frozenAtRelease = this.#rootElement.contains(layer.trigger)
-        ? dwellConsumedAt(releaseScroll, this.#sceneLayers())
+        ? dwellConsumedAt(releaseScroll, this.#engagedWindows())
         : 0;
       const height = releaseScroll - frozenAtRelease - triggerTop + topPx + triggerHeight
         + triggerMarginBottom;
@@ -598,6 +597,8 @@ export default class StickyScrollTrigger {
 
           layer.freezeStart = plan.freezeStart;
           layer.freezeEnd = plan.freezeEnd;
+          layer.engagedStart = plan.engagedStart;
+          layer.engagedEnd = plan.engagedEnd;
 
           if (!layer.wrapper) return;
 
@@ -706,7 +707,7 @@ export default class StickyScrollTrigger {
   // resolveScrollPosition measures its element, with every wrapper's sticky state reset.
   #syncScrollMargins(): void {
     this.#scrollMarginSync.sync(
-      this.#sceneLayers().map(({ freezeStart, freezeEnd }) => ({ freezeStart, freezeEnd })),
+      this.#engagedWindows(),
       this.#outermostContainer,
       (targets) => {
         if (!targets.length) return [];
@@ -891,6 +892,8 @@ export default class StickyScrollTrigger {
         end,
         freezeStart: 0,
         freezeEnd: 0,
+        engagedStart: 0,
+        engagedEnd: 0,
       },
       onKill,
       rest,
@@ -944,6 +947,8 @@ export default class StickyScrollTrigger {
       end,
       freezeStart: 0,
       freezeEnd: 0,
+      engagedStart: 0,
+      engagedEnd: 0,
     };
     // liftAboveStickyWrapper runs only after #registerLayer succeeds: a layer rejected as a
     // duplicate never reaches `#layers`, so neither onKill nor destroy() could find it to restore.
@@ -1132,11 +1137,15 @@ export default class StickyScrollTrigger {
   #addDwellBeforeReach(element: HTMLElement, reachedAt: number): number {
     if (!this.#rootElement.contains(element)) return reachedAt;
 
-    return reachedAt + dwellBeforeReach(reachedAt, this.#sceneLayers());
+    return reachedAt + dwellBeforeReach(reachedAt, this.#engagedWindows());
   }
 
-  #sceneLayers(): SceneLayer[] {
-    return this.#layers.filter((layer): layer is SceneLayer => layer.kind === 'scene');
+  // Where the page stands still for each Scene layer, in the shape freezeWindow.ts's and
+  // scrollMargin.ts's helpers take.
+  #engagedWindows(): { freezeStart: number; freezeEnd: number }[] {
+    return this.#layers.flatMap((layer) => (layer.kind === 'scene'
+      ? [{ freezeStart: layer.engagedStart, freezeEnd: layer.engagedEnd }]
+      : []));
   }
 
   // Returns the absolute scroll position (px) at which element's own top edge reaches the

@@ -54,6 +54,8 @@ describe('dwell end', () => {
     expect(plans[0]).toEqual<LayerPlan>({
       freezeStart: 800, // 1000 - 200
       freezeEnd: 1300, // 800 + 500
+      engagedStart: 800,
+      engagedEnd: 1300,
       stickyTop: -700, // structureTop(100) - freezeStart(800)
       paddingHeight: 500,
     });
@@ -128,8 +130,22 @@ describe('dwell before a layer\'s start', () => {
     ]);
 
     expect(plans).toEqual<LayerPlan[]>([
-      { freezeStart: 2280, freezeEnd: 2780, stickyTop: -1780, paddingHeight: 500 },
-      { freezeStart: 700, freezeEnd: 1200, stickyTop: -700, paddingHeight: 500 },
+      {
+        freezeStart: 2280,
+        freezeEnd: 2780,
+        engagedStart: 2280,
+        engagedEnd: 2780,
+        stickyTop: -1780,
+        paddingHeight: 500,
+      },
+      {
+        freezeStart: 700,
+        freezeEnd: 1200,
+        engagedStart: 700,
+        engagedEnd: 1200,
+        stickyTop: -700,
+        paddingHeight: 500,
+      },
     ]);
   });
 
@@ -199,7 +215,13 @@ describe('dwell before a layer\'s start', () => {
   // it adds nothing to layer 2's end.
   it('grows a default end by the dwell of a layer nested inside trigger', () => {
     const { plans } = run([
-      scene({ triggerTop: 154, triggerHeight: 82, start: clauseStart(800), end: clause('bottom top'), endTriggerHeight: 82 }),
+      scene({
+        triggerTop: 154,
+        triggerHeight: 82,
+        start: clauseStart(800),
+        end: clause('bottom top'),
+        endTriggerHeight: 82,
+      }),
       scene({
         triggerTop: 685,
         triggerHeight: 772,
@@ -226,8 +248,19 @@ describe('dwell before a layer\'s start', () => {
   // end also takes in all three dwells (67 + 552 + 132), since their spacers grow its trigger.
   it('orders nested layers by where their triggers reach their anchors', () => {
     const { plans } = run([
-      scene({ triggerTop: 173, triggerHeight: 1436, end: clause('bottom top'), endTriggerHeight: 1436 }),
-      scene({ triggerTop: 230, triggerHeight: 67, triggerEnclosedBy: [0, 1], end: clause('bottom top'), endTriggerHeight: 67 }),
+      scene({
+        triggerTop: 173,
+        triggerHeight: 1436,
+        end: clause('bottom top'),
+        endTriggerHeight: 1436,
+      }),
+      scene({
+        triggerTop: 230,
+        triggerHeight: 67,
+        triggerEnclosedBy: [0, 1],
+        end: clause('bottom top'),
+        endTriggerHeight: 67,
+      }),
       scene({
         triggerTop: 500,
         triggerHeight: 304,
@@ -306,7 +339,12 @@ describe('position-clause end', () => {
   // stays put.
   it('counts layers nested inside trigger, not around it, toward an absolute start\'s end at trigger itself', () => {
     const { plans } = run([
-      scene({ triggerHeight: 3000, start: absoluteStart(100), end: clause('bottom top'), endTriggerHeight: 3000 }),
+      scene({
+        triggerHeight: 3000,
+        start: absoluteStart(100),
+        end: clause('bottom top'),
+        endTriggerHeight: 3000,
+      }),
       scene({
         triggerTop: 1000,
         triggerHeight: 500,
@@ -666,9 +704,10 @@ describe('position-clause end', () => {
   });
 
   // Layer 1's endTrigger sits above layer 0's trigger, so layer 0 doesn't count toward it, yet
-  // layer 0's dwell moves layer 1's start; layer 0's own end counts layer 1. Undamped, each pass
-  // flips between (200, 400) and (600, 0); the shared answer is p0 = 200 + p1, p1 = 600 - p0.
-  it('settles two layers whose ends feed each other without cancelling on the answer they share', () => {
+  // layer 0's dwell moves layer 1's start; layer 0's own end counts layer 1. The answer both share,
+  // p0 = 200 + p1 and p1 = 600 - p0, is one GSAP's pins never give: refreshed in DOM order, layer 0
+  // has no spacer of layer 1's to count yet (200), and layer 1 gets 600 - 200.
+  it('resolves two layers whose ends count each other as GSAP\'s pins created in DOM order', () => {
     const { plans } = run([
       scene({
         triggerTop: 1200,
@@ -689,7 +728,7 @@ describe('position-clause end', () => {
     ]);
 
     expect(plans.map(({ freezeStart, freezeEnd }) => [freezeStart, freezeEnd]))
-      .toEqual([[400, 800], [900, 1100]]);
+      .toEqual([[400, 600], [700, 1100]]);
   });
 
   it('a Cover layer\'s forward reference resolves from the referenced trigger\'s own position (it creates no padding, so nothing depends on it)', () => {
@@ -709,6 +748,8 @@ describe('position-clause end', () => {
     expect(plans[1]).toEqual<LayerPlan>({
       freezeStart: 2000,
       freezeEnd: 2100,
+      engagedStart: 2000,
+      engagedEnd: 2100,
       stickyTop: -2000,
       paddingHeight: 100,
     });
@@ -898,10 +939,9 @@ describe('spacers above, inside and below the element a point is on', () => {
   });
 
   // Layer 0's 'center center' self end takes half of layer 1's dwell, and layer 1's marker past
-  // layer 0 takes all of layer 0's: x = (381.5 + x) / 2 - 122.5, so 136.5 and 518. Each pass
-  // halves the gap, which 2n + 2 passes don't close; planLayers then fell back and collapsed
-  // layer 0's window.
-  it('settles a pair that converges slowly within the first settle\'s budget', () => {
+  // layer 0 takes all of layer 0's, so the two count each other. GSAP's pins refreshed in DOM order
+  // give 0 and 381.5: layer 0 is refreshed before layer 1 has a spacer.
+  it('resolves a nested pair whose ends count a share of each other in dependency order', () => {
     const { plans } = run([
       scene({
         triggerTop: 1864,
@@ -920,8 +960,9 @@ describe('spacers above, inside and below the element a point is on', () => {
       }),
     ], vh720);
 
-    expect(plans[0].paddingHeight).toBeCloseTo(136.5, 1);
-    expect(plans[1].paddingHeight).toBeCloseTo(518, 1);
+    expect(plans.map(({ paddingHeight }) => paddingHeight)).toEqual([0, 381.5]);
+    expect(plans.map(({ freezeStart, freezeEnd }) => [freezeStart, freezeEnd]))
+      .toEqual([[2245.5, 2245.5], [1853.5, 2235]]);
   });
 });
 
@@ -1089,10 +1130,11 @@ describe('endTriggers that never settle', () => {
   });
 
   // Layer 2's end counts layer 1 only while layer 0's window closes before 3555, and layer 0
-  // freezes after layer 2, so its start moves with layer 2's padding. A refresh order changes
-  // only durations, never a clause start's freezeStart, so the pair keeps flipping.
-  it('throws when an absolute start keeps flipping what an end counts', () => {
-    expect(() => run([
+  // freezes after layer 2, so its start moves with layer 2's padding: read among the reported
+  // windows, the pair keeps flipping. Read as each pin sees it when refreshed, it settles. Layer
+  // 1's absolute start lies inside layer 2's window, so the page freezes for layer 1 only past it.
+  it('resolves a set where an absolute start keeps flipping what an end counts', () => {
+    const { plans } = run([
       scene({
         triggerTop: 1854,
         triggerHeight: 374,
@@ -1120,7 +1162,387 @@ describe('endTriggers that never settle', () => {
         endTriggerHeight: 50,
         endTriggerEnclosedBy: [0, 1],
       }),
-    ], { viewportHeight: 720 })).toThrow(/circular structural dependency/);
+    ], { viewportHeight: 720 });
+
+    expect(plans.map(({ freezeStart, freezeEnd }) => [freezeStart, freezeEnd]))
+      .toEqual([[6608, 8294], [3555, 6493], [1739, 3652]]);
+    expect([plans[1].engagedStart, plans[1].engagedEnd]).toEqual([3652, 6493]);
+  });
+});
+
+// Windows are what GSAP gets; engaged windows are where the page stands still.
+describe('dependency order and overlapping windows', () => {
+  const round = (value: number) => Math.round(value * 1000) / 1000;
+  const windowsOf = (plans: LayerPlan[]) =>
+    plans.map(({ freezeStart, freezeEnd }) => [round(freezeStart), round(freezeEnd)]);
+  const engagedOf = (plans: LayerPlan[]) =>
+    plans.map(({ engagedStart, engagedEnd }) => [round(engagedStart), round(engagedEnd)]);
+  const vh720 = { viewportHeight: 720 };
+
+  // Layer 1's absolute start falls inside layer 0's window. The page is already standing still
+  // there, so it freezes for none of layer 1's window; 0.10.0 added a 300px spacer inside layer 0's
+  // freeze, so the page froze for a stretch GSAP never got.
+  it('keeps an absolute start inside another window for GSAP and freezes the page once', () => {
+    const { plans } = run([
+      scene({ triggerTop: 1000, triggerHeight: 500, end: dwell(1000) }),
+      scene({ triggerTop: 3000, triggerHeight: 300, start: absoluteStart(1500), end: dwell(300) }),
+    ]);
+
+    expect(windowsOf(plans)).toEqual([[1000, 2000], [1500, 1800]]);
+    expect(engagedOf(plans)).toEqual([[1000, 2000], [2000, 2000]]);
+    expect(plans.map(({ paddingHeight }) => paddingHeight)).toEqual([1000, 0]);
+    expect(plans[0].stickyTop).toBe(-1000);
+  });
+
+  // These ends count shares of each other near 1, and 0.10.0 settled on windows reaching 231,366px.
+  // Every length here is GSAP's pins created in DOM order.
+  it('keeps a pair that counts nearly all of each other at GSAP\'s lengths', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 2482,
+        triggerHeight: 1912,
+        triggerEnclosedBy: [0],
+        start: clauseStart(-596, 0.5),
+        end: clause('bottom-=50 top'),
+        endTriggerHeight: 1912,
+      }),
+      scene({
+        triggerTop: 2948,
+        triggerHeight: 602,
+        triggerEnclosedBy: [0, 1],
+        start: clauseStart(-100),
+        end: { mode: 'clause', clause: '75% 10%', rawTop: 5179, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerEnclosedBy: [2],
+      }),
+      scene({
+        triggerTop: 4937,
+        triggerHeight: 361,
+        triggerEnclosedBy: [2],
+        start: clauseStart(215.8, 0.2),
+        end: { mode: 'clause', clause: 'bottom top', rawTop: 7346, measureLive: false },
+        endTriggerIsSelf: false,
+      }),
+      scene({
+        triggerTop: 5003,
+        triggerHeight: 87,
+        triggerEnclosedBy: [2, 3],
+        start: clauseStart(633, 1),
+        end: { mode: 'clause', clause: 'top+=100 center', rawTop: 7697, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 267,
+      }),
+    ], vh720);
+
+    expect(windowsOf(plans))
+      .toEqual([[6403, 7669], [3048, 6373], [15004, 17628.8], [8961, 14652.8]]);
+  });
+
+  // Layer 2's absolute start freezes the page from 1921 to 3622, and layer 0's absolute start at
+  // 3127 lies inside it. 0.10.0's first settle fell back here, to windows the page didn't freeze
+  // for. Every length here is GSAP's pins created inner-first, which 0.10.0's matched only for
+  // layer 2.
+  it('settles where the first settle counted an absolute start inside another window twice', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 2104,
+        triggerHeight: 1564,
+        triggerEnclosedBy: [0],
+        start: absoluteStart(3127),
+        end: clause('bottom top'),
+        endTriggerHeight: 1564,
+      }),
+      scene({
+        triggerTop: 3181,
+        triggerHeight: 412,
+        triggerEnclosedBy: [0, 1],
+        start: clauseStart(308, 1),
+        end: clause('bottom top'),
+        endTriggerIsSelf: false,
+        endTriggerIndex: 0,
+        endTriggerHeight: 1564,
+        endTriggerEnclosedBy: [0],
+        endTriggerNests: [1],
+      }),
+      scene({
+        triggerTop: 4012,
+        triggerHeight: 1379,
+        triggerEnclosedBy: [2],
+        start: absoluteStart(1921),
+        end: absoluteEnd(3622),
+      }),
+    ], vh720);
+
+    expect(windowsOf(plans)).toEqual([[3127, 4463], [5415, 6210], [1921, 3622]]);
+    expect(engagedOf(plans)).toEqual([[3622, 4463], [5415, 6210], [1921, 3622]]);
+  });
+
+  // These ends count each other. In dependency order with layer 1's absolute end at its written
+  // length they never settle; at the length its pin has when refreshed in that order, they do.
+  // 0.10.0 settled on the answer they share, which collapsed layer 1's window.
+  it('settles an absolute end at the length its pin has when refreshed in dependency order', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 2096,
+        triggerHeight: 1788,
+        triggerEnclosedBy: [0],
+        start: clauseStart(-1033.2, 0.9),
+        end: clause('bottom 25%'),
+        endTriggerHeight: 1788,
+      }),
+      scene({
+        triggerTop: 2695,
+        triggerHeight: 50,
+        triggerEnclosedBy: [0, 1],
+        end: absoluteEnd(4426),
+      }),
+      scene({
+        triggerTop: 2920,
+        triggerHeight: 898,
+        triggerEnclosedBy: [0, 2],
+        start: clauseStart(720),
+        end: clause('75% 10%'),
+        endTriggerIsSelf: false,
+        endTriggerIndex: 0,
+        endTriggerHeight: 1788,
+        endTriggerEnclosedBy: [0],
+        endTriggerNests: [1, 2],
+      }),
+    ], vh720);
+
+    expect(windowsOf(plans)).toEqual([[4860.2, 5435], [2703.8, 4426], [2200, 2208.8]]);
+  });
+
+  // Layer 2's end on layer 1's trigger counts layer 1's dwell only if layer 1's absolute start
+  // freezes first. Judged among the reported windows that never settles, and 0.10.0 threw; judged
+  // as each pin sees it when refreshed in dependency order, it does. The page freezes for layer 1
+  // only past layer 2.
+  it('settles an enclosing absolute start that flips with the end\'s own length', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 1592,
+        triggerHeight: 472,
+        triggerEnclosedBy: [0],
+        start: clauseStart(248, 1),
+        end: { mode: 'clause', clause: 'center center', rawTop: 3490, measureLive: false },
+        endTriggerIsSelf: false,
+      }),
+      scene({
+        triggerTop: 1629,
+        triggerHeight: 73,
+        triggerEnclosedBy: [0, 1],
+        start: absoluteStart(3388),
+        end: { mode: 'clause', clause: 'center center', rawTop: 4970, measureLive: false },
+        endTriggerIsSelf: false,
+      }),
+      scene({
+        triggerTop: 1826,
+        triggerHeight: 101,
+        triggerEnclosedBy: [0, 2],
+        start: clauseStart(619, 1),
+        end: clause('center top'),
+        endTriggerIsSelf: false,
+        endTriggerIndex: 1,
+        endTriggerHeight: 73,
+        endTriggerEnclosedBy: [0, 1],
+      }),
+    ], vh720);
+
+    expect(windowsOf(plans)).toEqual([[6533, 8319], [3388, 6396], [1207, 3451.5]]);
+    expect(engagedOf(plans)).toEqual([[6533, 8319], [3451.5, 6396], [1207, 3451.5]]);
+  });
+
+  // In dependency order these don't settle pass by pass. Feeding the average of a cycle of up to
+  // four passes gives 0.10.0's answer; without it the refresh-time reading takes over and moves all
+  // three windows.
+  it('keeps the released answer for a fallback that cycles every four passes', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 2472,
+        triggerHeight: 1288,
+        triggerEnclosedBy: [0],
+        start: clauseStart(-568, 1),
+        end: absoluteEnd(6843),
+      }),
+      scene({
+        triggerTop: 2892,
+        triggerHeight: 172,
+        triggerEnclosedBy: [0, 1],
+        start: clauseStart(360),
+        end: clause('75% 10%'),
+        endTriggerIsSelf: false,
+        endTriggerIndex: 0,
+        endTriggerHeight: 1288,
+        endTriggerEnclosedBy: [0],
+        endTriggerNests: [1, 2],
+      }),
+      scene({
+        triggerTop: 3077,
+        triggerHeight: 476,
+        triggerEnclosedBy: [0, 2],
+        start: clauseStart(216),
+        end: absoluteEnd(5171),
+      }),
+    ], vh720);
+
+    expect(windowsOf(plans)).toEqual([[5358.5, 6843], [2532, 4850.5], [5179.5, 5179.5]]);
+  });
+
+  // Layer 2's end on layer 0's trigger counts layer 0's dwell only if layer 0's absolute start
+  // freezes first. Judged among the reported windows that gives 0.10.0's answer, GSAP's pins
+  // created in DOM order; judged as layer 2's pin sees it when refreshed, layers 1 and 2 moved.
+  it('judges an enclosing absolute start among the reported windows in the fallback order', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 1957,
+        triggerHeight: 1090,
+        triggerEnclosedBy: [0],
+        start: absoluteStart(2614),
+        end: dwell(876),
+      }),
+      scene({
+        triggerTop: 2458,
+        triggerHeight: 217,
+        triggerEnclosedBy: [0, 1],
+        start: clauseStart(720),
+        end: { mode: 'clause', clause: 'bottom top', rawTop: 3731, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 508,
+      }),
+      scene({
+        triggerTop: 2569,
+        triggerHeight: 81,
+        triggerEnclosedBy: [0, 1, 2],
+        start: absoluteStart(1374),
+        end: clause('bottom bottom'),
+        endTriggerIsSelf: false,
+        endTriggerIndex: 0,
+        endTriggerHeight: 1090,
+        endTriggerEnclosedBy: [0],
+        endTriggerNests: [1, 2],
+      }),
+    ], vh720);
+
+    expect(windowsOf(plans)).toEqual([[2614, 3490], [3567, 6944], [1374, 2327]]);
+  });
+
+  // 0.10.0's passes multiplied layers 1 and 3's spacers until floating point stopped registering
+  // the change, which read as settled, at windows about 8e19px long.
+  it('resolves a runaway in dependency order instead of taking it for settled', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 2198,
+        triggerHeight: 987,
+        triggerEnclosedBy: [0],
+        start: clauseStart(-267, 1),
+        end: { mode: 'clause', clause: 'bottom top', rawTop: 4032, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerEnclosedBy: [3],
+      }),
+      scene({
+        triggerTop: 2625,
+        triggerHeight: 116,
+        triggerEnclosedBy: [0, 1],
+        start: absoluteStart(4692),
+        end: { mode: 'clause', clause: 'top top', rawTop: 4673, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 448,
+      }),
+      scene({
+        triggerTop: 2654,
+        triggerHeight: 56,
+        triggerEnclosedBy: [0, 1, 2],
+        start: absoluteStart(2201),
+        end: clause('bottom top'),
+        endTriggerIsSelf: false,
+        endTriggerIndex: 1,
+        endTriggerHeight: 116,
+        endTriggerEnclosedBy: [0, 1],
+        endTriggerNests: [2],
+      }),
+      scene({
+        triggerTop: 3264,
+        triggerHeight: 933,
+        triggerEnclosedBy: [3],
+        start: absoluteStart(4941),
+        end: { mode: 'clause', clause: 'center center', rawTop: 4059, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerEnclosedBy: [3],
+      }),
+    ], vh720);
+
+    expect(windowsOf(plans)).toEqual([[4572, 6139], [4692, 6240], [2201, 4308], [4941, 5266]]);
+    expect(engagedOf(plans)).toEqual([[4572, 6139], [6139, 6240], [2201, 4308], [6240, 6240]]);
+  });
+
+  // Every spacer counted, these flip between two states and settle only on their average, where no
+  // two lengths move each other.
+  it('keeps a first settle that needs averaging', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 2474,
+        triggerHeight: 353,
+        triggerEnclosedBy: [0],
+        start: clauseStart(367, 1),
+        end: clause('center center'),
+        endTriggerHeight: 353,
+      }),
+      scene({
+        triggerTop: 2597,
+        triggerHeight: 50,
+        triggerEnclosedBy: [0, 1],
+        end: absoluteEnd(5849),
+      }),
+      scene({
+        triggerTop: 2935,
+        triggerHeight: 543,
+        triggerEnclosedBy: [2],
+        start: absoluteStart(2743),
+        end: clause('top top'),
+        endTriggerHeight: 543,
+      }),
+    ], vh720);
+
+    expect(windowsOf(plans)).toEqual([[2107, 2107], [2597, 5849], [2743, 6187]]);
+    expect(engagedOf(plans)).toEqual([[2107, 2107], [2597, 5849], [5849, 6187]]);
+  });
+
+  // Layer 1's end hands over at 3200, exactly where layer 2's absolute start freezes, so nudging a
+  // length by more than TIE_TOLERANCE_PX would tip that tie and read as the layers feeding each
+  // other. These are 0.10.0's windows; tipped, they fell back to [200, 1150], [1550, 2650] and
+  // [3200, 6250].
+  it('reads an exact hand-over at an absolute start as no dependency', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 1000,
+        triggerHeight: 1100,
+        triggerEnclosedBy: [0],
+        start: clauseStart(800),
+        end: clause('center center'),
+        endTriggerHeight: 1100,
+      }),
+      scene({
+        triggerTop: 1000,
+        triggerHeight: 900,
+        triggerEnclosedBy: [0, 1],
+        start: clauseStart(400),
+        end: { mode: 'clause', clause: 'center center', rawTop: 2100, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerEnclosedBy: [0, 2],
+      }),
+      scene({
+        triggerTop: 2100,
+        triggerHeight: 800,
+        triggerEnclosedBy: [2],
+        start: absoluteStart(3200),
+        end: { mode: 'clause', clause: 'bottom top', rawTop: 4900, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 400,
+      }),
+    ]);
+
+    expect(windowsOf(plans)).toEqual([[200, 1700], [2100, 3200], [3200, 7900]]);
+    expect(engagedOf(plans)).toEqual(windowsOf(plans));
   });
 });
 

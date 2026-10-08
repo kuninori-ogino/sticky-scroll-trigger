@@ -53,8 +53,14 @@ interface LayerBase {
   endTrigger: HTMLElement;
   wrapper: HTMLDivElement | null;
   start: PositionInput;
-  freezeStart: number; // Absolute scroll position (px) of the freeze window, computed by refresh().
-  freezeEnd: number; // Invariant: freezeEnd >= freezeStart (clamped for every end mode).
+  // The freeze window (absolute scroll positions, px) handed to GSAP, computed by refresh().
+  // Invariant: freezeEnd >= freezeStart (clamped for every end mode).
+  freezeStart: number;
+  freezeEnd: number;
+  // Where the page stands still for this layer, which every page position uses (see
+  // freezeWindow.ts's LayerPlan).
+  engagedStart: number;
+  engagedEnd: number;
 }
 
 export interface SceneLayer extends LayerBase {
