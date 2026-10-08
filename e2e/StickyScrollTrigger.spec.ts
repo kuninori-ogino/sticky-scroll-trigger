@@ -1,4 +1,4 @@
-import { test, expect, type Locator } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 
 // Reads the scene element's --progress CSS custom property (0-1).
 // main.ts drives this value via createStickyTrigger's scrub, and it should only move
@@ -393,6 +393,47 @@ for (const [layout, expected] of [
     expect(stillRuns).toEqual(windows);
   });
 }
+
+type SceneMargins = {
+  windows: [number, number][];
+  stillRuns: [number, number][];
+  unwrappedTops: number[];
+  tops: number[];
+};
+
+const readSceneMargins = async (page: Page, layout: string) => {
+  await page.goto(`/fixtures/sceneMargins.html?layout=${layout}`);
+
+  return page.evaluate(() =>
+    (window as unknown as { __sceneMargins: () => SceneMargins }).__sceneMargins());
+};
+
+// A bottom margin ending the shared container, its own or its content's, used to collapse out of
+// the innermost Scene wrapper into the first freeze with any dwell: 16px held it 16px long, -20px
+// released it 20px early.
+for (const layout of [
+  'trailingMargin',
+  'trailingMarginZeroDwell',
+  'containerMargin',
+  'negativeTrailingMargin',
+]) {
+  test(`Scene layers stop freezing where their windows end (${layout})`, async ({ page }) => {
+    const { windows, stillRuns } = await readSceneMargins(page, layout);
+
+    expect(stillRuns).toEqual(windows.filter(([start, end]) => end > start));
+  });
+}
+
+// Only the bottom margin is held in: the root's first child still collapses its top margin with the
+// previous sibling's bottom margin, as it does unwrapped.
+test('wrapping the shared container leaves the positions before the first freeze unchanged', async ({
+  page,
+}) => {
+  const { windows, unwrappedTops, tops } = await readSceneMargins(page, 'topMargin');
+
+  expect(windows[0][0]).toBeGreaterThan(0);
+  expect(tops).toEqual(unwrappedTops);
+});
 
 // A cover layer's window counts a Scene layer's dwell only when the scene freezes first. Counted by
 // DOM order, insideTallScene ran 500px late and midRise ended 500px early.

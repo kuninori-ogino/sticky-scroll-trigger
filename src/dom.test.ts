@@ -125,7 +125,7 @@ describe('wrapScene', () => {
 
     const host = document.getElementById('host')!;
     const inner = document.getElementById('inner')!;
-    const { container, wrapper, padding } = wrapScene(inner);
+    const { container, wrapper, padding } = wrapScene(inner, false);
 
     // container takes inner's original slot
     expect(Array.from(host.children)).toEqual([
@@ -139,17 +139,29 @@ describe('wrapScene', () => {
     expect(wrapper.firstElementChild).toBe(inner);
   });
 
+  it('with holdTrailingMargin, follows inner with an empty flow-root inside the wrapper', () => {
+    document.body.innerHTML = '<div><div id="inner"></div></div>';
+
+    const inner = document.getElementById('inner')!;
+    const { wrapper } = wrapScene(inner, true);
+    const sentinel = wrapper.lastElementChild as HTMLElement;
+
+    expect(Array.from(wrapper.children)).toEqual([inner, sentinel]);
+    expect(sentinel.style.display).toBe('flow-root');
+    expect(sentinel.childNodes).toHaveLength(0);
+  });
+
   it('excludes padding from assistive tech and hit testing', () => {
     document.body.innerHTML = '<div><div id="inner"></div></div>';
 
-    const { padding } = wrapScene(document.getElementById('inner')!);
+    const { padding } = wrapScene(document.getElementById('inner')!, false);
 
     expect(padding.getAttribute('aria-hidden')).toBe('true');
     expect(padding.style.pointerEvents).toBe('none');
   });
 
   it('throws for an inner not attached to the document', () => {
-    expect(() => wrapScene(document.createElement('div'))).toThrow(/not attached to the document/);
+    expect(() => wrapScene(document.createElement('div'), false)).toThrow(/not attached to the document/);
   });
 });
 

@@ -50,6 +50,7 @@ describe('buildStructure - Scene layers', () => {
     expect(layer.container!.parentElement).toBe(byId('host'));
     expect(Array.from(layer.container!.children)).toEqual([layer.wrapper, layer.padding]);
     expect(layer.wrapper!.firstElementChild).toBe(root);
+    expect(layer.wrapper!.children).toHaveLength(2); // root, then the margin sentinel
   });
 
   it('layers earlier in DOM order end up deeper (= freeze first)', () => {
@@ -64,6 +65,9 @@ describe('buildStructure - Scene layers', () => {
     expect(outermost).toBe(second.container);
     expect(second.wrapper!.firstElementChild).toBe(first.container);
     expect(first.wrapper!.firstElementChild).toBe(root);
+    // only the wrapper around root gets the margin sentinel
+    expect(Array.from(second.wrapper!.children)).toEqual([first.container]);
+    expect(first.wrapper!.children).toHaveLength(2);
   });
 
   it('registration order does not matter (sorted into DOM order before building)', () => {

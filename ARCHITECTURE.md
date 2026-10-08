@@ -21,12 +21,15 @@ container2                         ← layer for the 2nd scene
 ├ wrapper2 (position:sticky)
 │  └ container1                    ← layer for the 1st scene
 │     ├ wrapper1 (position:sticky)
-│     │  └ .container__inner       ← shared container (the original DOM)
+│     │  ├ .container__inner       ← shared container (the original DOM)
+│     │  └ sentinel (flow-root)    ← empty, keeps a trailing margin inside wrapper1
 │     └ padding1                   ← spacer equal to the 1st scene's dwell distance
 └ padding2                         ← spacer equal to the 2nd scene's dwell distance
 ```
 
 `padding` defines the dwell distance, and the sticky `wrapper` keeps the container pinned for that duration. GSAP does not pin here; it only advances effects using `start`/`end` values aligned to this freeze window.
+
+A bottom margin ending the shared container, its own or its content's, would collapse out of `wrapper1` and move where its freeze ends; the sentinel holds it in. A flow-root `wrapper1` would also hold in a top margin and shift the container down. Outer wrappers end in a padding div, so they need no sentinel.
 
 ### Cover layer (`createOverlapScroll`)
 

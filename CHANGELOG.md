@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Scene layers now stop freezing where their windows end when the shared container ends in a bottom margin, its own or its last element's. The margin collapsed out of the innermost wrapper into the freeze of the first scene in DOM order with any dwell, so `margin-bottom: 16px` on the last element held that freeze 16px past its window, and a negative margin released it early by the same amount
+
 ## [0.10.0] - 2026-10-01
 
 - Documented that `createOverlapScroll`'s `'bottom bottom'` default can resolve to a negative freeze-window start with no `start` passed. When the covered `trigger` sits within a viewport height of the document top and is shorter than the viewport, part of the rise plays before scroll 0, the same as any position clause resolving past the document top, which the README already noted only for Scene layers. `clamp()` stays unsupported, and a cover layer's sticky offset does not reference the freeze window's start, so the fix is on the content side: make `trigger` at least a viewport tall, or move it further down the page. Behavior is unchanged; only the README was missing it (see [Position syntax](README.md#position-syntax))

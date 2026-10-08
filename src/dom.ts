@@ -196,8 +196,10 @@ export const restoreInlinePosition = (el: HTMLElement, saved: InlinePosition): v
 };
 
 // Scene layer: wraps inner in one level of stickyContainer{ stickyWrapper, stickyPadding }
-// and moves it inside the wrapper.
-export const wrapScene = (inner: HTMLElement) => {
+// and moves it inside the wrapper. With holdTrailingMargin, an empty flow-root after inner keeps a
+// bottom margin ending inner (its own or its content's) in the wrapper, where it can't move the end
+// of the freeze. A flow-root wrapper would also hold in a top margin and shift the content down.
+export const wrapScene = (inner: HTMLElement, holdTrailingMargin: boolean) => {
   if (!inner.parentNode) {
     throw new Error(`StickyScrollTrigger: ${describeElement(inner)} is not attached to the document`);
   }
@@ -212,6 +214,13 @@ export const wrapScene = (inner: HTMLElement) => {
   container.appendChild(wrapper);
   wrapper.appendChild(inner);
   container.appendChild(padding);
+
+  if (holdTrailingMargin) {
+    const sentinel = document.createElement('div');
+
+    sentinel.style.display = 'flow-root';
+    wrapper.appendChild(sentinel);
+  }
 
   return { container, wrapper, padding };
 };
