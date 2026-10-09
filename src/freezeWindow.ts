@@ -724,6 +724,42 @@ const hasCycle = (scenes: readonly number[], edges: readonly (readonly number[])
   return new Set(scenes.map((k) => component[k])).size < scenes.length;
 };
 
+// The refresh order GSAP would need to give these lengths: every layer after the layers whose
+// length moves its own (see activeEdges). GSAP sizes a pin's spacer when that pin refreshes, so a
+// spacer that can reach the point an end names only by growing an enclosing Scene layer's trigger
+// has to come before that layer too. A window of zero length moves nothing, so it orders nothing.
+const refreshOrderEdges = (
+  measurements: readonly LayerMeasurement[],
+  lengths: readonly number[],
+  edges: readonly (readonly number[])[],
+): number[][] => {
+  const before: number[][] = measurements.map(() => []);
+
+  edges.forEach((movers, i) => {
+    const measurement = measurements[i];
+    // A spacer inside a trigger that also encloses the end's element reaches it without leaving
+    // that trigger. A registered endTrigger is listed as enclosing itself, but a point on it moves
+    // with a spacer inside it only as it grows.
+    const enclosingAnchor = (measurement.end.mode === 'clause' && !measurement.endTriggerIsSelf
+      ? measurement.endTriggerEnclosedBy
+      : measurement.triggerEnclosedBy
+    ).filter((m) => m !== measurement.endTriggerIndex);
+
+    movers.forEach((k) => {
+      if (lengths[k] <= TIE_TOLERANCE_PX) return;
+
+      before[i].push(k);
+      measurements[k].triggerEnclosedBy.forEach((m) => {
+        if (m !== k && m !== i && measurements[m].kind === 'scene' && !enclosingAnchor.includes(m)) {
+          before[m].push(k);
+        }
+      });
+    });
+  });
+
+  return before;
+};
+
 type Span = [number, number];
 
 // The Scene windows a set of lengths gives, in the order they open: a clause start once its reach
@@ -809,12 +845,15 @@ interface Reading {
 //   directly or through others (see activeEdges): GSAP's pins never count each other's dwell in
 //   any creation order, and a pair whose ends count a share of each other would grow toward
 //   1 / (1 - share) times their length.
+//   Nor does it stand when no refresh order gives it (see refreshOrderEdges).
 // - Otherwise, and when that never settles or runs away, the Scene layers are refreshed in
 //   fallbackOrder's dependency order, reading absolute starts and ends among the reported
 //   windows, as this fallback always has. Where that cycles, a cycle of up to four passes feeds its
 //   average and any other pass feeds half its change. Where it still doesn't settle, absolute
 //   starts and ends are read as each pin sees them when refreshed in that order, which settles
-//   the rest but would move answers the reported reading already gives.
+//   the rest but would move answers the reported reading already gives. Where only the refresh
+//   order is missing, the same steps run in DOM order instead, close to the top-to-bottom order
+//   GSAP recommends.
 //
 // planLayers throws if none of these settles.
 export const planLayers = (
@@ -1040,11 +1079,24 @@ export const planLayers = (
     (index, layers) => layers.forEach((k) => counted[index].add(k)),
   );
 
-  if (
-    unsettled(solved)
-    || (needsConvergence && hasCycle(scenes, activeEdges(solved!.lengths, everySpacer)))
-  ) {
-    const order = fallbackOrder(measurements, counted);
+  // The refresh order to fall back to, or null where the first settle stands.
+  const fallback = (): RefreshOrder | null => {
+    if (unsettled(solved)) return fallbackOrder(measurements, counted);
+
+    if (!needsConvergence) return null;
+
+    const edges = activeEdges(solved!.lengths, everySpacer);
+
+    if (hasCycle(scenes, edges)) return fallbackOrder(measurements, counted);
+
+    return hasCycle(scenes, refreshOrderEdges(measurements, solved!.lengths, edges))
+      ? { isBefore: (a, b) => a < b }
+      : null;
+  };
+
+  const order = fallback();
+
+  if (order) {
     const asReported: Reading = { endsAsRefreshed: false, startsAsRefreshed: false };
 
     solved = solve(order, asReported, 2 * measurements.length + 2);

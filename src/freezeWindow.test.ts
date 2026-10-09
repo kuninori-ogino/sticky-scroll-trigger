@@ -1277,6 +1277,187 @@ describe('dependency order and overlapping windows', () => {
     expect(engagedOf(plans)).toEqual([[3622, 4463], [5415, 6210], [1921, 3622]]);
   });
 
+  // Counting every spacer, layer 0's end counts layer 2's spacer through layer 1's trigger, which
+  // needs layer 2 refreshed before layer 1, while layer 2's end counts layer 1's, which needs the
+  // reverse. 0.10.0 settled on that answer, which no creation order gives. Every length here is
+  // GSAP's pins created in DOM order, measured on Chromium, Firefox and WebKit.
+  it('falls back where every spacer counting needs two layers each refreshed before the other', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 2284,
+        triggerHeight: 1919,
+        triggerEnclosedBy: [0],
+        start: clauseStart(360),
+        end: { mode: 'clause', clause: 'top top', rawTop: 4320, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 368,
+      }),
+      scene({
+        triggerTop: 2669,
+        triggerHeight: 1360,
+        triggerEnclosedBy: [0, 1],
+        start: clauseStart(360),
+        end: dwell(666),
+      }),
+      scene({
+        triggerTop: 3010,
+        triggerHeight: 938,
+        triggerEnclosedBy: [0, 1, 2],
+        start: clauseStart(720),
+        end: clause('bottom top'),
+        endTriggerIsSelf: false,
+        endTriggerIndex: 0,
+        endTriggerHeight: 1919,
+        endTriggerEnclosedBy: [0],
+        endTriggerNests: [1, 2],
+      }),
+    ], vh720);
+
+    expect(windowsOf(plans)).toEqual([[1924, 4320], [6618, 7284], [4686, 6599]]);
+  });
+
+  // Layer 1's end is on layer 0's bottom, which layer 2's spacer moves only by growing layer 0's
+  // trigger, so counting it needs layer 2 refreshed before layer 0. Layer 2's end counts layer 0's
+  // spacer, which needs the reverse. Every length here is GSAP's pins created in DOM order,
+  // measured on Chromium, Firefox and WebKit.
+  it('falls back where an end on an enclosing trigger counts a spacer that trigger would hold in', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 1658,
+        triggerHeight: 236,
+        triggerEnclosedBy: [0],
+        start: clauseStart(242, 0.5),
+        end: dwell(577),
+      }),
+      scene({
+        triggerTop: 1659,
+        triggerHeight: 50,
+        triggerEnclosedBy: [0, 1],
+        start: clauseStart(0),
+        end: clause('bottom top'),
+        endTriggerIsSelf: false,
+        endTriggerIndex: 0,
+        endTriggerHeight: 236,
+        endTriggerEnclosedBy: [0],
+        endTriggerNests: [1, 2],
+      }),
+      scene({
+        triggerTop: 1814,
+        triggerHeight: 50,
+        triggerEnclosedBy: [0, 2],
+        start: clauseStart(670, 1),
+        end: { mode: 'clause', clause: 'bottom top', rawTop: 3459, measureLive: false },
+        endTriggerIsSelf: false,
+      }),
+    ], vh720);
+
+    expect(windowsOf(plans)).toEqual([[4073, 4650], [4893, 5128], [1144, 3801]]);
+  });
+
+  // The same conflict with absolute starts: layer 2's end counts layer 1's spacer through layer 0's
+  // trigger, which needs layer 1 refreshed before layer 0, while layer 1's end counts layer 0's.
+  // Every length here is GSAP's pins created in DOM order, measured on Chromium, Firefox and
+  // WebKit.
+  it('falls back from the same conflict between absolute starts', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 1705,
+        triggerHeight: 2013,
+        triggerEnclosedBy: [0],
+        start: absoluteStart(1584),
+        end: dwell(525),
+      }),
+      scene({
+        triggerTop: 2289,
+        triggerHeight: 1317,
+        triggerEnclosedBy: [0, 1],
+        start: absoluteStart(2255),
+        end: { mode: 'clause', clause: 'bottom top', rawTop: 3815, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 272,
+      }),
+      scene({
+        triggerTop: 4374,
+        triggerHeight: 1087,
+        triggerEnclosedBy: [2],
+        start: absoluteStart(1368),
+        end: { mode: 'clause', clause: 'top bottom', rawTop: 4581, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 271,
+        endTriggerEnclosedBy: [2],
+      }),
+    ], vh720);
+
+    expect(windowsOf(plans)).toEqual([[1584, 2109], [2255, 4612], [1368, 4386]]);
+  });
+
+  // Layer 1's window collapses, so its spacer moves nothing and orders nothing. Counted as an
+  // order, it would make a cycle and fall back to lengths no creation order gives. Every length
+  // here is GSAP's pins created with layer 2 first, measured on Chromium, Firefox and WebKit.
+  it('keeps every spacer counting where the conflict runs only through a collapsed window', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 2049,
+        triggerHeight: 518,
+        triggerEnclosedBy: [0],
+        start: clauseStart(720),
+        end: { mode: 'clause', clause: 'top bottom', rawTop: 2789, measureLive: false },
+        endTriggerIsSelf: false,
+        endTriggerHeight: 239,
+      }),
+      scene({
+        triggerTop: 2101,
+        triggerHeight: 153,
+        triggerEnclosedBy: [0, 1],
+        start: clauseStart(567, 1),
+        end: clause('top top'),
+        endTriggerIsSelf: false,
+        endTriggerIndex: 0,
+        endTriggerHeight: 518,
+        endTriggerEnclosedBy: [0],
+        endTriggerNests: [1, 2],
+      }),
+      scene({
+        triggerTop: 2185,
+        triggerHeight: 64,
+        triggerEnclosedBy: [0, 1, 2],
+        start: clauseStart(656, 1),
+        end: { mode: 'clause', clause: 'bottom top', rawTop: 2895, measureLive: false },
+        endTriggerIsSelf: false,
+      }),
+    ], vh720);
+
+    expect(windowsOf(plans)).toEqual([[1329, 3435], [5006, 5006], [3635, 5001]]);
+  });
+
+  // Counting every spacer, layer 0's end counts layer 2's spacer through layer 1's trigger, which
+  // needs layer 2 refreshed before layer 1, while layer 2's end counts layer 1's, which needs the
+  // reverse, so the layers refresh in DOM order. Dependency order would refresh layer 1 first and
+  // give layer 0 the 2557 of GSAP's pins created that way. Every length here is GSAP's pins created
+  // in DOM order, measured on Chromium, Firefox and WebKit.
+  it('falls back in DOM order where no refresh order gives the first settle', () => {
+    const { plans } = run([
+      scene({
+        triggerTop: 1683,
+        triggerHeight: 342,
+        triggerEnclosedBy: [0],
+        end: { mode: 'clause', clause: 'center center', rawTop: 3790, measureLive: false },
+        endTriggerIsSelf: false,
+      }),
+      scene({ triggerTop: 2593, triggerHeight: 371, triggerEnclosedBy: [1], end: dwell(810) }),
+      scene({
+        triggerTop: 2606,
+        triggerHeight: 206,
+        triggerEnclosedBy: [1, 2],
+        start: clauseStart(720),
+        end: { mode: 'clause', clause: 'bottom top', rawTop: 3639, measureLive: false },
+        endTriggerIsSelf: false,
+      }),
+    ], vh720);
+
+    expect(windowsOf(plans)).toEqual([[1683, 3430], [6903, 7713], [3633, 6196]]);
+  });
+
   // These ends count each other. In dependency order with layer 1's absolute end at its written
   // length they never settle; at the length its pin has when refreshed in that order, they do.
   // 0.10.0 settled on the answer they share, which collapsed layer 1's window.
