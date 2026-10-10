@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-10
+
 - Scene layers now stop freezing where their windows end when the shared container ends in a bottom margin, its own or its last element's. The margin collapsed out of the innermost wrapper into the freeze of the first scene in DOM order with any dwell, so `margin-bottom: 16px` on the last element held that freeze 16px past its window, and a negative margin released it early by the same amount
 - Behavior change: two Scene layers whose ends each count the other's dwell now resolve the way GSAP's pins created in dependency order do, instead of settling on the answer both share. 0.10.0 stopped `refresh()` from throwing for such a pair by settling on that shared answer, but no creation order of GSAP's pins produces it, and a pair whose ends count a share of each other grew toward `1 / (1 - share)` times their length, into windows many times the page's height. Layouts with no such pair keep their windows in all but rare arrangements (see [End syntax](README.md#end-syntax))
 - `refresh()` no longer throws when an absolute `start` keeps changing which scenes an `end` counts. Those layers now resolve in dependency order like any other set that never settles (see [Constraints and caveats](README.md#constraints-and-caveats))
