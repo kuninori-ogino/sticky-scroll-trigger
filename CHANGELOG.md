@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Added the `nestedStickyOptimization` option. Deeply nested Scene layers no longer slow Safari down: on WebKit, once an instance's sticky layers nest 7 or more levels deep, sticky elements the library owns are laid out as `position: relative` at the same offset while the scroll is far from their range, so the engine lays out only the few levels near the scroll. 16 nested layers that took seconds to load in WebKit now load in about 150ms. Nothing moves differently. It needs at least one result handed to `ScrollTrigger.create()`, which is how the library tells GSAP's own refresh apart. `'always'` turns it on for every engine and `'off'` turns it off (see [Nested sticky performance](README.md#nested-sticky-performance))
+
 ## [0.11.0] - 2026-10-10
 
 - Scene layers now stop freezing where their windows end when the shared container ends in a bottom margin, its own or its last element's. The margin collapsed out of the innermost wrapper into the freeze of the first scene in DOM order with any dwell, so `margin-bottom: 16px` on the last element held that freeze 16px past its window, and a negative margin released it early by the same amount

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Vitest runs on top of Node's process, even when using the jsdom environment, so an uncaught
 // exception inside a microtask can be observed directly via `process.on('uncaughtException')`
@@ -2663,5 +2663,302 @@ describe('refresh() pass ordering', () => {
     expect(
       countStrips((controller) => controller.createStickyPin({ trigger: query('.pin') })),
     ).toBe(2);
+  });
+});
+
+// dormancy.test.ts owns the table and its windows. What's checked here is that each instance
+// reaches it: the option, its refresh(), a pin's unwrap and destroy(). jsdom puts everything at 0,
+// so a scroll far past 0 is past every range.
+describe('nestedStickyOptimization', () => {
+  const fakeSelf = makeFakeSelf();
+  let scroll = 0;
+  let userResult: { render: (time: number) => void } | undefined;
+
+  beforeEach(() => {
+    scroll = 0;
+    userResult = undefined;
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => scroll);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const setupPinned = (nestedStickyOptimization: 'always' | 'off') => {
+    document.body.innerHTML = `
+      <div class="root"><section class="scene"></section></div>
+      <div class="pin"></div>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'), { nestedStickyOptimization });
+    const sceneVars = controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: '+=100',
+      onRefreshInit: () => userResult,
+    });
+    const pinVars = controller.createStickyPin({ trigger: query('.pin') });
+
+    // What ScrollTrigger.create() does first, and how the instance learns GSAP's class.
+    sceneVars.onRefreshInit?.(fakeSelf);
+    scroll = 5000;
+    window.dispatchEvent(new Event('scroll'));
+
+    return { controller, sceneVars, pinVars, wrapper: query('.root').parentElement! };
+  };
+
+  // First in this block: the page-level listener is attached once, so a test after another
+  // that leaked it would see no attach at all.
+  it('stops listening for scroll once the last instance is destroyed', () => {
+    const add = vi.spyOn(window, 'addEventListener');
+    const remove = vi.spyOn(window, 'removeEventListener');
+    const { controller } = setupPinned('always');
+    const added = add.mock.calls.filter(([type]) => type === 'scroll').map(([, listener]) => listener);
+
+    expect(added.length).toBeGreaterThan(0);
+    controller.destroy();
+    added.forEach((listener) => expect(remove).toHaveBeenCalledWith('scroll', listener));
+  });
+
+  // GSAP measures at scroll 0 between its refreshInit dispatch and the render(-1) it calls on what
+  // each listener returned. ScrollTrigger.create() runs onRefreshInit, whose refresh() puts the
+  // table's own listener on before GSAP's first refresh; the caller's result goes back untouched.
+  it('shows GSAP\'s refresh the layout for scroll 0 and puts the current one back on render(-1)', () => {
+    const listeners: Record<string, () => unknown> = {};
+
+    Object.assign(FakeScrollTrigger, {
+      addEventListener: (type: string, callback: () => unknown) => {
+        listeners[type] = callback;
+      },
+      removeEventListener: vi.fn(),
+    });
+    userResult = { render: vi.fn() };
+
+    const { controller, sceneVars, wrapper } = setupPinned('always');
+
+    // From 5000, past every range: the same element, far before its range at 0.
+    window.dispatchEvent(new Event('scroll'));
+    expect(wrapper.style.top).toBe('0px');
+    Object.assign(FakeScrollTrigger, { isRefreshing: true });
+
+    try {
+      const init = listeners.refreshInit() as { render: (time: number) => void };
+
+      expect(sceneVars.onRefreshInit?.(fakeSelf)).toBe(userResult);
+      expect(wrapper.style.position).toBe('relative');
+      scroll = 0;
+      init.render(-1);
+      expect(wrapper.style.position).toBe('sticky');
+    } finally {
+      Object.assign(FakeScrollTrigger, {
+        isRefreshing: false,
+        addEventListener: undefined,
+        removeEventListener: undefined,
+      });
+      controller.destroy();
+    }
+  });
+
+  // Taken for the first time inside one of GSAP's refreshes, the class's own refreshInit listener
+  // missed that dispatch: the instance's result carries the restore, the caller's render included.
+  it('hands back the restore through its own result when it first sees GSAP mid-refresh', () => {
+    const render = vi.fn();
+
+    class RefreshingScrollTrigger {
+      static refresh = vi.fn();
+
+      static isRefreshing = true;
+    }
+
+    userResult = { render };
+
+    const { controller, sceneVars, wrapper } = setupPinned('always');
+
+    window.dispatchEvent(new Event('scroll'));
+
+    const returned = sceneVars.onRefreshInit?.(
+      Object.create(RefreshingScrollTrigger.prototype) as ScrollTrigger,
+    ) as unknown as typeof userResult;
+
+    expect(wrapper.style.position).toBe('relative');
+    scroll = 0;
+    returned!.render(-1);
+    expect(render).toHaveBeenCalledWith(-1);
+    expect(wrapper.style.position).toBe('sticky');
+    controller.destroy();
+  });
+
+  it('reports refresh()\'s own error when rebuilding the table throws too, and gives up the table', async () => {
+    document.body.innerHTML = '<div class="root"><section class="scene"></section></div><div class="pin"></div>';
+
+    let end = 'bottom top';
+    const controller = new StickyScrollTrigger(query('.root'), { nestedStickyOptimization: 'always' });
+    const sceneVars = controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
+
+    controller.createStickyPin({ trigger: query('.pin'), end: () => end });
+    sceneVars.onRefreshInit?.(fakeSelf);
+    scroll = 5000;
+    window.dispatchEvent(new Event('scroll'));
+    expect(query('.pin').style.position).toBe('relative');
+    end = 'max';
+    // The next task, so the build scans the document again.
+    await Promise.resolve();
+
+    const scan = document.querySelectorAll.bind(document);
+
+    vi.spyOn(document, 'querySelectorAll').mockImplementation((selector: string) => {
+      if (selector === '*') throw new Error('table');
+
+      return scan(selector);
+    });
+
+    const uncaught: unknown[] = [];
+    const onUncaught = (error: unknown) => uncaught.push(error);
+
+    process.on('uncaughtException', onUncaught);
+
+    try {
+      expect(() => controller.refresh()).toThrow(/'max' keyword/);
+      // Not left relative without the z-index/will-change the refresh took back.
+      expect(query('.pin').style.position).toBe('sticky');
+      await Promise.resolve();
+      await Promise.resolve();
+    } finally {
+      process.off('uncaughtException', onUncaught);
+    }
+
+    // The table's error is reported too, from a microtask.
+    expect(uncaught).toEqual([new Error('table')]);
+    vi.mocked(document.querySelectorAll).mockRestore();
+    controller.destroy();
+  });
+
+  // The other instance's pin stays relative while this one fails: emptying the table gives it back
+  // whole, z-index/will-change included.
+  it('gives up the table when only rebuilding it throws, and reports that error off the stack', async () => {
+    const { controller } = setupPinned('always');
+
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      '<div class="other"><section class="otherScene"></section></div>',
+    );
+
+    const other = new StickyScrollTrigger(query('.other'), { nestedStickyOptimization: 'off' });
+
+    other.createStickyTrigger({ trigger: query('.otherScene'), end: '+=100' });
+    window.dispatchEvent(new Event('scroll'));
+    expect(query('.pin').style.position).toBe('relative');
+    // The next task, so the build scans the document again.
+    await Promise.resolve();
+
+    const scan = document.querySelectorAll.bind(document);
+
+    vi.spyOn(document, 'querySelectorAll').mockImplementation((selector: string) => {
+      if (selector === '*') throw new Error('table');
+
+      return scan(selector);
+    });
+
+    const uncaught: unknown[] = [];
+    const onUncaught = (error: unknown) => uncaught.push(error);
+
+    process.on('uncaughtException', onUncaught);
+
+    try {
+      // A caller like #scheduleRebuild carries on to GSAP's refresh: the error comes off the stack.
+      expect(() => other.refresh()).not.toThrow();
+      expect(query('.pin').style.cssText).toBe('position: sticky; top: 0px;');
+      await Promise.resolve();
+      await Promise.resolve();
+    } finally {
+      process.off('uncaughtException', onUncaught);
+    }
+
+    expect(uncaught).toEqual([new Error('table')]);
+    vi.mocked(document.querySelectorAll).mockRestore();
+    other.destroy();
+    controller.destroy();
+  });
+
+  // A pin destroy() unwraps after unregistering must not register the instance again: it would
+  // keep the page's table and GSAP listeners alive for an instance that's gone.
+  it('stays unregistered once destroy() has unwrapped its pins', () => {
+    const { controller } = setupPinned('always');
+    const add = vi.fn();
+
+    // A class of its own, so the table can't take it for one it already listens to.
+    class OtherScrollTrigger {
+      static refresh = vi.fn();
+
+      static addEventListener = add;
+
+      static removeEventListener = vi.fn();
+    }
+
+    controller.destroy();
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      '<div class="other"><section class="otherScene"></section></div>',
+    );
+
+    const other = new StickyScrollTrigger(query('.other'), { nestedStickyOptimization: 'off' });
+    const vars = other.createStickyTrigger({ trigger: query('.otherScene'), end: '+=100' });
+
+    vars.onRefreshInit?.(Object.create(OtherScrollTrigger.prototype) as ScrollTrigger);
+    other.destroy();
+
+    // With no instance using the table left, nothing is added to GSAP.
+    expect(add).not.toHaveBeenCalled();
+  });
+
+  it('rejects a value other than auto, always or off', () => {
+    document.body.innerHTML = '<div class="root"></div>';
+
+    expect(() => new StickyScrollTrigger(query('.root'), {
+      nestedStickyOptimization: 'on' as never,
+    })).toThrow('nestedStickyOptimization must be \'auto\', \'always\' or \'off\', got on');
+  });
+
+  // scrollMarginTargets: null turns that option off; null here mustn't quietly mean 'auto'.
+  it('rejects null', () => {
+    document.body.innerHTML = '<div class="root"></div>';
+
+    expect(() => new StickyScrollTrigger(query('.root'), {
+      nestedStickyOptimization: null as never,
+    })).toThrow('nestedStickyOptimization must be \'auto\', \'always\' or \'off\', got null');
+  });
+
+  it('demotes this instance\'s wrappers and pins on refresh() with always', () => {
+    const { controller, wrapper } = setupPinned('always');
+
+    expect(wrapper.style.position).toBe('relative');
+    expect(query('.pin').style.position).toBe('relative');
+    controller.destroy();
+  });
+
+  it('demotes nothing with off', () => {
+    const { controller, wrapper } = setupPinned('off');
+
+    expect(wrapper.style.position).toBe('sticky');
+    expect(query('.pin').style.position).toBe('sticky');
+    controller.destroy();
+  });
+
+  it('gives a killed pin\'s trigger back without anything demotion wrote', () => {
+    const { controller, pinVars } = setupPinned('always');
+
+    expect(query('.pin').style.position).toBe('relative');
+    pinVars.onKill?.(fakeSelf);
+
+    expect(query('.pin').style.cssText).toBe('');
+    controller.destroy();
+  });
+
+  it('gives every element back on destroy()', () => {
+    const { controller } = setupPinned('always');
+
+    controller.destroy();
+
+    expect(query('.pin').style.cssText).toBe('');
+    expect(query('.root').parentElement).toBe(document.body);
   });
 });

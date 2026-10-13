@@ -2158,3 +2158,160 @@ test('--sst-scroll-margin-top-offset combines correctly with the dwell correctio
 
   expect(landed).toEqual({ scroll: (arrival ?? 0) - 20, rectTop: 20 });
 });
+
+interface NestedStickySweep {
+  out: { y: number; height: number; tops: number[]; points: number[] }[];
+  demoted: number;
+}
+
+interface NestedStickyWindow {
+  __sweep: (positions: number[]) => Promise<NestedStickySweep>;
+  __maxScroll: () => number;
+  __probe: () => { start: number; end: number; onRefreshTop: number; plain: number[] };
+  __demoted: () => HTMLElement[];
+  __sticky: { refresh(): void; destroy(): void };
+  __gsapRefresh: () => void;
+}
+
+// Scrolls through the page in `count` odd-sized steps, one frame each.
+const sweepNestedSticky = async (page: Page, query: string, count: number) => {
+  await page.goto(`/fixtures/nestedSticky.html?${query}`);
+
+  return page.evaluate(async (steps) => {
+    const w = window as never as NestedStickyWindow;
+    const stride = Math.floor(w.__maxScroll() / steps) | 1;
+    const positions: number[] = [];
+
+    for (let y = 0; y <= w.__maxScroll(); y += stride) positions.push(y);
+
+    return w.__sweep(positions);
+  }, count);
+};
+
+// Demoting a far sticky element to relative at the offset sticky would give it must leave every
+// position and the paint order exactly as full sticky has them. The demoted count keeps the
+// comparison from passing with nothing demoted.
+// pinEnd=+=20000 runs the inner pin's range to the page's end, which every wrapper above it would
+// carry past the end if moved down; important=1 holds a pin sticky against the switch, and
+// importantTop=1 overrides the top it would be switched at; authorTop=auto leaves the author sticky
+// element with no inset, which never sticks.
+for (const layout of [
+  'scenes',
+  'pincover',
+  'author',
+  'author&authorTop=auto',
+  'pincover&pinEnd=%2B%3D20000',
+  'pincover&important=1',
+  'pincover&importantTop=1',
+]) {
+  test(`nestedStickyOptimization moves nothing on the ${layout} layout`, async ({ page }) => {
+    test.slow();
+
+    const on = await sweepNestedSticky(page, `layout=${layout}&mode=always`, 150);
+    const off = await sweepNestedSticky(page, `layout=${layout}&mode=off`, 150);
+
+    expect(on.demoted).toBeGreaterThan(0);
+    expect(off.demoted).toBe(0);
+    expect(on.out.map(({ y }) => y)).toEqual(off.out.map(({ y }) => y));
+    expect(on.out.map(({ height }) => height)).toEqual(off.out.map(({ height }) => height));
+
+    const worst = Math.max(...on.out.flatMap(({ tops }, i) =>
+      tops.map((top, j) => Math.abs(top - off.out[i].tops[j]))));
+
+    expect(worst).toBeLessThan(0.5);
+    expect(on.out.map(({ points }) => points)).toEqual(off.out.map(({ points }) => points));
+  });
+}
+
+test('nestedStickyOptimization leaves a sticky element inside a scroll box alone', async ({ page }) => {
+  const on = await sweepNestedSticky(page, 'layout=author&mode=always', 40);
+
+  expect(on.demoted).toBeGreaterThan(0);
+  expect(await page.locator('.scrollBox header').evaluate((el) => el.style.cssText)).toBe('');
+});
+
+// 'auto' is the library's call; today that's WebKit at 7 or more nested sticky levels.
+test('nestedStickyOptimization auto turns on only on WebKit', async ({ page, browserName }) => {
+  const on = await sweepNestedSticky(page, 'layout=scenes&mode=auto&n=8', 20);
+
+  if (browserName === 'webkit') expect(on.demoted).toBeGreaterThan(0);
+  else expect(on.demoted).toBe(0);
+});
+
+// GSAP measures every trigger at scroll 0 inside its own refresh, so a refresh from mid-page has
+// to show it the layout full sticky has there, then put the current scroll's state back before
+// onRefresh runs, also for a refresh() called from onRefresh. With no result handed to
+// ScrollTrigger.create(), that refresh can't be told apart, so nothing is demoted at all.
+for (const [created, reenter] of [[true, false], [true, true], [false, false]]) {
+  test(`a GSAP refresh from mid-page measures the same with nestedStickyOptimization on${created ? '' : ', no result created'}${reenter ? ', refresh() from onRefresh' : ''}`, async ({
+    page,
+  }) => {
+    const measure = async (mode: string) => {
+      await page.goto(`/fixtures/nestedSticky.html?layout=pincover&mode=${mode}&create=${created ? 1 : 0}&reenter=${reenter ? 1 : 0}`);
+      // Past GSAP's own refreshes after load (its resize refresh waits 200ms), so the one below is
+      // the only one measured.
+      await page.waitForTimeout(300);
+
+      return page.evaluate(async () => {
+        const w = window as never as NestedStickyWindow;
+
+        window.scrollTo(0, 3000);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+
+        w.__gsapRefresh();
+
+        const sameTask = w.__demoted().length;
+        const { out } = await w.__sweep([window.scrollY]);
+
+        return { probe: w.__probe(), tops: out[0].tops, sameTask };
+      });
+    };
+
+    const on = await measure('always');
+    const off = await measure('off');
+
+    expect(on.probe).toEqual(off.probe);
+
+    if (created) expect(on.sameTask).toBeGreaterThan(0);
+    else expect(on.sameTask).toBe(0);
+
+    on.tops.forEach((top, i) => expect(Math.abs(top - off.tops[i])).toBeLessThan(0.5));
+  });
+}
+
+test('destroy() gives back everything demotion wrote on a pin trigger', async ({ page }) => {
+  await sweepNestedSticky(page, 'layout=pincover&mode=always', 2);
+
+  const before = await page.evaluate(async () => {
+    const w = window as never as NestedStickyWindow;
+    const pin = document.getElementById('pinOut')!;
+
+    await w.__sweep([0]);
+
+    const demoted = pin.style.position;
+
+    w.__sticky.destroy();
+
+    return { demoted, after: pin.style.cssText };
+  });
+
+  expect(before.demoted).toBe('relative');
+  expect(before.after).toBe('z-index: 3;');
+});
+
+// Without demotion, WebKit takes seconds to lay out 16 nested sticky levels once (13.8s measured).
+test('16 nested Scene layers load quickly with nestedStickyOptimization always', async ({ page }) => {
+  await page.goto('/fixtures/nestedSticky.html?layout=scenes&mode=always&n=16');
+
+  const elapsed = await page.evaluate(async () => {
+    const w = window as never as NestedStickyWindow;
+    const t0 = performance.now();
+
+    w.__sticky.refresh();
+    await w.__sweep([1500, 4000]);
+
+    return performance.now() - t0;
+  });
+
+  expect(elapsed).toBeLessThan(2000);
+});

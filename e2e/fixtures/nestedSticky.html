@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>nestedSticky fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .root {
+        position: relative;
+      }
+      section {
+        height: 300px;
+        background: #ddd;
+      }
+      section:nth-child(odd) {
+        background: #bbb;
+      }
+      .under {
+        height: 500px;
+        background: #9ab;
+      }
+      /* Confined by the wrapper's stacking context; a demoted wrapper without z-index 0 would let
+         it paint over the covering side. */
+      .under p {
+        position: relative;
+        z-index: 5;
+        height: 400px;
+        margin: 0;
+      }
+      .over {
+        height: 600px;
+        background: #ba9;
+      }
+      .pin {
+        height: 80px;
+        background: #c66;
+      }
+      .scrollBox {
+        height: 200px;
+        overflow: auto;
+      }
+      .scrollBox header {
+        position: sticky;
+        top: 0;
+        height: 30px;
+        background: #6c6;
+      }
+      .scrollBox .body {
+        height: 600px;
+      }
+      .authorSticky {
+        position: sticky;
+        top: 40px;
+      }
+      .room {
+        height: 800px;
+      }
+      .tail {
+        height: 150vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="host"></div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      // ?layout=scenes|pincover|author, ?mode=always|off|auto, ?n= Scene layers, ?create=0 keeps
+      // every result away from ScrollTrigger.create() and binds refresh() by hand instead, ?reenter=1
+      // calls refresh() from an onRefresh callback, ?pinEnd= sets the inner pin's end (a long one
+      // runs its range to the page's end), ?important=1 holds the outer pin sticky with !important,
+      // ?importantTop=1 overrides its top with !important, ?authorTop=auto leaves the author sticky
+      // element with no inset.
+      const params = new URLSearchParams(location.search);
+      const layout = params.get('layout') ?? 'scenes';
+      const mode = params.get('mode') ?? 'always';
+      const n = Number(params.get('n') ?? 8);
+
+      if (params.get('important') === '1') {
+        document.head.insertAdjacentHTML('beforeend', '<style>#pinOut { position: sticky !important; }</style>');
+      }
+
+      if (params.get('importantTop') === '1') {
+        document.head.insertAdjacentHTML('beforeend', '<style>#pinOut { top: 140px !important; }</style>');
+      }
+      if (params.get('authorTop') === 'auto') {
+        document.head.insertAdjacentHTML('beforeend', '<style>.authorSticky { top: auto; }</style>');
+      }
+      const create = params.get('create') === '0' ? (vars) => vars : (vars) => ScrollTrigger.create(vars);
+      const host = document.querySelector('.host');
+      const sectionHtml = (i) => `<section id="s${i}" data-m><p data-m>s${i}</p></section>`;
+
+      if (layout === 'author') {
+        host.innerHTML = `
+          <div class="authorSticky" data-m>
+            <div class="root">${Array.from({ length: n }, (_, i) => sectionHtml(i)).join('')}
+              <div class="scrollBox" data-m><header data-m>box</header><div class="body"></div></div>
+            </div>
+          </div>
+          <div class="room"></div>`;
+      } else if (layout === 'pincover') {
+        host.innerHTML = `
+          <div class="root">
+            ${sectionHtml(0)}${sectionHtml(1)}
+            <div class="under" id="under" data-m><p data-m>under</p></div>
+            <div class="over" data-m><div class="pin" id="pinIn" data-m></div></div>
+            ${Array.from({ length: n - 2 }, (_, i) => sectionHtml(i + 2)).join('')}
+          </div>
+          <div class="pin" id="pinOut" data-m style="z-index: 3"></div>
+          <div class="room"></div>`;
+      } else {
+        host.innerHTML = `<div class="root">${Array.from({ length: n }, (_, i) => sectionHtml(i)).join('')}</div>`;
+      }
+
+      const sticky = new StickyScrollTrigger('.root', { nestedStickyOptimization: mode });
+      const triggers = [];
+
+      document.querySelectorAll('.root > section').forEach((section, i) => {
+        triggers.push(create(sticky.createStickyTrigger({
+          trigger: section,
+          start: 'top top',
+          end: `+=${200 + 50 * (i % 4)}`,
+        })));
+      });
+
+      if (layout === 'pincover') {
+        triggers.push(create(sticky.createOverlapScroll({ trigger: '#under' })));
+        triggers.push(create(sticky.createStickyPin({ trigger: '#pinIn', end: params.get('pinEnd') ?? '+=300' })));
+        triggers.push(create(sticky.createStickyPin({ trigger: '#pinOut', top: 100, end: '+=500' })));
+      }
+
+      // A plain trigger inside the nesting, to check what GSAP's own refresh measures, and what a
+      // layout read in its onRefresh sees.
+      const probeElement = document.querySelector(`#s${Math.floor(n / 2)} p`);
+      const probe = ScrollTrigger.create(sticky.createResolvedTrigger({
+        trigger: probeElement,
+        onRefresh: () => {
+          // ?reenter=1: a refresh() from inside GSAP's refresh, after it has measured.
+          if (params.get('reenter') === '1') sticky.refresh();
+
+          window.__onRefreshTop = probeElement.getBoundingClientRect().top;
+        },
+      }));
+
+      sticky.refresh();
+
+      if (params.get('create') === '0') ScrollTrigger.addEventListener('refreshInit', () => sticky.refresh());
+
+      // GSAP's own measurement of an element inside the nesting.
+      const plain = ScrollTrigger.create({ trigger: probeElement, start: 'top top', end: 'bottom top' });
+
+      const markers = () => Array.from(document.querySelectorAll('[data-m]'));
+      const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
+      window.__sticky = sticky;
+      window.__gsapRefresh = () => ScrollTrigger.refresh();
+      window.__probe = () => ({
+        start: probe.start,
+        end: probe.end,
+        onRefreshTop: window.__onRefreshTop,
+        plain: [plain.start, plain.end],
+      });
+      // Only demotion writes will-change: opacity here (the cover lift writes relative too).
+      window.__demoted = () => Array.from(document.querySelectorAll('*')).filter(
+        (el) => el.style.position === 'relative' && el.style.willChange === 'opacity',
+      );
+      // Tops of every marker and what is painted at a few viewport points, at each scroll.
+      window.__sweep = async (positions) => {
+        const out = [];
+        let demoted = 0;
+
+        for (const y of positions) {
+          window.scrollTo(0, y);
+          await frame();
+
+          const points = [10, 200, 400, 650].map((py) => {
+            const hit = document.elementFromPoint(300, py);
+
+            return hit ? markers().indexOf(hit.closest('[data-m]')) : -2;
+          });
+
+          demoted += window.__demoted().length;
+          out.push({
+            y: window.scrollY,
+            height: document.documentElement.scrollHeight,
+            tops: markers().map((el) => el.getBoundingClientRect().top),
+            points,
+          });
+        }
+
+        return { out, demoted };
+      };
+      window.__maxScroll = () => document.documentElement.scrollHeight - innerHeight;
+    </script>
+  </body>
+</html>

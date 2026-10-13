@@ -3,6 +3,7 @@
  */
 
 import type { InlinePosition } from './dom';
+import type { NestedStickyOptimization } from './dormancy';
 import type { EndInput, PositionInput } from './position';
 import type { EXCLUDED_VAR_KEYS } from './vars';
 
@@ -17,6 +18,10 @@ export interface StickyScrollTriggerOptions {
   // Defaults to '[id]', the set that same-page fragment links and ':target' can actually reach.
   // Pass null to leave scroll-margin-top alone entirely.
   scrollMarginTargets?: string | null;
+  // Whether sticky elements far from their range are laid out as position:relative at the same
+  // offset, to spare WebKit's slow nested-sticky layout (see dormancy.ts). 'auto' (the default)
+  // turns it on only where the library expects a gain, 'always' on every engine, 'off' never.
+  nestedStickyOptimization?: NestedStickyOptimization;
 }
 
 // trigger/endTrigger/cover also accept a CSS selector string, resolved via document.querySelector

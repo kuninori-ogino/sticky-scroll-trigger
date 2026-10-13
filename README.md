@@ -143,9 +143,10 @@ Avoid debounce logic that assumes it runs before GSAP's 200ms delay. Use `refres
 
 Creates an instance that treats `root` (a selector string or `HTMLElement`) as the shared container. Everything documented below is an instance method on it, apart from the static [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances), which resolves a position across more than one instance. Throws if the shared container can't be found.
 
-| option                | default  | description                                                                                                                                                  |
-| --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `scrollMarginTargets` | `'[id]'` | Which elements inside the shared container get their `scroll-margin-top` kept in sync (see [Same-page links](#same-page-links)). `null` disables it entirely |
+| option                     | default  | description                                                                                                                                                                                                                                |
+| -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scrollMarginTargets`      | `'[id]'` | Which elements inside the shared container get their `scroll-margin-top` kept in sync (see [Same-page links](#same-page-links)). `null` disables it entirely                                                                               |
+| `nestedStickyOptimization` | `'auto'` | Lays out sticky elements far from their range as `position: relative` (see [Nested sticky performance](#nested-sticky-performance)). `'auto'` turns it on only where the library expects a gain, `'always'` on every engine, `'off'` never |
 
 Call them on the instance (`sticky.createStickyTrigger(...)`) rather than destructuring them out: a destructured method loses its `this` binding.
 
@@ -425,6 +426,22 @@ Pinning decouples an element's position in the document from the scroll position
 - Known limitation: Chromium's own `scroll-behavior: smooth` doesn't run a native fragment jump as one continuous animation, and can under- or overshoot if `scroll-margin-top` changes at any point before it settles (which a jump started mid-dwell does, on purpose). This isn't specific to how the value is driven (CSS or JS) and has no known workaround; if you need animated same-page scrolling in Chromium, drive it yourself with [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances) and `scrollTo({ top, behavior: 'smooth' })` to a precomputed target instead
 - The default `'[id]'` covers everything a fragment link or `:target` can reach. Find-in-page and keyboard focus can scroll to arbitrary elements, which this doesn't cover; widen the selector if that matters to you
 - To take this over yourself, pass `scrollMarginTargets: null` and compute positions with [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances) instead. Don't do both: a handler that reads `scroll-margin-top` and also applies `getScrollTop` would count the correction twice
+
+## Nested sticky performance
+
+Every Scene layer adds one level of nested `position:sticky`, and WebKit's layout cost grows about threefold per level: 9 levels take about 17ms of layout per frame in Safari, 11 levels over 100ms, and 16 can take seconds to load. Other engines don't slow down.
+
+While the scroll is far from a sticky element's range, holding it there with `position:sticky` buys nothing, so the library lays it out as `position: relative` at the offset sticky would give it (top 0 before the range, its full travel after) and switches it back to sticky from a passive `scroll` listener before the range comes within reach. Nothing moves differently; the engine just lays out fewer sticky levels per frame. Only elements the library made sticky are switched: the Scene/Cover wrappers and `createStickyPin` triggers. A sticky element of your own is never switched (one around the library's elements is set to `static` for a moment at each `refresh()` to measure the layout, then gets its `style` attribute back as it was, two writes a `MutationObserver` on it sees), and everything is left alone when the shared container sits inside a scroll container or `body` scrolls the page instead of the window.
+
+Which conditions turn it on is the library's call and may change between versions as engines change. Currently: WebKit (Safari, and every browser on iOS/iPadOS), for an instance whose sticky elements nest 7 or more levels deep, counting sticky elements of other instances or your own above them. Other engines are left untouched. Pass `'always'` to turn it on regardless, or `'off'` to never touch it.
+
+GSAP measures every ScrollTrigger at scroll 0 inside its own refresh, so the switch shows it the layout for scroll 0 there and puts back the one for the current scroll before any `onRefresh` callback runs. Telling GSAP's refresh apart takes GSAP's `ScrollTrigger` class, which an instance picks up from the Vars it hands to `ScrollTrigger.create()`. On a page where no instance's Vars reach `ScrollTrigger.create()`, the switch stays off whatever the option says.
+
+- A switched element also gets `z-index: 0` and `will-change: opacity` while relative, unless it already has its own, so it keeps the stacking context and composited layer sticky gave it
+- A pin `trigger` with its own `left`, `right` or `bottom` stays sticky, and so does anything inside a sticky element of your own held by anything but a plain px or % `top` (one with no inset at all never sticks and doesn't count), anything under a transform, and anything whose parent is `display: contents` or inline
+- An element whose content runs past the page's end (a pin range reaching the end, say) stays sticky past its range: moved down as `position: relative`, that content would make the page taller
+- Content that changes size needs a `refresh()` anyway (see [Calling refresh](#calling-refresh)), and a window resize gets GSAP's own after a short delay; until then, a switched element stays at the offset measured at the last one
+- A layout read in the same task as a programmatic scroll (`window.scrollTo()` followed by `getBoundingClientRect()`, say) sees the state for the previous scroll until the `scroll` event. Same-page links and `scrollIntoView()` land the same as with `'off'`
 
 ## Position syntax
 

@@ -22,6 +22,16 @@ import {
   unwrapPin,
   wrapPin,
 } from './dom';
+import {
+  clearDormancy,
+  isWebKit,
+  rebuildDormancy,
+  registerDormancyClient,
+  takeGsapRefreshRestore,
+  releaseDormant,
+  unregisterDormancyClient,
+} from './dormancy';
+import type { DormancyClient, ScrollTriggerClassLike } from './dormancy';
 import { createScrollMarginSync } from './scrollMargin';
 import { buildStructure, isDomOrderStale, unbuildStructure } from './structure';
 import { dwellBeforeReach, dwellConsumedAt, planLayers } from './freezeWindow';
@@ -56,6 +66,7 @@ export type {
   StickyScrollTriggerOptions,
 } from './types';
 export type { EndInput, EndValue, PositionInput } from './position';
+export type { NestedStickyOptimization } from './dormancy';
 
 // createStickyPin's `top`, converted into the clause form that everything downstream works with.
 // Why it's a separate option at all: see the rejection in #refreshPinLayers.
@@ -112,6 +123,9 @@ const resolvePinReleaseScroll = (
   }
 };
 
+// What this module reads off the captured ScrollTrigger class.
+type ScrollTriggerClass = { refresh(safe?: boolean): void } & ScrollTriggerClassLike;
+
 // Shared by the layer and pin registration paths, which both reject an already-registered trigger.
 const hasDuplicateTrigger = (
   list: readonly { trigger: HTMLElement }[],
@@ -136,12 +150,15 @@ export default class StickyScrollTrigger {
   // The ScrollTrigger class, read at runtime off the `self` GSAP passes to its callbacks, so gsap
   // is never imported (see #scheduleRebuild). Null until the first onKill/onRefreshInit, and
   // again after destroy().
-  #scrollTriggerClass: { refresh(safe?: boolean): void } | null = null;
+  #scrollTriggerClass: ScrollTriggerClass | null = null;
   // Independent of Scene/Cover layers, implemented with plain position:sticky alone.
   #pinLayers: PinLayer[] = [];
   // Keeps scroll-margin-top on same-page-link targets in step with the current freeze windows,
   // so the browser's own scroll-into-view accounts for Scene layer dwell (see scrollMargin.ts).
   #scrollMarginSync: ReturnType<typeof createScrollMarginSync>;
+  // This instance's share of the page-level dormancy table, or null where it stays off (see
+  // dormancy.ts).
+  #dormancyClient: DormancyClient | null = null;
 
   constructor(root: string | HTMLElement, options: StickyScrollTriggerOptions = {}) {
     this.#rootElement = resolveRoot(root);
@@ -165,7 +182,36 @@ export default class StickyScrollTrigger {
       }
     }
 
+    // Unlike scrollMarginTargets, null isn't a value here: it gets the error rather than 'auto'.
+    const optimization = options.nestedStickyOptimization === undefined
+      ? 'auto'
+      : options.nestedStickyOptimization;
+
+    if (!['auto', 'always', 'off'].includes(optimization)) {
+      throw new Error(
+        `StickyScrollTrigger: nestedStickyOptimization must be 'auto', 'always' or 'off', got `
+        + `${String(optimization)}.`,
+      );
+    }
+
     this.#scrollMarginSync = createScrollMarginSync(this.#rootElement, scrollMarginTargets);
+
+    // Other engines don't slow down with depth, so 'auto' leaves them at this one check.
+    if (optimization === 'always' || (optimization === 'auto' && isWebKit())) {
+      this.#dormancyClient = {
+        mode: optimization,
+        ownedElements: () => this.#ownedStickyElements(),
+      };
+      registerDormancyClient(this.#dormancyClient);
+    }
+  }
+
+  // Every element this instance has made sticky: the wrappers still built, and the wrapped pins.
+  #ownedStickyElements(): HTMLElement[] {
+    return [
+      ...this.#builtLayers.flatMap((layer) => (layer.wrapper ? [layer.wrapper] : [])),
+      ...this.#pinLayers.flatMap((layer) => (layer.inner ? [layer.trigger] : [])),
+    ];
   }
 
   #unbuild() {
@@ -217,9 +263,7 @@ export default class StickyScrollTrigger {
   #captureScrollTriggerClass(self: ScrollTrigger) {
     if (this.#destroyed) return;
 
-    this.#scrollTriggerClass = self.constructor as unknown as {
-      refresh(safe?: boolean): void;
-    };
+    this.#scrollTriggerClass = self.constructor as unknown as ScrollTriggerClass;
   }
 
   // Binds refresh() to the refreshInit GSAP itself fires (resize/load), so callers get the right
@@ -250,8 +294,18 @@ export default class StickyScrollTrigger {
       }
 
       // GSAP reverts an animation a refreshInit listener returns, once the refresh is done
-      // (ScrollTrigger.js's `refreshInits.forEach(...render(-1))`).
-      return result;
+      // (ScrollTrigger.js's `refreshInits.forEach(...render(-1))`). The same call puts back the
+      // nested-sticky state when the table took GSAP's class too late to listen itself.
+      const restoreDormancy = takeGsapRefreshRestore();
+
+      if (!restoreDormancy) return result;
+
+      return {
+        render: (time: number) => {
+          (result as { render?: (time: number) => unknown } | undefined)?.render?.(time);
+          restoreDormancy();
+        },
+      };
     };
   }
 
@@ -323,6 +377,7 @@ export default class StickyScrollTrigger {
   #unwrapPinLayer(layer: PinLayer): boolean {
     if (!layer.outer) return false;
 
+    releaseDormant([layer.trigger]);
     unwrapPin(layer.outer, layer.trigger, layer.savedPosition);
     layer.outer = null;
     layer.inner = null;
@@ -631,6 +686,31 @@ export default class StickyScrollTrigger {
   refresh(): void {
     if (this.#destroyed) return;
 
+    let failure: { error: unknown } | null = null;
+
+    try {
+      this.#refreshLayout();
+    } catch (error) {
+      failure = { error };
+    }
+
+    // After every sticky value is written, and on a throw too: the restores there put back
+    // whatever the table expects, and the table has to follow what this refresh did manage.
+    try {
+      rebuildDormancy(this.#scrollTriggerClass);
+    } catch (error) {
+      // Every demoted element goes back to sticky. The table's error goes out off the stack, so
+      // #scheduleRebuild still reaches GSAP's refresh; the refresh's own error is the one thrown.
+      clearDormancy();
+      queueMicrotask(() => {
+        throw error;
+      });
+    }
+
+    if (failure) throw failure.error;
+  }
+
+  #refreshLayout(): void {
     // Checks DOM-order changes as well as dirty (layer count changes),
     // since a reorder with no additions/removals never sets dirty.
     if (this.#dirty || !this.#built || isDomOrderStale(this.#layers)) {
@@ -1233,6 +1313,10 @@ export default class StickyScrollTrigger {
     if (this.#destroyed) return;
 
     this.#destroyed = true;
+
+    // Even with no client of its own, its wrappers were ancestors in the other instances' ranges.
+    unregisterDormancyClient(this.#dormancyClient);
+
     // Before #unbuild removes the outermost container, which hosts the scroll-driven ramps.
     this.#scrollMarginSync.restore();
     this.#restoreCoverLifts();
