@@ -58,6 +58,10 @@ export default defineConfig({
     }),
   ],
   build: {
+    // Vite's default ('baseline-widely-available', Vite 8.3.4) with Safari/iOS lowered from 16.4 to
+    // 16.0, so a class static block is transformed (browserslist: `baseline widely available,
+    // iOS >= 16, Safari >= 16`).
+    target: ['chrome111', 'edge111', 'firefox114', 'safari16', 'ios16'],
     outDir: 'dist',
     emptyOutDir: true,
     lib: {
