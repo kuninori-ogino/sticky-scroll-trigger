@@ -7,7 +7,7 @@ import type { CoverLayer, Layer, SceneLayer } from './types';
 
 // jsdom answers the one thing these functions ask the DOM, `contains`, so an unregistered
 // endTrigger's inside/outside branch is real here. It has no layout, so documentTop reports 0 for
-// everything and measureUsedHeight falls back to offsetHeight's own 0, leaving endTriggerHeight
+// everything and measureUsedHeight falls back to offsetHeight's own 0, leaving endTrigger.height
 // and the wrapper/cover positions to e2e. The arithmetic survives, since elementHeight and
 // viewportHeight arrive as arguments.
 //
@@ -259,11 +259,7 @@ describe('measureLayer', () => {
         wrapperTop: 0,
         coverTop: 0,
         end: { mode: 'clause', clause: 'top top', rawTop: 0, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
-        endTriggerHeight: 0,
-        endTriggerEnclosedBy: [],
-        endTriggerNests: [],
+        endTrigger: { isSelf: false, index: null, height: 0, enclosedBy: [], nests: [] },
       });
   });
 
@@ -307,13 +303,13 @@ describe('measureLayer', () => {
       indexByTrigger,
     );
 
-    expect(pointsBack.endTriggerIndex).toBe(0);
-    expect(pointsBack.endTriggerIsSelf).toBe(false);
+    expect(pointsBack.endTrigger.index).toBe(0);
+    expect(pointsBack.endTrigger.isSelf).toBe(false);
 
     const pointsAtSelf = measure(scene({ end: 'top top' }), 0, indexByTrigger);
 
-    expect(pointsAtSelf.endTriggerIndex).toBe(0);
-    expect(pointsAtSelf.endTriggerIsSelf).toBe(true);
+    expect(pointsAtSelf.endTrigger.index).toBe(0);
+    expect(pointsAtSelf.endTrigger.isSelf).toBe(true);
 
     // An endTrigger that is nobody's registered trigger reports no index at all, which is what
     // sends resolveEndSpec down its unregistered branch.
@@ -323,7 +319,7 @@ describe('measureLayer', () => {
       new Map([[query('.a'), 0]]),
     );
 
-    expect(unregistered.endTriggerIndex).toBeNull();
+    expect(unregistered.endTrigger.index).toBeNull();
   });
 
   // Geometry alone can't place a point on a scene's top edge: the endTrigger may be the scene's
@@ -338,12 +334,12 @@ describe('measureLayer', () => {
     const indexByTrigger = new Map([[query('.a'), 0], [query('.b'), 1]]);
 
     expect(measure(scene({ endTrigger: inner, end: 'top top' }), 0, indexByTrigger)
-      .endTriggerEnclosedBy).toEqual([1]);
+      .endTrigger.enclosedBy).toEqual([1]);
     expect(measure(scene({ endTrigger: after, end: 'top top' }), 0, indexByTrigger)
-      .endTriggerEnclosedBy).toEqual([]);
+      .endTrigger.enclosedBy).toEqual([]);
     // A registered endTrigger encloses itself.
     expect(measure(scene({ trigger: query('.b'), endTrigger: query('.a'), end: 'top top' }), 1, indexByTrigger)
-      .endTriggerEnclosedBy).toEqual([0]);
+      .endTrigger.enclosedBy).toEqual([0]);
   });
 
   // The other way round: a trigger with no height on the endTrigger's edge may sit inside it or
@@ -359,8 +355,8 @@ describe('measureLayer', () => {
     const indexByTrigger = new Map([[query('.a'), 0], [query('.b'), 1], [inner, 2], [after, 3]]);
 
     expect(measure(scene({ endTrigger: box, end: 'top top' }), 0, indexByTrigger)
-      .endTriggerNests).toEqual([2]);
+      .endTrigger.nests).toEqual([2]);
     expect(measure(scene({ trigger: query('.b'), endTrigger: query('.a'), end: 'top top' }), 1, indexByTrigger)
-      .endTriggerNests).toEqual([]);
+      .endTrigger.nests).toEqual([]);
   });
 });

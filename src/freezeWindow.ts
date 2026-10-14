@@ -66,14 +66,18 @@ export interface LayerMeasurement {
   wrapperTop: number;
   coverTop: number; // Only meaningful for cover layers (0 for Scene layers).
   end: EndSpec;
-  endTriggerIsSelf: boolean;
-  endTriggerIndex: number | null; // Index of endTrigger when it's also another layer's trigger.
-  endTriggerHeight: number; // Only used for a position-clause end.
-  // Indices of the layers whose trigger encloses (or is) an endTrigger inside the container.
-  endTriggerEnclosedBy: readonly number[];
-  // Indices of the layers whose trigger sits inside an endTrigger in the container, other than
-  // the endTrigger's own.
-  endTriggerNests: readonly number[];
+  endTrigger: EndTriggerMeasurement;
+}
+
+// A layer's endTrigger as pass 1 measured it.
+export interface EndTriggerMeasurement {
+  isSelf: boolean;
+  index: number | null; // The layer whose trigger it is, if any: this one's own when isSelf.
+  height: number; // Only used for a position-clause end.
+  // Indices of the layers whose trigger encloses (or is) it, when it's inside the container.
+  enclosedBy: readonly number[];
+  // Indices of the layers whose trigger sits inside it in the container, other than its own.
+  nests: readonly number[];
 }
 
 export interface LayerPlan {
@@ -407,9 +411,9 @@ const runPass = (
       } else {
         // A registered endTrigger is measured unpadded like any other element, rather than
         // taken from that layer's own plan.
-        const rawTop = measurement.endTriggerIndex === null
+        const rawTop = measurement.endTrigger.index === null
           ? end.rawTop
-          : measurements[measurement.endTriggerIndex].triggerTop;
+          : measurements[measurement.endTrigger.index].triggerTop;
 
         if (rawTop === null) {
           endTop = 0;
@@ -417,9 +421,9 @@ const runPass = (
           const box = {
             top: rawTop,
             fraction: resolveElementFraction(end.clause),
-            nests: measurement.endTriggerNests,
-            enclosedBy: measurement.endTriggerEnclosedBy,
-            anchorElement: measurement.endTriggerIndex,
+            nests: measurement.endTrigger.nests,
+            enclosedBy: measurement.endTrigger.enclosedBy,
+            anchorElement: measurement.endTrigger.index,
           };
 
           endTop = rawTop + gapsOf(box, rawTop - anchorOffsetEnd);
@@ -479,11 +483,11 @@ const runPass = (
       case 'clause': {
         const anchorOffsetEnd = resolveAnchorTop(
           measurement.end.clause,
-          measurement.endTriggerHeight,
+          measurement.endTrigger.height,
           viewportHeight,
         );
 
-        freezeEnd = measurement.endTriggerIsSelf
+        freezeEnd = measurement.endTrigger.isSelf
           ? selfClauseEnd(measurement.end, anchorOffsetEnd)
           : elementClauseEnd(measurement.end, anchorOffsetEnd);
         break;
@@ -561,7 +565,7 @@ const planCover = (
     case 'clause': {
       const anchorOffsetEnd = resolveAnchorTop(
         measurement.end.clause,
-        measurement.endTriggerHeight,
+        measurement.endTrigger.height,
         viewportHeight,
       );
 
@@ -569,11 +573,11 @@ const planCover = (
         // Outside the container, so no dwell holds it back.
         freezeEnd = measureLiveEndTriggerTop(index) - anchorOffsetEnd;
       } else {
-        const endTop = measurement.endTriggerIsSelf
+        const endTop = measurement.endTrigger.isSelf
           ? measurement.triggerTop
-          : measurement.endTriggerIndex === null
+          : measurement.endTrigger.index === null
             ? (measurement.end.rawTop ?? 0)
-            : measurements[measurement.endTriggerIndex].triggerTop;
+            : measurements[measurement.endTrigger.index].triggerTop;
 
         freezeEnd = reached(endTop - anchorOffsetEnd);
       }
@@ -738,10 +742,10 @@ const refreshOrderEdges = (
     // A spacer inside a trigger that also encloses the end's element reaches it without leaving
     // that trigger. A registered endTrigger is listed as enclosing itself, but a point on it moves
     // with a spacer inside it only as it grows.
-    const enclosingAnchor = (measurement.end.mode === 'clause' && !measurement.endTriggerIsSelf
-      ? measurement.endTriggerEnclosedBy
+    const enclosingAnchor = (measurement.end.mode === 'clause' && !measurement.endTrigger.isSelf
+      ? measurement.endTrigger.enclosedBy
       : measurement.triggerEnclosedBy
-    ).filter((m) => m !== measurement.endTriggerIndex);
+    ).filter((m) => m !== measurement.endTrigger.index);
 
     movers.forEach((k) => {
       if (lengths[k] <= TIE_TOLERANCE_PX) return;

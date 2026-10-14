@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { dwellBeforeReach, dwellConsumedAt, planLayers } from './freezeWindow';
-import type { LayerMeasurement, LayerPlan, PlanDeps } from './freezeWindow';
+import type {
+  EndTriggerMeasurement, LayerMeasurement, LayerPlan, PlanDeps,
+} from './freezeWindow';
 
 // planLayers never touches the DOM,
 // so every branch of pass 2 can be verified just by feeding it numeric measurements.
@@ -12,7 +14,13 @@ const absoluteStart = (value: number): LayerMeasurement['start'] =>
   ({ mode: 'absolute', value });
 const absoluteEnd = (value: number): LayerMeasurement['end'] =>
   ({ mode: 'absolute', value });
-const scene = (over: Partial<LayerMeasurement> = {}): LayerMeasurement => ({
+
+// A test's endTrigger merges into the defaults below.
+type MeasurementOver = Partial<Omit<LayerMeasurement, 'endTrigger'>> & {
+  endTrigger?: Partial<EndTriggerMeasurement>;
+};
+
+const scene = ({ endTrigger, ...over }: MeasurementOver = {}): LayerMeasurement => ({
   kind: 'scene',
   start: clauseStart(0),
   triggerTop: 0,
@@ -21,14 +29,10 @@ const scene = (over: Partial<LayerMeasurement> = {}): LayerMeasurement => ({
   wrapperTop: 0,
   coverTop: 0,
   end: { mode: 'dwell', distancePx: 0 },
-  endTriggerIsSelf: true,
-  endTriggerIndex: null,
-  endTriggerHeight: 0,
-  endTriggerEnclosedBy: [],
-  endTriggerNests: [],
+  endTrigger: { isSelf: true, index: null, height: 0, enclosedBy: [], nests: [], ...endTrigger },
   ...over,
 });
-const cover = (over: Partial<LayerMeasurement> = {}): LayerMeasurement =>
+const cover = (over: MeasurementOver = {}): LayerMeasurement =>
   scene({ kind: 'cover', ...over });
 
 const run = (measurements: LayerMeasurement[], deps: Partial<PlanDeps> = {}) => {
@@ -169,8 +173,7 @@ describe('dwell before a layer\'s start', () => {
         triggerHeight: 200,
         triggerEnclosedBy: [0],
         end: { mode: 'clause', clause: 'top top', rawTop: 1200, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 100,
+        endTrigger: { isSelf: false, height: 100 },
       }),
       scene({ triggerTop: 1300, start: clauseStart(720), end: dwell(500) }),
     ]);
@@ -189,9 +192,7 @@ describe('dwell before a layer\'s start', () => {
         triggerTop: 1400,
         start: absoluteStart(0),
         end: { mode: 'clause', clause: 'top 250', rawTop: 350, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
-        endTriggerEnclosedBy: [1],
+        endTrigger: { isSelf: false, index: null, enclosedBy: [1] },
       }),
     ]);
 
@@ -220,22 +221,21 @@ describe('dwell before a layer\'s start', () => {
         triggerHeight: 82,
         start: clauseStart(800),
         end: clause('bottom top'),
-        endTriggerHeight: 82,
+        endTrigger: { height: 82 },
       }),
       scene({
         triggerTop: 685,
         triggerHeight: 772,
         triggerEnclosedBy: [1],
         end: clause('bottom top'),
-        endTriggerHeight: 772,
-        endTriggerEnclosedBy: [1],
+        endTrigger: { height: 772, enclosedBy: [1] },
       }),
       scene({
         triggerTop: 911,
         start: clauseStart(800),
         triggerEnclosedBy: [1, 2],
         end: clause('bottom top'),
-        endTriggerEnclosedBy: [1, 2],
+        endTrigger: { enclosedBy: [1, 2] },
       }),
     ]);
 
@@ -252,14 +252,14 @@ describe('dwell before a layer\'s start', () => {
         triggerTop: 173,
         triggerHeight: 1436,
         end: clause('bottom top'),
-        endTriggerHeight: 1436,
+        endTrigger: { height: 1436 },
       }),
       scene({
         triggerTop: 230,
         triggerHeight: 67,
         triggerEnclosedBy: [0, 1],
         end: clause('bottom top'),
-        endTriggerHeight: 67,
+        endTrigger: { height: 67 },
       }),
       scene({
         triggerTop: 500,
@@ -267,7 +267,7 @@ describe('dwell before a layer\'s start', () => {
         start: clauseStart(248, 0.5),
         triggerEnclosedBy: [0, 2],
         end: clause('bottom top'),
-        endTriggerHeight: 304,
+        endTrigger: { height: 304 },
       }),
       scene({
         triggerTop: 1031,
@@ -343,7 +343,7 @@ describe('position-clause end', () => {
         triggerHeight: 3000,
         start: absoluteStart(100),
         end: clause('bottom top'),
-        endTriggerHeight: 3000,
+        endTrigger: { height: 3000 },
       }),
       scene({
         triggerTop: 1000,
@@ -351,7 +351,7 @@ describe('position-clause end', () => {
         triggerEnclosedBy: [0, 1],
         start: absoluteStart(200),
         end: clause('bottom top'),
-        endTriggerHeight: 500,
+        endTrigger: { height: 500 },
       }),
     ]);
 
@@ -364,8 +364,7 @@ describe('position-clause end', () => {
       scene({
         triggerTop: 1000,
         end: clause('bottom top'),
-        endTriggerIsSelf: true,
-        endTriggerHeight: 400,
+        endTrigger: { isSelf: true, height: 400 },
       }),
     ]);
 
@@ -386,10 +385,7 @@ describe('position-clause end', () => {
         triggerHeight: 300,
         start: clauseStart(800),
         end: clause('bottom top'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 0,
-        endTriggerHeight: 400,
-        endTriggerEnclosedBy: [0],
+        endTrigger: { isSelf: false, index: 0, height: 400, enclosedBy: [0] },
       }),
     ]);
 
@@ -403,8 +399,7 @@ describe('position-clause end', () => {
       scene({
         triggerTop: 100,
         end: { mode: 'clause', clause: 'top top', rawTop: 900, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
+        endTrigger: { isSelf: false, index: null },
       }),
     ]);
 
@@ -418,8 +413,7 @@ describe('position-clause end', () => {
       scene({
         triggerTop: 0,
         end: { mode: 'clause', clause: 'top top', rawTop: 2000, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
+        endTrigger: { isSelf: false, index: null },
       }),
       scene({ triggerTop: 1000, end: dwell(500) }),
     ]);
@@ -436,9 +430,7 @@ describe('position-clause end', () => {
       scene({
         triggerTop: 500,
         end: { mode: 'clause', clause: 'top top', rawTop: 1200, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
-        endTriggerEnclosedBy: [1],
+        endTrigger: { isSelf: false, index: null, enclosedBy: [1] },
       }),
       scene({ triggerTop: 1000, triggerHeight: 2000, start: clauseStart(-1200), end: dwell(500) }),
     ]);
@@ -457,9 +449,7 @@ describe('position-clause end', () => {
         triggerTop: 1000,
         triggerHeight: 100,
         end: { mode: 'clause', clause: 'top top', rawTop: 2500, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
-        endTriggerEnclosedBy: [1],
+        endTrigger: { isSelf: false, index: null, enclosedBy: [1] },
       }),
       scene({ triggerTop: 2000, triggerHeight: 1000, end: dwell(500) }),
     ]);
@@ -477,9 +467,7 @@ describe('position-clause end', () => {
         triggerTop: 1551,
         triggerHeight: 1552,
         end: { mode: 'clause', clause: 'top top', rawTop: 2315, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
-        endTriggerEnclosedBy: [0, 1],
+        endTrigger: { isSelf: false, index: null, enclosedBy: [0, 1] },
       }),
       scene({ triggerTop: 1834, triggerHeight: 935, triggerEnclosedBy: [0, 1], end: dwell(673) }),
     ], { viewportHeight: 720 });
@@ -501,8 +489,7 @@ describe('position-clause end', () => {
         triggerEnclosedBy: [0, 1],
         start: clauseStart(335, 0.5),
         end: { mode: 'clause', clause: 'top bottom', rawTop: 3814, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
+        endTrigger: { isSelf: false, index: null },
       }),
     ], { viewportHeight: 720 });
 
@@ -517,10 +504,7 @@ describe('position-clause end', () => {
       scene({
         triggerTop: 0,
         end: { mode: 'clause', clause: 'bottom top', rawTop: 1000, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
-        endTriggerHeight: 1000,
-        endTriggerNests: [1],
+        endTrigger: { isSelf: false, index: null, height: 1000, nests: [1] },
       }),
       scene({ triggerTop: 1200, triggerHeight: 300, end: dwell(500) }),
     ]);
@@ -533,8 +517,7 @@ describe('position-clause end', () => {
       scene({
         triggerTop: 500,
         end: { mode: 'clause', clause: 'top top', rawTop: 1200, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
+        endTrigger: { isSelf: false, index: null },
       }),
       scene({ triggerTop: 1400, start: clauseStart(800), end: dwell(500) }),
     ]);
@@ -550,14 +533,12 @@ describe('position-clause end', () => {
       scene({
         triggerTop: 0,
         end: { mode: 'clause', clause: 'top top', rawTop: 1000, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
+        endTrigger: { isSelf: false, index: null },
       }),
       scene({
         triggerTop: 500,
         end: { mode: 'clause', clause: 'top top', rawTop: 2000, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
+        endTrigger: { isSelf: false, index: null },
       }),
       scene({ triggerTop: 1500, end: dwell(100) }),
     ]);
@@ -583,20 +564,17 @@ describe('position-clause end', () => {
       scene({
         triggerTop: 300,
         end: { mode: 'clause', clause: 'top top', rawTop: 2500, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
+        endTrigger: { isSelf: false, index: null },
       }),
       scene({
         triggerTop: 100,
         end: { mode: 'clause', clause: 'top top', rawTop: 2200, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
+        endTrigger: { isSelf: false, index: null },
       }),
       scene({
         triggerTop: 200,
         end: { mode: 'clause', clause: 'top top', rawTop: 2800, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
+        endTrigger: { isSelf: false, index: null },
       }),
     ]);
     // Expressed as the same derivation the comment above walks through by hand, rather than
@@ -618,8 +596,7 @@ describe('position-clause end', () => {
         scene({
           triggerTop: 100,
           end: { mode: 'clause', clause: 'top top', rawTop: null, measureLive: true },
-          endTriggerIsSelf: false,
-          endTriggerIndex: null,
+          endTrigger: { isSelf: false, index: null },
         }),
       ],
       { measureLiveEndTriggerTop },
@@ -647,15 +624,13 @@ describe('position-clause end', () => {
         scene({
           triggerTop: 0,
           end: { mode: 'clause', clause: 'top top', rawTop: 2000, measureLive: false },
-          endTriggerIsSelf: false,
-          endTriggerIndex: null,
+          endTrigger: { isSelf: false, index: null },
         }),
         scene({ triggerTop: 1000, end: dwell(500) }),
         scene({
           triggerTop: 3000,
           end: { mode: 'clause', clause: 'top top', rawTop: null, measureLive: true },
-          endTriggerIsSelf: false,
-          endTriggerIndex: null,
+          endTrigger: { isSelf: false, index: null },
         }),
       ],
       { measureLiveEndTriggerTop },
@@ -673,8 +648,7 @@ describe('position-clause end', () => {
       scene({
         triggerTop: 1000,
         end: clause('top bottom'),
-        endTriggerIsSelf: true,
-        endTriggerHeight: 100,
+        endTrigger: { isSelf: true, height: 100 },
       }),
     ]);
 
@@ -691,10 +665,7 @@ describe('position-clause end', () => {
       scene({
         triggerTop: 1000,
         end: clause('top top'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 1,
-        endTriggerHeight: 100,
-        endTriggerEnclosedBy: [1],
+        endTrigger: { isSelf: false, index: 1, height: 100, enclosedBy: [1] },
       }),
       scene({ triggerTop: 2000, end: dwell(100) }),
     ]);
@@ -714,16 +685,14 @@ describe('position-clause end', () => {
         triggerHeight: 100,
         start: clauseStart(800),
         end: { mode: 'clause', clause: 'top bottom', rawTop: 1400, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 40,
+        endTrigger: { isSelf: false, height: 40 },
       }),
       scene({
         triggerTop: 1300,
         triggerHeight: 100,
         start: clauseStart(800),
         end: { mode: 'clause', clause: 'bottom top', rawTop: 900, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 200,
+        endTrigger: { isSelf: false, height: 200 },
       }),
     ]);
 
@@ -736,8 +705,10 @@ describe('position-clause end', () => {
       cover({
         triggerTop: 1000,
         end: clause('top top'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 1, // a Scene layer positioned after this one
+        endTrigger: {
+          isSelf: false,
+          index: 1, // a Scene layer positioned after this one
+        },
       }),
       scene({ triggerTop: 2000, end: dwell(100) }),
     ]);
@@ -778,9 +749,7 @@ describe('spacers above, inside and below the element a point is on', () => {
         triggerHeight: 200,
         triggerEnclosedBy: [0],
         end: { mode: 'clause', clause: text, rawTop: 2000, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: markerHeight,
-        endTriggerNests: markerHeight > 0 ? [1] : [],
+        endTrigger: { isSelf: false, height: markerHeight, nests: markerHeight > 0 ? [1] : [] },
       }),
       scene({ triggerTop: kTop, triggerHeight: kHeight, triggerEnclosedBy: [1], end: dwell(300) }),
     ], vh720);
@@ -798,7 +767,7 @@ describe('spacers above, inside and below the element a point is on', () => {
         triggerEnclosedBy: [0],
         start: clauseStart(-40, 0.5),
         end: { mode: 'clause', clause: 'top top', rawTop: 2000, measureLive: false },
-        endTriggerIsSelf: false,
+        endTrigger: { isSelf: false },
       }),
       scene({ triggerTop: 1100, triggerHeight: 100, triggerEnclosedBy: [0, 1], end: dwell(300) }),
     ], vh720);
@@ -815,11 +784,7 @@ describe('spacers above, inside and below the element a point is on', () => {
         triggerHeight: 200,
         triggerEnclosedBy: [0],
         end: clause('center top'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 1,
-        endTriggerHeight: 400,
-        endTriggerEnclosedBy: [1],
-        endTriggerNests: [2],
+        endTrigger: { isSelf: false, index: 1, height: 400, enclosedBy: [1], nests: [2] },
       }),
       scene({
         triggerTop: 2000,
@@ -842,9 +807,7 @@ describe('spacers above, inside and below the element a point is on', () => {
         triggerEnclosedBy: [0],
         start: absoluteStart(1100),
         end: { mode: 'clause', clause: 'center top', rawTop: 2000, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 400,
-        endTriggerNests: [1],
+        endTrigger: { isSelf: false, height: 400, nests: [1] },
       }),
       scene({ triggerTop: 2010, triggerHeight: 50, triggerEnclosedBy: [1], end: dwell(300) }),
     ], vh720);
@@ -855,7 +818,12 @@ describe('spacers above, inside and below the element a point is on', () => {
   // Layer 1's trigger fills layer 0's exactly. Layer 1's spacer grows layer 0's trigger, but layer
   // 0's wraps layer 1's from outside, so only layer 0's default end takes in the other's dwell.
   it('counts a trigger filling its encloser toward the encloser\'s self end only', () => {
-    const box = { triggerTop: 1000, triggerHeight: 800, end: clause('bottom top'), endTriggerHeight: 800 };
+    const box = {
+      triggerTop: 1000,
+      triggerHeight: 800,
+      end: clause('bottom top'),
+      endTrigger: { height: 800 },
+    };
     const { plans } = run([
       scene({ ...box, triggerEnclosedBy: [0] }),
       scene({ ...box, triggerEnclosedBy: [0, 1] }),
@@ -878,9 +846,7 @@ describe('spacers above, inside and below the element a point is on', () => {
         triggerHeight: 100,
         triggerEnclosedBy: [0],
         end: { mode: 'clause', clause: 'center top', rawTop: 1000, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 800,
-        endTriggerNests: inside ? [1] : [],
+        endTrigger: { isSelf: false, height: 800, nests: inside ? [1] : [] },
       }),
       scene({ triggerTop: kTop, triggerEnclosedBy: [1], end: dwell(300) }),
     ], vh720);
@@ -903,7 +869,7 @@ describe('spacers above, inside and below the element a point is on', () => {
         triggerEnclosedBy: [0],
         start,
         end: clause('bottom top'),
-        endTriggerHeight: 800,
+        endTrigger: { height: 800 },
       }),
       scene({ triggerTop: kTop, triggerEnclosedBy: inside ? [0, 1] : [1], end: dwell(300) }),
     ], vh720).plans[0].paddingHeight;
@@ -922,14 +888,14 @@ describe('spacers above, inside and below the element a point is on', () => {
     });
     const outer = { triggerTop: 1000, triggerHeight: 800, triggerEnclosedBy: [0] };
     const self = run([
-      scene({ ...outer, end: clause('bottom top'), endTriggerHeight: 800 }),
+      scene({ ...outer, end: clause('bottom top'), endTrigger: { height: 800 } }),
       inner,
     ], vh720);
     const marker = run([
       scene({
         ...outer,
         end: { mode: 'clause', clause: 'top top', rawTop: 1800, measureLive: false },
-        endTriggerIsSelf: false,
+        endTrigger: { isSelf: false },
       }),
       inner,
     ], vh720);
@@ -948,7 +914,7 @@ describe('spacers above, inside and below the element a point is on', () => {
         triggerHeight: 475,
         triggerEnclosedBy: [0],
         end: clause('center center'),
-        endTriggerHeight: 475,
+        endTrigger: { height: 475 },
       }),
       scene({
         triggerTop: 2127,
@@ -956,7 +922,7 @@ describe('spacers above, inside and below the element a point is on', () => {
         triggerEnclosedBy: [0, 1],
         start: clauseStart(273.5, 0.5),
         end: { mode: 'clause', clause: 'center center', rawTop: 2595, measureLive: false },
-        endTriggerIsSelf: false,
+        endTrigger: { isSelf: false },
       }),
     ], vh720);
 
@@ -973,8 +939,7 @@ describe('endTriggers that never settle', () => {
       triggerHeight: 1000,
       triggerEnclosedBy: [0],
       end: { mode: 'clause', clause: 'top top', rawTop: tEnd, measureLive: false },
-      endTriggerIsSelf: false,
-      endTriggerEnclosedBy: tEndEnclosedBy,
+      endTrigger: { isSelf: false, enclosedBy: tEndEnclosedBy },
     }),
     scene({
       triggerTop: 1200,
@@ -982,7 +947,7 @@ describe('endTriggers that never settle', () => {
       triggerEnclosedBy: [0, 1],
       start: clauseStart(360),
       end: sEnd,
-      endTriggerIsSelf: sEnd.mode === 'dwell',
+      endTrigger: { isSelf: sEnd.mode === 'dwell' },
     }),
   ];
   const markerAt2500: LayerMeasurement['end']
@@ -1010,8 +975,7 @@ describe('endTriggers that never settle', () => {
         triggerHeight: 548,
         triggerEnclosedBy: [0],
         end: { mode: 'clause', clause: 'top bottom', rawTop: 5063, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 205,
+        endTrigger: { isSelf: false, height: 205 },
       }),
       scene({ triggerTop: 2555, triggerHeight: 50, triggerEnclosedBy: [0, 1], end: dwell(293) }),
       scene({
@@ -1020,7 +984,7 @@ describe('endTriggers that never settle', () => {
         triggerEnclosedBy: [0, 2],
         start: clauseStart(592, 1),
         end: { mode: 'clause', clause: 'top top', rawTop: 4618, measureLive: false },
-        endTriggerIsSelf: false,
+        endTrigger: { isSelf: false },
       }),
     ], { viewportHeight: 720 });
 
@@ -1038,16 +1002,14 @@ describe('endTriggers that never settle', () => {
         triggerHeight: 311,
         triggerEnclosedBy: [0],
         end: { mode: 'clause', clause: 'top bottom', rawTop: 2717, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 186,
-        endTriggerEnclosedBy: [3],
+        endTrigger: { isSelf: false, height: 186, enclosedBy: [3] },
       }),
       scene({
         triggerTop: 1974,
         triggerHeight: 171,
         triggerEnclosedBy: [0, 1],
         end: clause('bottom top'),
-        endTriggerHeight: 171,
+        endTrigger: { height: 171 },
       }),
       scene({
         triggerTop: 1993,
@@ -1055,7 +1017,7 @@ describe('endTriggers that never settle', () => {
         triggerEnclosedBy: [0, 1, 2],
         start: clauseStart(720),
         end: { mode: 'clause', clause: 'bottom bottom', rawTop: 3692, measureLive: false },
-        endTriggerIsSelf: false,
+        endTrigger: { isSelf: false },
       }),
       scene({
         triggerTop: 2457,
@@ -1081,10 +1043,7 @@ describe('endTriggers that never settle', () => {
         triggerHeight: 500,
         start: absoluteStart(100),
         end: clause('center center'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 0,
-        endTriggerHeight: 2000,
-        endTriggerEnclosedBy: [0],
+        endTrigger: { isSelf: false, index: 0, height: 2000, enclosedBy: [0] },
       }),
     ], { viewportHeight: 720 });
 
@@ -1103,9 +1062,7 @@ describe('endTriggers that never settle', () => {
         triggerEnclosedBy: [0],
         start: absoluteStart(2503),
         end: { mode: 'clause', clause: 'center center', rawTop: 2981, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 181,
-        endTriggerEnclosedBy: [2],
+        endTrigger: { isSelf: false, height: 181, enclosedBy: [2] },
       }),
       scene({
         triggerTop: 2414,
@@ -1113,8 +1070,7 @@ describe('endTriggers that never settle', () => {
         triggerEnclosedBy: [0, 1],
         start: absoluteStart(1168),
         end: { mode: 'clause', clause: 'top bottom', rawTop: 4298, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerEnclosedBy: [2],
+        endTrigger: { isSelf: false, enclosedBy: [2] },
       }),
       scene({
         triggerTop: 2898,
@@ -1140,7 +1096,7 @@ describe('endTriggers that never settle', () => {
         triggerHeight: 374,
         triggerEnclosedBy: [0],
         end: { mode: 'clause', clause: 'top bottom', rawTop: 4260, measureLive: false },
-        endTriggerIsSelf: false,
+        endTrigger: { isSelf: false },
       }),
       scene({
         triggerTop: 1916,
@@ -1148,8 +1104,7 @@ describe('endTriggers that never settle', () => {
         triggerEnclosedBy: [0, 1],
         start: absoluteStart(3555),
         end: { mode: 'clause', clause: 'bottom top', rawTop: 4526, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 281,
+        endTrigger: { isSelf: false, height: 281 },
       }),
       scene({
         triggerTop: 2066,
@@ -1157,10 +1112,7 @@ describe('endTriggers that never settle', () => {
         triggerEnclosedBy: [0, 2],
         start: clauseStart(327, 0.5),
         end: clause('bottom top'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 1,
-        endTriggerHeight: 50,
-        endTriggerEnclosedBy: [0, 1],
+        endTrigger: { isSelf: false, index: 1, height: 50, enclosedBy: [0, 1] },
       }),
     ], { viewportHeight: 720 });
 
@@ -1204,7 +1156,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0],
         start: clauseStart(-596, 0.5),
         end: clause('bottom-=50 top'),
-        endTriggerHeight: 1912,
+        endTrigger: { height: 1912 },
       }),
       scene({
         triggerTop: 2948,
@@ -1212,8 +1164,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 1],
         start: clauseStart(-100),
         end: { mode: 'clause', clause: '75% 10%', rawTop: 5179, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerEnclosedBy: [2],
+        endTrigger: { isSelf: false, enclosedBy: [2] },
       }),
       scene({
         triggerTop: 4937,
@@ -1221,7 +1172,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [2],
         start: clauseStart(215.8, 0.2),
         end: { mode: 'clause', clause: 'bottom top', rawTop: 7346, measureLive: false },
-        endTriggerIsSelf: false,
+        endTrigger: { isSelf: false },
       }),
       scene({
         triggerTop: 5003,
@@ -1229,8 +1180,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [2, 3],
         start: clauseStart(633, 1),
         end: { mode: 'clause', clause: 'top+=100 center', rawTop: 7697, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 267,
+        endTrigger: { isSelf: false, height: 267 },
       }),
     ], vh720);
 
@@ -1250,7 +1200,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0],
         start: absoluteStart(3127),
         end: clause('bottom top'),
-        endTriggerHeight: 1564,
+        endTrigger: { height: 1564 },
       }),
       scene({
         triggerTop: 3181,
@@ -1258,11 +1208,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 1],
         start: clauseStart(308, 1),
         end: clause('bottom top'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 0,
-        endTriggerHeight: 1564,
-        endTriggerEnclosedBy: [0],
-        endTriggerNests: [1],
+        endTrigger: { isSelf: false, index: 0, height: 1564, enclosedBy: [0], nests: [1] },
       }),
       scene({
         triggerTop: 4012,
@@ -1289,8 +1235,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0],
         start: clauseStart(360),
         end: { mode: 'clause', clause: 'top top', rawTop: 4320, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 368,
+        endTrigger: { isSelf: false, height: 368 },
       }),
       scene({
         triggerTop: 2669,
@@ -1305,11 +1250,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 1, 2],
         start: clauseStart(720),
         end: clause('bottom top'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 0,
-        endTriggerHeight: 1919,
-        endTriggerEnclosedBy: [0],
-        endTriggerNests: [1, 2],
+        endTrigger: { isSelf: false, index: 0, height: 1919, enclosedBy: [0], nests: [1, 2] },
       }),
     ], vh720);
 
@@ -1335,11 +1276,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 1],
         start: clauseStart(0),
         end: clause('bottom top'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 0,
-        endTriggerHeight: 236,
-        endTriggerEnclosedBy: [0],
-        endTriggerNests: [1, 2],
+        endTrigger: { isSelf: false, index: 0, height: 236, enclosedBy: [0], nests: [1, 2] },
       }),
       scene({
         triggerTop: 1814,
@@ -1347,7 +1284,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 2],
         start: clauseStart(670, 1),
         end: { mode: 'clause', clause: 'bottom top', rawTop: 3459, measureLive: false },
-        endTriggerIsSelf: false,
+        endTrigger: { isSelf: false },
       }),
     ], vh720);
 
@@ -1373,8 +1310,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 1],
         start: absoluteStart(2255),
         end: { mode: 'clause', clause: 'bottom top', rawTop: 3815, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 272,
+        endTrigger: { isSelf: false, height: 272 },
       }),
       scene({
         triggerTop: 4374,
@@ -1382,9 +1318,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [2],
         start: absoluteStart(1368),
         end: { mode: 'clause', clause: 'top bottom', rawTop: 4581, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 271,
-        endTriggerEnclosedBy: [2],
+        endTrigger: { isSelf: false, height: 271, enclosedBy: [2] },
       }),
     ], vh720);
 
@@ -1402,8 +1336,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0],
         start: clauseStart(720),
         end: { mode: 'clause', clause: 'top bottom', rawTop: 2789, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 239,
+        endTrigger: { isSelf: false, height: 239 },
       }),
       scene({
         triggerTop: 2101,
@@ -1411,11 +1344,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 1],
         start: clauseStart(567, 1),
         end: clause('top top'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 0,
-        endTriggerHeight: 518,
-        endTriggerEnclosedBy: [0],
-        endTriggerNests: [1, 2],
+        endTrigger: { isSelf: false, index: 0, height: 518, enclosedBy: [0], nests: [1, 2] },
       }),
       scene({
         triggerTop: 2185,
@@ -1423,7 +1352,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 1, 2],
         start: clauseStart(656, 1),
         end: { mode: 'clause', clause: 'bottom top', rawTop: 2895, measureLive: false },
-        endTriggerIsSelf: false,
+        endTrigger: { isSelf: false },
       }),
     ], vh720);
 
@@ -1442,7 +1371,7 @@ describe('dependency order and overlapping windows', () => {
         triggerHeight: 342,
         triggerEnclosedBy: [0],
         end: { mode: 'clause', clause: 'center center', rawTop: 3790, measureLive: false },
-        endTriggerIsSelf: false,
+        endTrigger: { isSelf: false },
       }),
       scene({ triggerTop: 2593, triggerHeight: 371, triggerEnclosedBy: [1], end: dwell(810) }),
       scene({
@@ -1451,7 +1380,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [1, 2],
         start: clauseStart(720),
         end: { mode: 'clause', clause: 'bottom top', rawTop: 3639, measureLive: false },
-        endTriggerIsSelf: false,
+        endTrigger: { isSelf: false },
       }),
     ], vh720);
 
@@ -1469,7 +1398,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0],
         start: clauseStart(-1033.2, 0.9),
         end: clause('bottom 25%'),
-        endTriggerHeight: 1788,
+        endTrigger: { height: 1788 },
       }),
       scene({
         triggerTop: 2695,
@@ -1483,11 +1412,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 2],
         start: clauseStart(720),
         end: clause('75% 10%'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 0,
-        endTriggerHeight: 1788,
-        endTriggerEnclosedBy: [0],
-        endTriggerNests: [1, 2],
+        endTrigger: { isSelf: false, index: 0, height: 1788, enclosedBy: [0], nests: [1, 2] },
       }),
     ], vh720);
 
@@ -1506,7 +1431,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0],
         start: clauseStart(248, 1),
         end: { mode: 'clause', clause: 'center center', rawTop: 3490, measureLive: false },
-        endTriggerIsSelf: false,
+        endTrigger: { isSelf: false },
       }),
       scene({
         triggerTop: 1629,
@@ -1514,7 +1439,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 1],
         start: absoluteStart(3388),
         end: { mode: 'clause', clause: 'center center', rawTop: 4970, measureLive: false },
-        endTriggerIsSelf: false,
+        endTrigger: { isSelf: false },
       }),
       scene({
         triggerTop: 1826,
@@ -1522,10 +1447,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 2],
         start: clauseStart(619, 1),
         end: clause('center top'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 1,
-        endTriggerHeight: 73,
-        endTriggerEnclosedBy: [0, 1],
+        endTrigger: { isSelf: false, index: 1, height: 73, enclosedBy: [0, 1] },
       }),
     ], vh720);
 
@@ -1551,11 +1473,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 1],
         start: clauseStart(360),
         end: clause('75% 10%'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 0,
-        endTriggerHeight: 1288,
-        endTriggerEnclosedBy: [0],
-        endTriggerNests: [1, 2],
+        endTrigger: { isSelf: false, index: 0, height: 1288, enclosedBy: [0], nests: [1, 2] },
       }),
       scene({
         triggerTop: 3077,
@@ -1587,8 +1505,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 1],
         start: clauseStart(720),
         end: { mode: 'clause', clause: 'bottom top', rawTop: 3731, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 508,
+        endTrigger: { isSelf: false, height: 508 },
       }),
       scene({
         triggerTop: 2569,
@@ -1596,11 +1513,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 1, 2],
         start: absoluteStart(1374),
         end: clause('bottom bottom'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 0,
-        endTriggerHeight: 1090,
-        endTriggerEnclosedBy: [0],
-        endTriggerNests: [1, 2],
+        endTrigger: { isSelf: false, index: 0, height: 1090, enclosedBy: [0], nests: [1, 2] },
       }),
     ], vh720);
 
@@ -1617,8 +1530,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0],
         start: clauseStart(-267, 1),
         end: { mode: 'clause', clause: 'bottom top', rawTop: 4032, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerEnclosedBy: [3],
+        endTrigger: { isSelf: false, enclosedBy: [3] },
       }),
       scene({
         triggerTop: 2625,
@@ -1626,8 +1538,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 1],
         start: absoluteStart(4692),
         end: { mode: 'clause', clause: 'top top', rawTop: 4673, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 448,
+        endTrigger: { isSelf: false, height: 448 },
       }),
       scene({
         triggerTop: 2654,
@@ -1635,11 +1546,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 1, 2],
         start: absoluteStart(2201),
         end: clause('bottom top'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 1,
-        endTriggerHeight: 116,
-        endTriggerEnclosedBy: [0, 1],
-        endTriggerNests: [2],
+        endTrigger: { isSelf: false, index: 1, height: 116, enclosedBy: [0, 1], nests: [2] },
       }),
       scene({
         triggerTop: 3264,
@@ -1647,8 +1554,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [3],
         start: absoluteStart(4941),
         end: { mode: 'clause', clause: 'center center', rawTop: 4059, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerEnclosedBy: [3],
+        endTrigger: { isSelf: false, enclosedBy: [3] },
       }),
     ], vh720);
 
@@ -1666,7 +1572,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0],
         start: clauseStart(367, 1),
         end: clause('center center'),
-        endTriggerHeight: 353,
+        endTrigger: { height: 353 },
       }),
       scene({
         triggerTop: 2597,
@@ -1680,7 +1586,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [2],
         start: absoluteStart(2743),
         end: clause('top top'),
-        endTriggerHeight: 543,
+        endTrigger: { height: 543 },
       }),
     ], vh720);
 
@@ -1700,7 +1606,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0],
         start: clauseStart(800),
         end: clause('center center'),
-        endTriggerHeight: 1100,
+        endTrigger: { height: 1100 },
       }),
       scene({
         triggerTop: 1000,
@@ -1708,8 +1614,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [0, 1],
         start: clauseStart(400),
         end: { mode: 'clause', clause: 'center center', rawTop: 2100, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerEnclosedBy: [0, 2],
+        endTrigger: { isSelf: false, enclosedBy: [0, 2] },
       }),
       scene({
         triggerTop: 2100,
@@ -1717,8 +1622,7 @@ describe('dependency order and overlapping windows', () => {
         triggerEnclosedBy: [2],
         start: absoluteStart(3200),
         end: { mode: 'clause', clause: 'bottom top', rawTop: 4900, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerHeight: 400,
+        endTrigger: { isSelf: false, height: 400 },
       }),
     ]);
 
@@ -1772,9 +1676,7 @@ describe('cover layer freeze window', () => {
         triggerTop: 500,
         start: clauseStart(420),
         end: clause('top bottom'),
-        endTriggerIsSelf: false,
-        endTriggerIndex: 2,
-        endTriggerHeight: 400,
+        endTrigger: { isSelf: false, index: 2, height: 400 },
       }),
       scene({ triggerTop: 1800, end: dwell(500) }),
       scene({ triggerTop: 2200, end: dwell(500) }),
@@ -1829,8 +1731,7 @@ describe('onPlanned', () => {
       scene({
         triggerTop: 0,
         end: { mode: 'clause', clause: 'top top', rawTop: 2000, measureLive: false },
-        endTriggerIsSelf: false,
-        endTriggerIndex: null,
+        endTrigger: { isSelf: false, index: null },
       }),
       scene({ triggerTop: 1000, end: dwell(500) }),
     ]);

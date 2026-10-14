@@ -188,15 +188,17 @@ export const measureLayer = (
     wrapperTop: layer.wrapper ? documentTop(layer.wrapper) : 0,
     coverTop: layer.kind === 'cover' ? documentTop(layer.cover) : 0,
     end,
-    endTriggerIsSelf,
-    endTriggerIndex,
-    endTriggerHeight: end.mode === 'clause' ? measureUsedHeight(layer.endTrigger) : 0,
-    // A registered endTrigger counts as enclosing itself: its own pin holds it too.
-    endTriggerEnclosedBy: endTriggerInContainer
-      ? indicesWhere((trigger) => trigger.contains(layer.endTrigger))
-      : [],
-    endTriggerNests: endTriggerInContainer
-      ? indicesWhere((other) => other !== layer.endTrigger && layer.endTrigger.contains(other))
-      : [],
+    endTrigger: {
+      isSelf: endTriggerIsSelf,
+      index: endTriggerIndex,
+      height: end.mode === 'clause' ? measureUsedHeight(layer.endTrigger) : 0,
+      // A registered endTrigger counts as enclosing itself: its own pin holds it too.
+      enclosedBy: endTriggerInContainer
+        ? indicesWhere((trigger) => trigger.contains(layer.endTrigger))
+        : [],
+      nests: endTriggerInContainer
+        ? indicesWhere((other) => other !== layer.endTrigger && layer.endTrigger.contains(other))
+        : [],
+    },
   };
 };
