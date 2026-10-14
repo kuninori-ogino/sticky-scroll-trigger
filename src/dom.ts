@@ -84,8 +84,9 @@ export const measureViewportHeight = (): number => {
   return height;
 };
 
-const measureDocumentHeight = (): number =>
+export const measureDocumentHeight = (): number =>
   document.documentElement.scrollHeight || document.body.scrollHeight;
+
 // Every pin range on the page, whichever instance wrapped it. Module-level because another
 // instance's range, sized for a longer page, sticks out past the end until that instance
 // refreshes, and would otherwise be measured as page.
@@ -193,6 +194,15 @@ export const captureInlinePosition = (el: HTMLElement): InlinePosition => ({
 export const restoreInlinePosition = (el: HTMLElement, saved: InlinePosition): void => {
   el.style.position = saved.position;
   el.style.top = saved.top;
+};
+
+// Clears position/top on every element and returns a function that restores them.
+export const stripStickyPositions = (elements: readonly HTMLElement[]): (() => void) => {
+  const saved = elements.map(captureInlinePosition);
+
+  elements.forEach(resetStickyPosition);
+
+  return () => elements.forEach((el, i) => restoreInlinePosition(el, saved[i]));
 };
 
 // Scene layer: wraps inner in one level of stickyContainer{ stickyWrapper, stickyPadding }

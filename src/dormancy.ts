@@ -9,7 +9,7 @@
  * above it, whichever instance (or the page author) made it sticky.
  */
 
-import { compareDocumentOrder } from './dom';
+import { compareDocumentOrder, measureDocumentHeight } from './dom';
 
 export type NestedStickyOptimization = 'auto' | 'always' | 'off';
 
@@ -498,7 +498,7 @@ const measureStatic = (
   // The scrollport a sticky percentage resolves against: no scrollbar in it, unlike innerHeight.
   const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
   const transformMemo = new Map<Element, boolean>();
-  const documentHeight = document.documentElement.scrollHeight;
+  const documentHeight = measureDocumentHeight();
 
   all.forEach((record) => {
     const { el } = record;

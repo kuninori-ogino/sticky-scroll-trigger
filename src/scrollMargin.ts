@@ -239,6 +239,12 @@ export const createScrollMarginSync = (
     jsHost = null;
   };
 
+  const release = () => {
+    written.forEach(restoreTarget);
+    written = new Set();
+    clearAnimation();
+  };
+
   return {
     // measureNaturalTops returns each target's documentTop with no wrapper stuck, which only the
     // caller can arrange.
@@ -255,9 +261,7 @@ export const createScrollMarginSync = (
         .sort((a, b) => a.freezeStart - b.freezeStart);
 
       if (targetSelector === null || !ramps.length || !host) {
-        written.forEach(restoreTarget);
-        written = new Set();
-        clearAnimation();
+        release();
 
         return;
       }
@@ -338,9 +342,7 @@ export const createScrollMarginSync = (
     restore(): void {
       if (usesJsRamp) window.removeEventListener('scroll', applyJsRamp);
 
-      written.forEach(restoreTarget);
-      written = new Set();
-      clearAnimation();
+      release();
     },
   };
 };

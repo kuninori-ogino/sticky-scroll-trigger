@@ -138,11 +138,14 @@ const isHeldIn = (
   && !(enclosedBy.includes(m) && m !== anchorElement));
 
 // The element an end or layout start names a point on: its unpadded top, the clause's share of its
-// height (resolveElementFraction), and the layers whose trigger sits inside it in the DOM.
+// height (resolveElementFraction), the layers whose trigger sits inside it in the DOM, the layers
+// whose trigger encloses (or is) it, and the layer whose own trigger it is (null for none).
 interface AnchorBox {
   top: number;
   fraction: number;
   nests: readonly number[];
+  enclosedBy: readonly number[];
+  anchorElement: number | null;
 }
 
 // The layers whose trigger sits inside layer `index`'s own trigger in the DOM.
@@ -150,6 +153,14 @@ const nestedIn = (measurements: readonly LayerMeasurement[], index: number): num
   measurements.flatMap(({ triggerEnclosedBy }, k) => (
     k !== index && triggerEnclosedBy.includes(index) ? [k] : []
   ));
+
+// What every dwell count for one layer shares. ownIndex is that layer.
+interface CountContext {
+  measurements: readonly LayerMeasurement[];
+  world: PassWorld;
+  order: RefreshOrder | null;
+  ownIndex: number;
+}
 
 // The share of layer `index`'s dwell that comes before the point an end or layout start names on
 // `box` (reaching the viewport anchor at reachedAt, unpadded). Under GSAP's pins a spacer above the
@@ -159,17 +170,13 @@ const nestedIn = (measurements: readonly LayerMeasurement[], index: number): num
 // in full only if it freezes first, as pinnedContainer would count it, but judged at this point.
 // An absolute start is placed as PassWorld's unpaddedStart says.
 const anchorShare = (
-  measurements: readonly LayerMeasurement[],
-  world: PassWorld,
+  { measurements, world, order, ownIndex }: CountContext,
   index: number,
   freezeStart: number,
   box: AnchorBox,
   reachedAt: number,
-  enclosedBy: readonly number[],
-  anchorElement: number | null,
-  order: RefreshOrder | null,
-  ownIndex: number,
 ): number => {
+  const { enclosedBy, anchorElement } = box;
   const measurement = measurements[index];
 
   if (enclosedBy.includes(index)) {
@@ -190,23 +197,17 @@ const anchorShare = (
 // Total dwell anchorShare counts, leaving out ownIndex and, under a refresh order, the layers
 // after it. Adds each layer with a share to `counted` when given.
 const gapsBeforeEndAnchor = (
-  measurements: readonly LayerMeasurement[],
-  world: PassWorld,
+  context: CountContext,
   windows: readonly KnownWindow[],
   box: AnchorBox,
   reachedAt: number,
-  enclosedBy: readonly number[],
-  ownIndex: number,
-  anchorElement: number | null,
-  order: RefreshOrder | null,
   counted?: Set<number>,
 ): number => windows.reduce((total, { index, freezeStart, freezeEnd }) => {
+  const { ownIndex, order } = context;
+
   if (index === ownIndex || (order && order.isBefore(ownIndex, index))) return total;
 
-  const weight = anchorShare(
-    measurements, world, index, freezeStart, box, reachedAt, enclosedBy, anchorElement, order,
-    ownIndex,
-  );
+  const weight = anchorShare(context, index, freezeStart, box, reachedAt);
 
   if (weight === 0) return total;
 
@@ -329,6 +330,18 @@ const runPass = (
 
     recounts.push(recount);
 
+    const context: CountContext = { measurements, world, order, ownIndex: index };
+
+    // Counts the dwell before a point and queues the same count for the recount after the pass.
+    const gapsOf = (box: AnchorBox, reachedAt: number) => {
+      const gaps = (w: readonly KnownWindow[], counted?: Set<number>) =>
+        gapsBeforeEndAnchor(context, w, box, reachedAt, counted);
+
+      recount.runs.push((w) => gaps(w, recount.counted));
+
+      return gaps(knownWindows());
+    };
+
     // An absolute start is a fixed scroll position, so unlike a clause start, trigger's own
     // natural position plays no part in it.
     const { start } = measurement;
@@ -438,22 +451,11 @@ const runPass = (
               top: rawTop,
               fraction: resolveElementFraction(measurement.end.clause),
               nests: measurement.endTriggerNests,
+              enclosedBy: measurement.endTriggerEnclosedBy,
+              anchorElement: measurement.endTriggerIndex,
             };
-            const gaps = (w: readonly KnownWindow[], counted?: Set<number>) => gapsBeforeEndAnchor(
-              measurements,
-              world,
-              w,
-              box,
-              rawTop - anchorOffsetEnd,
-              measurement.endTriggerEnclosedBy,
-              index,
-              measurement.endTriggerIndex,
-              order,
-              counted,
-            );
 
-            endTop = rawTop + gaps(knownWindows());
-            recount.runs.push((w) => gaps(w, recount.counted));
+            endTop = rawTop + gapsOf(box, rawTop - anchorOffsetEnd);
           }
         }
 
@@ -466,25 +468,16 @@ const runPass = (
         if (start.mode === 'absolute') {
           layoutStart = start.value;
         } else {
-          const gaps = (w: readonly KnownWindow[], counted?: Set<number>) => gapsBeforeEndAnchor(
-            measurements,
-            world,
-            w,
+          layoutStart = measurement.triggerTop - start.anchorOffset + gapsOf(
             {
               top: measurement.triggerTop,
               fraction: start.elementFraction,
               nests: nestedIn(measurements, index),
+              enclosedBy: measurement.triggerEnclosedBy,
+              anchorElement: index,
             },
             measurement.triggerTop - start.anchorOffset,
-            measurement.triggerEnclosedBy,
-            index,
-            index,
-            order,
-            counted,
           );
-
-          layoutStart = measurement.triggerTop - start.anchorOffset + gaps(knownWindows());
-          recount.runs.push((w) => gaps(w, recount.counted));
         }
 
         freezeEnd = freezeStart + Math.max(0, endTop - anchorOffsetEnd - layoutStart);

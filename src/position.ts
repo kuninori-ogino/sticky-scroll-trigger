@@ -132,17 +132,27 @@ const assertNotClamped = (trimmed: string) => {
   );
 };
 
-// How far below the element's top edge a position clause's element side points (px), e.g. the
-// element's height for 'bottom top'.
-export const resolveElementAnchor = (position: string, elementHeight: number): number => {
+// Splits a position value into its element and viewport tokens, rejecting clamp() before the split
+// (assertNotClamped says why).
+const splitClause = (position: string): string[] => {
   const trimmed = position.trim();
 
   assertNotClamped(trimmed);
 
-  const elementClause = parseClauseToken(trimmed.split(/\s+/)[0], elementHeight);
-
-  return elementHeight * elementClause.fraction + elementClause.offsetPx;
+  return trimmed.split(/\s+/);
 };
+
+// Where one token points inside a box of `size` px, measured from the box's top edge.
+const anchorWithin = (token: string, size: number): number => {
+  const { fraction, offsetPx } = parseClauseToken(token, size);
+
+  return size * fraction + offsetPx;
+};
+
+// How far below the element's top edge a position clause's element side points (px), e.g. the
+// element's height for 'bottom top'.
+export const resolveElementAnchor = (position: string, elementHeight: number): number =>
+  anchorWithin(splitClause(position)[0], elementHeight);
 
 // The share of the element's height in resolveElementAnchor's answer: 0.5 for 'center top', 0.6
 // for 'center+=10% top', 0 for '100px top'. A spacer inside the element moves the point it names by
@@ -158,18 +168,9 @@ export const resolveAnchorTop = (
   elementHeight: number,
   viewportHeight: number,
 ): number => {
-  const trimmed = position.trim();
+  const [elementToken, viewportToken = 'top'] = splitClause(position);
 
-  assertNotClamped(trimmed);
-
-  const viewportToken = trimmed.split(/\s+/)[1] ?? 'top';
-  const viewportClause = parseClauseToken(viewportToken, viewportHeight);
-
-  return (
-    viewportHeight * viewportClause.fraction
-    + viewportClause.offsetPx
-    - resolveElementAnchor(trimmed, elementHeight)
-  );
+  return anchorWithin(viewportToken, viewportHeight) - anchorWithin(elementToken, elementHeight);
 };
 
 // GSAP treats a string as relative-to-start only when it begins with the literal '+=' prefix

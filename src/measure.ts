@@ -165,6 +165,8 @@ export const measureLayer = (
     : prefixSpacedRelativeEnd(startResolved, resolveMaybeFn(layer.end));
   const elementHeight = measureUsedHeight(layer.trigger);
   const endTriggerIsSelf = layer.endTrigger === layer.trigger;
+  const indicesWhere = (test: (trigger: HTMLElement) => boolean): number[] =>
+    [...indexByTrigger].filter(([trigger]) => test(trigger)).map(([, index]) => index);
   const endTriggerIndex = indexByTrigger.get(layer.endTrigger) ?? null;
   const end = resolveEndSpec(
     rootElement,
@@ -174,6 +176,7 @@ export const measureLayer = (
     ownIndex,
     endTriggerIndex,
   );
+  const endTriggerInContainer = end.mode === 'clause' && !end.measureLive && !endTriggerIsSelf;
   const start = resolveStartSpec(layer, startResolved, elementHeight, viewportHeight);
 
   return {
@@ -181,9 +184,7 @@ export const measureLayer = (
     start,
     triggerTop: documentTop(layer.trigger),
     triggerHeight: elementHeight,
-    triggerEnclosedBy: [...indexByTrigger]
-      .filter(([trigger]) => trigger.contains(layer.trigger))
-      .map(([, index]) => index),
+    triggerEnclosedBy: indicesWhere((trigger) => trigger.contains(layer.trigger)),
     wrapperTop: layer.wrapper ? documentTop(layer.wrapper) : 0,
     coverTop: layer.kind === 'cover' ? documentTop(layer.cover) : 0,
     end,
@@ -191,15 +192,11 @@ export const measureLayer = (
     endTriggerIndex,
     endTriggerHeight: end.mode === 'clause' ? measureUsedHeight(layer.endTrigger) : 0,
     // A registered endTrigger counts as enclosing itself: its own pin holds it too.
-    endTriggerEnclosedBy: end.mode === 'clause' && !end.measureLive && !endTriggerIsSelf
-      ? [...indexByTrigger]
-          .filter(([trigger]) => trigger.contains(layer.endTrigger))
-          .map(([, index]) => index)
+    endTriggerEnclosedBy: endTriggerInContainer
+      ? indicesWhere((trigger) => trigger.contains(layer.endTrigger))
       : [],
-    endTriggerNests: end.mode === 'clause' && !end.measureLive && !endTriggerIsSelf
-      ? [...indexByTrigger]
-          .filter(([trigger]) => trigger !== layer.endTrigger && layer.endTrigger.contains(trigger))
-          .map(([, index]) => index)
+    endTriggerNests: endTriggerInContainer
+      ? indicesWhere((other) => other !== layer.endTrigger && layer.endTrigger.contains(other))
       : [],
   };
 };

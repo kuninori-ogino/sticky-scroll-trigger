@@ -19,6 +19,7 @@ import {
   resolveEndTrigger,
   resolveRoot,
   restoreInlinePosition,
+  stripStickyPositions,
   unwrapPin,
   wrapPin,
 } from './dom';
@@ -126,6 +127,12 @@ const resolvePinReleaseScroll = (
 // What this module reads off the captured ScrollTrigger class.
 type ScrollTriggerClass = { refresh(safe?: boolean): void } & ScrollTriggerClassLike;
 
+const removeItem = <T>(list: T[], item: T): void => {
+  const index = list.indexOf(item);
+
+  if (index !== -1) list.splice(index, 1);
+};
+
 // Shared by the layer and pin registration paths, which both reject an already-registered trigger.
 const hasDuplicateTrigger = (
   list: readonly { trigger: HTMLElement }[],
@@ -210,8 +217,12 @@ export default class StickyScrollTrigger {
   #ownedStickyElements(): HTMLElement[] {
     return [
       ...this.#builtLayers.flatMap((layer) => (layer.wrapper ? [layer.wrapper] : [])),
-      ...this.#pinLayers.flatMap((layer) => (layer.inner ? [layer.trigger] : [])),
+      ...this.#wrappedPinTriggers(),
     ];
+  }
+
+  #wrappedPinTriggers(): HTMLElement[] {
+    return this.#pinLayers.flatMap(({ trigger, inner }) => (inner ? [trigger] : []));
   }
 
   #unbuild() {
@@ -397,38 +408,16 @@ export default class StickyScrollTrigger {
   // #refreshScenesAndCovers shares this helper for its own pass 1, but restores only on the
   // throwing path (see the catch there for why).
   #resetSceneCoverStickyState(): () => void {
-    const wrapperSnapshots = this.#layers
-      .map((layer) => layer.wrapper)
-      .filter((wrapper): wrapper is HTMLDivElement => wrapper !== null)
-      .map((wrapper) => ({
-        wrapper,
-        position: wrapper.style.position,
-        top: wrapper.style.top,
-      }));
-
-    wrapperSnapshots.forEach(({ wrapper }) => resetStickyPosition(wrapper));
-
-    return () => {
-      wrapperSnapshots.forEach(({ wrapper, position, top }) => {
-        wrapper.style.position = position;
-        wrapper.style.top = top;
-      });
-    };
+    return stripStickyPositions(
+      this.#layers.flatMap(({ wrapper }) => (wrapper ? [wrapper] : [])),
+    );
   }
 
   // Snapshots and resets every wrapped pin's own sticky state, returning a function that puts it
   // back. A stuck pin shifts documentTop for its trigger and everything inside it, as a stuck
   // wrapper does (see #resetSceneCoverStickyState).
   #resetPinStickyState(): () => void {
-    const snapshots = this.#pinLayers
-      .filter((layer) => layer.inner)
-      .map(({ trigger }) => ({ trigger, position: captureInlinePosition(trigger) }));
-
-    snapshots.forEach(({ trigger }) => resetStickyPosition(trigger));
-
-    return () => {
-      snapshots.forEach(({ trigger, position }) => restoreInlinePosition(trigger, position));
-    };
+    return stripStickyPositions(this.#wrappedPinTriggers());
   }
 
   // Both resets above, for a measurement that can land anywhere on the page.
@@ -922,10 +911,7 @@ export default class StickyScrollTrigger {
       onKill: (self) => {
         this.#captureScrollTriggerClass(self);
 
-        const index = this.#layers.indexOf(layer);
-
-        if (index !== -1) this.#layers.splice(index, 1);
-
+        removeItem(this.#layers, layer);
         this.#dirty = true;
         this.#scheduleRebuild();
         onKill?.(self);
@@ -1135,9 +1121,7 @@ export default class StickyScrollTrigger {
       onKill: (self) => {
         this.#captureScrollTriggerClass(self);
 
-        const index = this.#pinLayers.indexOf(layer);
-
-        if (index !== -1) this.#pinLayers.splice(index, 1);
+        removeItem(this.#pinLayers, layer);
 
         // outer reserves trigger's own height, so unwrapping gives back no height, but it does
         // restore the margin collapsing between trigger and its siblings that the wrappers
