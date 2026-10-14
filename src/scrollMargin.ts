@@ -227,7 +227,7 @@ export const createScrollMarginSync = (
     target.style.scrollMarginTop = snapshot ? snapshot.inline : '';
   };
 
-  const clearAnimation = () => {
+  const stopRamps = () => {
     if (sheet) {
       document.adoptedStyleSheets = document.adoptedStyleSheets.filter((one) => one !== sheet);
       sheet = null;
@@ -239,10 +239,37 @@ export const createScrollMarginSync = (
     jsHost = null;
   };
 
+  // Points the ramps at host and starts them: the CSS animation where it runs, else the scroll
+  // listener's values, written once now so the targets' calc() holds even if no scroll event comes
+  // before the next scroll-into-view. Where the animation runs, those writes would only lose to it
+  // in the cascade, so they're skipped.
+  const startRamps = (ramps: readonly SceneDwell[], host: HTMLElement) => {
+    if (animationHost !== host) {
+      animationHost?.removeAttribute(`data-${instanceId}`);
+      animationHost = host;
+      animationHost.setAttribute(`data-${instanceId}`, '');
+    }
+
+    if (usesJsRamp) {
+      jsRamps = ramps;
+      jsHost = host;
+      applyJsRamp();
+
+      return;
+    }
+
+    if (!sheet) {
+      sheet = new CSSStyleSheet();
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    }
+
+    sheet.replaceSync(buildStylesheet(instanceId, ramps));
+  };
+
   const release = () => {
     written.forEach(restoreTarget);
     written = new Set();
-    clearAnimation();
+    stopRamps();
   };
 
   return {
@@ -266,28 +293,7 @@ export const createScrollMarginSync = (
         return;
       }
 
-      if (animationHost !== host) {
-        animationHost?.removeAttribute(`data-${instanceId}`);
-        animationHost = host;
-        animationHost.setAttribute(`data-${instanceId}`, '');
-      }
-
-      // Applied once immediately so the calc() below is correct right away, without waiting for a
-      // scroll event that may never come before the next scroll-into-view. Skipped where the CSS
-      // animation already handles it: writing there wouldn't be wrong, since the animation wins
-      // the cascade over an inline value either way, just a pointless write on every refresh().
-      if (usesJsRamp) {
-        jsRamps = ramps;
-        jsHost = host;
-        applyJsRamp();
-      } else {
-        if (!sheet) {
-          sheet = new CSSStyleSheet();
-          document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
-        }
-
-        sheet.replaceSync(buildStylesheet(instanceId, ramps));
-      }
+      startRamps(ramps, host);
 
       const targets = Array.from(rootElement.querySelectorAll<HTMLElement>(targetSelector));
       // Measured before anything here writes to a target. Nothing below changes layout, so this
