@@ -53,6 +53,8 @@ export type EndSpec
       measureLive: boolean;
     };
 
+type ClauseEnd = Extract<EndSpec, { mode: 'clause' }>;
+
 // The input for one layer as measured in pass 1. All values measured with sticky disabled.
 export interface LayerMeasurement {
   kind: 'scene' | 'cover';
@@ -348,6 +350,106 @@ const runPass = (
     const freezeStart = start.mode === 'absolute'
       ? start.value
       : (previous?.freezeStarts[index] ?? clauseFreezeStart(measurements, index, paddingOf));
+    // Whether the refresh order keeps layer k's spacer from moving this layer's end.
+    const heldBack = (k: number) => order !== null && (order.isBefore(index, k)
+      || isHeldIn(measurements, k, measurement.triggerEnclosedBy, index, order));
+
+    // A clause end on trigger itself. Nothing inside the container moves during a freeze, so
+    // trigger reaches its end anchor the same scroll distance after its start anchor, plus what the
+    // spacers of the Scene layers nested inside trigger add to trigger's height between the two
+    // anchors. An absolute start has no anchor on trigger, so its end also moves by the spacers
+    // GSAP would put above trigger: the dwell of every layer ending above it. Layers around trigger
+    // count in neither case.
+    const selfClauseEnd = (end: ClauseEnd, anchorOffsetEnd: number): number => {
+      const nests = nestedIn(measurements, index);
+      const weight = resolveElementFraction(end.clause)
+        - (start.mode === 'clause' ? start.elementFraction : 0);
+      const dwellInside = measurements.reduce((total, other, k) => {
+        if (weight === 0 || other.kind !== 'scene' || !nests.includes(k) || heldBack(k)) {
+          return total;
+        }
+
+        recount.counted.add(k);
+
+        return total + weight * paddingOf(k);
+      }, 0);
+
+      if (start.mode === 'clause') {
+        return freezeStart + Math.max(0, start.anchorOffset - anchorOffsetEnd + dwellInside);
+      }
+
+      const dwellAbove = measurements.reduce((total, other, k) => {
+        if (
+          k === index
+          || other.kind !== 'scene'
+          || nests.includes(k)
+          || other.triggerTop + other.triggerHeight > measurement.triggerTop + TIE_TOLERANCE_PX
+          || heldBack(k)
+        ) return total;
+
+        recount.counted.add(k);
+
+        return total + paddingOf(k);
+      }, 0);
+
+      return Math.max(
+        freezeStart,
+        measurement.triggerTop - anchorOffsetEnd + dwellAbove + dwellInside,
+      );
+    };
+
+    // A clause end on another element.
+    const elementClauseEnd = (end: ClauseEnd, anchorOffsetEnd: number): number => {
+      let endTop: number;
+
+      if (end.measureLive) {
+        endTop = measureLiveEndTriggerTop(index);
+      } else {
+        // A registered endTrigger is measured unpadded like any other element, rather than
+        // taken from that layer's own plan.
+        const rawTop = measurement.endTriggerIndex === null
+          ? end.rawTop
+          : measurements[measurement.endTriggerIndex].triggerTop;
+
+        if (rawTop === null) {
+          endTop = 0;
+        } else {
+          const box = {
+            top: rawTop,
+            fraction: resolveElementFraction(end.clause),
+            nests: measurement.endTriggerNests,
+            enclosedBy: measurement.endTriggerEnclosedBy,
+            anchorElement: measurement.endTriggerIndex,
+          };
+
+          endTop = rawTop + gapsOf(box, rawTop - anchorOffsetEnd);
+        }
+      }
+
+      // The window is as long as GSAP's pins would make it, measured from where they would put
+      // the start, and opens at freezeStart. An end that falls before that start (endTrigger
+      // sitting above trigger, say) collapses to a zero-length window, the same behavior as
+      // GSAP ScrollTrigger.
+      let layoutStart: number;
+
+      if (start.mode === 'absolute') {
+        layoutStart = start.value;
+      } else {
+        layoutStart = measurement.triggerTop - start.anchorOffset + gapsOf(
+          {
+            top: measurement.triggerTop,
+            fraction: start.elementFraction,
+            nests: nestedIn(measurements, index),
+            enclosedBy: measurement.triggerEnclosedBy,
+            anchorElement: index,
+          },
+          measurement.triggerTop - start.anchorOffset,
+        );
+      }
+
+      return freezeStart + Math.max(0, endTop - anchorOffsetEnd - layoutStart);
+    };
+
     let freezeEnd: number;
 
     switch (measurement.end.mode) {
@@ -381,106 +483,9 @@ const runPass = (
           viewportHeight,
         );
 
-        // Nothing inside the container moves during a freeze, so trigger reaches its end anchor the
-        // same scroll distance after its start anchor, plus what the spacers of the Scene layers
-        // nested inside trigger add to trigger's height between the two anchors. An absolute
-        // start has no anchor on trigger, so its end also moves by the spacers GSAP would put
-        // above trigger: the dwell of every layer ending above it. Layers around trigger count in
-        // neither case.
-        if (measurement.endTriggerIsSelf) {
-          const nests = nestedIn(measurements, index);
-          const weight = resolveElementFraction(measurement.end.clause)
-            - (start.mode === 'clause' ? start.elementFraction : 0);
-          const dwellInside = measurements.reduce((total, other, k) => {
-            if (
-              weight === 0
-              || other.kind !== 'scene'
-              || !nests.includes(k)
-              || (order && (order.isBefore(index, k)
-                || isHeldIn(measurements, k, measurement.triggerEnclosedBy, index, order)))
-            ) return total;
-
-            recount.counted.add(k);
-
-            return total + weight * paddingOf(k);
-          }, 0);
-
-          if (start.mode === 'clause') {
-            freezeEnd = freezeStart
-              + Math.max(0, start.anchorOffset - anchorOffsetEnd + dwellInside);
-            break;
-          }
-
-          const dwellAbove = measurements.reduce((total, other, k) => {
-            if (
-              k === index
-              || other.kind !== 'scene'
-              || nests.includes(k)
-              || other.triggerTop + other.triggerHeight > measurement.triggerTop + TIE_TOLERANCE_PX
-              || (order && (order.isBefore(index, k)
-                || isHeldIn(measurements, k, measurement.triggerEnclosedBy, index, order)))
-            ) return total;
-
-            recount.counted.add(k);
-
-            return total + paddingOf(k);
-          }, 0);
-
-          freezeEnd = Math.max(
-            freezeStart,
-            measurement.triggerTop - anchorOffsetEnd + dwellAbove + dwellInside,
-          );
-          break;
-        }
-
-        let endTop: number;
-
-        if (measurement.end.measureLive) {
-          endTop = measureLiveEndTriggerTop(index);
-        } else {
-          // A registered endTrigger is measured unpadded like any other element, rather than
-          // taken from that layer's own plan.
-          const rawTop = measurement.endTriggerIndex === null
-            ? measurement.end.rawTop
-            : measurements[measurement.endTriggerIndex].triggerTop;
-
-          if (rawTop === null) {
-            endTop = 0;
-          } else {
-            const box = {
-              top: rawTop,
-              fraction: resolveElementFraction(measurement.end.clause),
-              nests: measurement.endTriggerNests,
-              enclosedBy: measurement.endTriggerEnclosedBy,
-              anchorElement: measurement.endTriggerIndex,
-            };
-
-            endTop = rawTop + gapsOf(box, rawTop - anchorOffsetEnd);
-          }
-        }
-
-        // The window is as long as GSAP's pins would make it, measured from where they would put
-        // the start, and opens at freezeStart. An end that falls before that start (endTrigger
-        // sitting above trigger, say) collapses to a zero-length window, the same behavior as
-        // GSAP ScrollTrigger.
-        let layoutStart: number;
-
-        if (start.mode === 'absolute') {
-          layoutStart = start.value;
-        } else {
-          layoutStart = measurement.triggerTop - start.anchorOffset + gapsOf(
-            {
-              top: measurement.triggerTop,
-              fraction: start.elementFraction,
-              nests: nestedIn(measurements, index),
-              enclosedBy: measurement.triggerEnclosedBy,
-              anchorElement: index,
-            },
-            measurement.triggerTop - start.anchorOffset,
-          );
-        }
-
-        freezeEnd = freezeStart + Math.max(0, endTop - anchorOffsetEnd - layoutStart);
+        freezeEnd = measurement.endTriggerIsSelf
+          ? selfClauseEnd(measurement.end, anchorOffsetEnd)
+          : elementClauseEnd(measurement.end, anchorOffsetEnd);
         break;
       }
     }
