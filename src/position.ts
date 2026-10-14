@@ -205,14 +205,9 @@ export const prefixSpacedRelativeEnd = (
 
   if (typeof startResolved !== 'string') return endResolved;
 
-  const trimmedStart = startResolved.trim();
-
-  // This check runs before the split below, which would otherwise leave only 'clamp(top' to report.
-  // resolveAnchorTop catches a clamp() value on its own, but only after this function has composed
-  // the end.
-  assertNotClamped(trimmedStart);
-
-  const [elementToken] = trimmedStart.split(/\s+/);
+  // splitClause rejects a clamp() start here: resolveAnchorTop would too, but only after this
+  // function has composed the end.
+  const [elementToken] = splitClause(startResolved);
 
   // Both tokens go through parseClauseToken as written, before anything is glued together.
   // Composing first would make it quote a token the caller never wrote: 'center+=100vh' for a start
