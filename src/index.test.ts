@@ -1119,6 +1119,19 @@ describe('measuring while a pin is stuck', () => {
     expect(pin.style.position).toBe('sticky');
   });
 
+  // Until refresh() wraps it, a pin's trigger is still only the author's element, so a measurement
+  // leaves its inline sticky in place.
+  it('getScrollTop leaves a pin that isn\'t wrapped yet as its author styled it', () => {
+    const controller = setupPinned();
+    const pin = query('.outsidePin');
+
+    pin.style.position = 'sticky';
+    controller.createStickyPin({ trigger: pin });
+    shiftWhileSticky(pin, pin, 100);
+
+    expect(StickyScrollTrigger.getScrollTop(pin, [controller])).toBe(500);
+  });
+
   // The first refresh() makes the pin sticky, so the second is the one that measures around it.
   it('refresh() resets a pin holding a Scene layer\'s endTrigger', () => {
     const controller = setupPinned();
