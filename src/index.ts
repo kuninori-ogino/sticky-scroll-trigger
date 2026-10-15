@@ -125,7 +125,10 @@ const resolvePinReleaseScroll = (
 };
 
 // What this module reads off the captured ScrollTrigger class.
-type ScrollTriggerClass = { refresh(safe?: boolean): void } & ScrollTriggerClassLike;
+type ScrollTriggerClass = {
+  refresh(safe?: boolean): void;
+  getScrollFunc?(element: Window): unknown;
+} & ScrollTriggerClassLike;
 
 const removeItem = <T>(list: T[], item: T): void => {
   const index = list.indexOf(item);
@@ -241,18 +244,49 @@ export default class StickyScrollTrigger {
     this.#dirty = false;
   }
 
-  // Defers teardown and rebuild to a microtask, so kills within the same task coalesce into one
-  // refresh(). Rebuilding per kill would be O(n^2), and moving the shared container's subtree
-  // each time breaks iframes and focus.
+  // Defers teardown and rebuild to a microtask, or to a GSAP refresh later in the task, so kills
+  // within the same task coalesce into one refresh(). Rebuilding per kill would be O(n^2), and
+  // moving the shared container's subtree each time breaks iframes and focus.
   //
   // GSAP doesn't re-read function-valued start/end until ScrollTrigger.refresh() is called, so
-  // refresh() alone would leave GSAP's cache holding stale freezeStart/freezeEnd. Calling
-  // ScrollTrigger.refresh() right after keeps the two in sync.
+  // refresh() alone would leave GSAP's cache holding stale freezeStart/freezeEnd. The microtask
+  // calls ScrollTrigger.refresh() right after to keep the two in sync; a GSAP refresh measures
+  // after its refreshInit anyway.
   #scheduleRebuild() {
     if (this.#rebuildScheduled || this.#destroyed) return;
 
     this.#rebuildScheduled = true;
+
+    // Lets that GSAP refresh measure without the killed layers, even with no layer left to run
+    // refresh() from its own onRefreshInit.
+    const cls = this.#scrollTriggerClass;
+
+    const onRefreshInit = () => {
+      if (!this.#rebuildScheduled || this.#destroyed) return undefined;
+
+      try {
+        this.refresh();
+      } catch (error) {
+        queueMicrotask(() => {
+          throw error;
+        });
+      } finally {
+        this.#rebuildScheduled = false;
+      }
+
+      const restoreDormancy = takeGsapRefreshRestore();
+
+      return restoreDormancy ? { render: () => restoreDormancy() } : undefined;
+    };
+
+    cls?.addEventListener?.('refreshInit', onRefreshInit);
+
     queueMicrotask(() => {
+      // Off the stack: GSAP's dispatch maps over its live listener array.
+      cls?.removeEventListener?.('refreshInit', onRefreshInit);
+
+      if (!this.#rebuildScheduled) return;
+
       this.#rebuildScheduled = false;
 
       if (this.#destroyed) return;
@@ -676,12 +710,20 @@ export default class StickyScrollTrigger {
     if (this.#destroyed) return;
 
     let failure: { error: unknown } | null = null;
+    // Only a kill's rebuild: GSAP removes a killed pin's spacing at once, so the browser's
+    // anchoring has already moved the scroll it records. A resize's changes keep GSAP's number.
+    const scrollBefore = this.#rebuildScheduled && this.#scrollTriggerClass?.isRefreshing
+      ? window.scrollY
+      : null;
 
     try {
       this.#refreshLayout();
     } catch (error) {
       failure = { error };
     }
+
+    // A failed rebuild leaves part of the layout unpadded, and the next refresh puts it back.
+    if (!failure) this.#followScrollAnchoring(scrollBefore);
 
     // After every sticky value is written, and on a throw too: the restores there put back
     // whatever the table expects, and the table has to follow what this refresh did manage.
@@ -697,6 +739,21 @@ export default class StickyScrollTrigger {
     }
 
     if (failure) throw failure.error;
+  }
+
+  // GSAP records the scroll before refreshInit and scrolls back to it after measuring; the record
+  // follows the browser's scroll anchoring or the content jumps. rec is undocumented, so this skips
+  // silently if it ever changes.
+  #followScrollAnchoring(scrollBefore: number | null): void {
+    if (scrollBefore === null) return;
+
+    const shift = window.scrollY - scrollBefore;
+    const scrollFunc = this.#scrollTriggerClass?.getScrollFunc?.(window) as
+      { rec?: unknown } | undefined;
+
+    if (shift && scrollFunc && typeof scrollFunc.rec === 'number' && scrollFunc.rec) {
+      scrollFunc.rec += shift;
+    }
   }
 
   #refreshLayout(): void {

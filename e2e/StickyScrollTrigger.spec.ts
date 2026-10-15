@@ -2363,3 +2363,67 @@ for (const explicit of [false, true]) {
     expect(shape).toEqual({ wrapperParent: true, rootChildren: 3 });
   });
 }
+
+// killRefreshAnchor.html's hooks.
+interface KillRefreshAnchorWindow {
+  __ready: boolean;
+  __scrollTo: (y: number) => Promise<number>;
+  __killAndRefresh: (killAll: boolean) => Promise<{
+    sameTask: { tailTop: number; plainStart: number | null };
+    settled: { tailTop: number; scrollY: number };
+  }>;
+  __state: () => { tailTop: number; scrollY: number };
+}
+
+const openKillRefreshAnchor = async (page: Page, end?: string) => {
+  const query = end ? `?end=${encodeURIComponent(end)}` : '';
+
+  await page.goto(`/fixtures/killRefreshAnchor.html${query}`);
+  await page.waitForFunction(() => (window as never as KillRefreshAnchorWindow).__ready);
+};
+
+// The rebuild takes the killed dwell off above the viewport. The browser's anchoring keeps the
+// content in place, unless GSAP scrolls back to the number it recorded before.
+test('a kill and a ScrollTrigger.refresh() in the same task keep the content in place', async ({ page }) => {
+  await openKillRefreshAnchor(page);
+
+  const before = await page.evaluate(
+    () => (window as never as KillRefreshAnchorWindow).__scrollTo(2500),
+  );
+  const result = await page.evaluate(
+    () => (window as never as KillRefreshAnchorWindow).__killAndRefresh(false),
+  );
+
+  expect(result.sameTask.tailTop).toBeCloseTo(before, 0);
+  expect(result.settled.tailTop).toBeCloseTo(before, 0);
+  // s1's and s2's dwell (2 x 200) are gone above the viewport.
+  expect(result.settled.scrollY).toBeCloseTo(2100, 0);
+});
+
+// With no layer left, no onRefreshInit runs refresh(), so the rebuild has to come from the kill.
+test('a GSAP refresh in the kill\'s task measures the layout without the killed layers', async ({ page }) => {
+  await openKillRefreshAnchor(page);
+
+  const result = await page.evaluate(
+    () => (window as never as KillRefreshAnchorWindow).__killAndRefresh(true),
+  );
+
+  // The tail sits at 200 + 3 x 400 with no dwell left.
+  expect(result.sameTask.plainStart).toBeCloseTo(1400, 0);
+  expect(result.sameTask.tailTop).toBeCloseTo(1400, 0);
+});
+
+// A resize changes a viewport-relative dwell above the viewport too, and GSAP keeps its recorded
+// scroll then.
+test('a resize refresh keeps GSAP\'s recorded scroll when the dwell above changes', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await openKillRefreshAnchor(page, '+=50%');
+  await page.evaluate(() => (window as never as KillRefreshAnchorWindow).__scrollTo(2500));
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  const state = () => page.evaluate(() => (window as never as KillRefreshAnchorWindow).__state());
+
+  // The dwell above grows by 3 x 90 and the scroll stays at GSAP's number.
+  await expect.poll(async () => (await state()).tailTop).toBeCloseTo(250, 0);
+  expect((await state()).scrollY).toBeCloseTo(2500, 0);
+});

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>killRefreshAnchor fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section,
+      .tail {
+        display: block;
+        height: 400px;
+      }
+    </style>
+  </head>
+  <body>
+    <div style="height: 200px"></div>
+    <div class="root">
+      <section class="s1">S1</section>
+      <section class="s2">S2</section>
+      <section class="s3">S3</section>
+    </div>
+    <div class="tail">TAIL</div>
+    <div style="height: 4000px"></div>
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const params = new URLSearchParams(location.search);
+      const end = params.get('end') ?? '+=200';
+      const tail = document.querySelector('.tail');
+      const sticky = new StickyScrollTrigger('.root');
+      const triggers = ['.s1', '.s2', '.s3'].map((sel) =>
+        ScrollTrigger.create(sticky.createStickyTrigger({ trigger: sel, end })),
+      );
+      const frames = () =>
+        new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const tailTop = () => tail.getBoundingClientRect().top;
+
+      ScrollTrigger.refresh();
+
+      window.__scrollTo = async (y) => {
+        window.scrollTo(0, y);
+        await frames();
+
+        return tailTop();
+      };
+
+      // Kills and refreshes GSAP in one task, as gsap.matchMedia does. Reports the tail before the
+      // batch's microtask and again two frames later.
+      window.__killAndRefresh = async (killAll) => {
+        let plain = null;
+
+        (killAll ? triggers : triggers.slice(0, 2)).forEach((t) => t.kill());
+
+        if (killAll) plain = ScrollTrigger.create({ trigger: tail, start: 'top top' });
+
+        ScrollTrigger.refresh();
+
+        const sameTask = { tailTop: tailTop(), plainStart: plain?.start ?? null };
+
+        await frames();
+
+        return { sameTask, settled: { tailTop: tailTop(), scrollY: window.scrollY } };
+      };
+
+      window.__state = () => ({ tailTop: tailTop(), scrollY: window.scrollY });
+      window.__ready = true;
+    </script>
+  </body>
+</html>

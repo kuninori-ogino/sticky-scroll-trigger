@@ -3095,3 +3095,168 @@ describe('nestedStickyOptimization', () => {
     expect(query('.root').parentElement).toBe(document.body);
   });
 });
+
+describe('a kill followed by a GSAP refresh in the same task', () => {
+  let dwell = 100;
+
+  const setupScenes = (cls: object, end: () => string = () => `+=${dwell}`) => {
+    document.body.innerHTML = `
+      <div class="host">
+        <div class="root">
+          <section class="s1"></section>
+          <section class="s2"></section>
+          <section class="s3"></section>
+        </div>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const vars = ['.s1', '.s2', '.s3'].map((sel) =>
+      controller.createStickyTrigger({ trigger: query(sel), end }));
+
+    controller.refresh();
+
+    const self = Object.create((cls as { prototype: object }).prototype) as ScrollTrigger;
+
+    return { controller, vars, self };
+  };
+
+  const paddings = () => document.querySelectorAll<HTMLElement>('div[aria-hidden="true"]');
+  const paddingTotal = () => Array.from(paddings())
+    .reduce((sum, el) => sum + (parseFloat(el.style.height) || 0), 0);
+
+  // The browser's scroll anchoring, with every padding above the viewport: the scroll follows
+  // whatever their heights lose or gain.
+  const anchorScroll = (from: number) => {
+    const total = paddingTotal();
+
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => from - (total - paddingTotal()));
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    dwell = 100;
+  });
+
+  const makeClass = (scroller: { rec?: unknown }) => {
+    const listeners: (() => unknown)[] = [];
+
+    class Cls {
+      static refresh = vi.fn();
+
+      static isRefreshing = false;
+
+      static getScrollFunc = () => scroller;
+
+      static addEventListener = (type: string, callback: () => unknown) => {
+        if (type === 'refreshInit') listeners.push(callback);
+      };
+
+      static removeEventListener = (type: string, callback: () => unknown) => {
+        if (type === 'refreshInit' && listeners.includes(callback)) {
+          listeners.splice(listeners.indexOf(callback), 1);
+        }
+      };
+    }
+
+    // GSAP's refresh: refreshInit runs while isRefreshing is set.
+    const gsapRefresh = () => {
+      Cls.isRefreshing = true;
+      [...listeners].forEach((callback) => callback());
+      Cls.isRefreshing = false;
+    };
+
+    return { Cls, listeners, gsapRefresh };
+  };
+
+  it('rebuilds in that refresh\'s refreshInit even with no layer left, and skips the batch', async () => {
+    const { Cls, listeners, gsapRefresh } = makeClass({ rec: 0 });
+    const { vars, self } = setupScenes(Cls);
+
+    vars.forEach((entry) => entry.onKill?.(self));
+    expect(query('.root').parentElement).not.toBe(query('.host'));
+
+    gsapRefresh();
+    expect(query('.root').parentElement).toBe(query('.host'));
+
+    await Promise.resolve();
+    expect(Cls.refresh).not.toHaveBeenCalled();
+    expect(listeners).toHaveLength(0);
+  });
+
+  it('rebuilds in the batch and drops the listener when no GSAP refresh comes', async () => {
+    const { Cls, listeners } = makeClass({ rec: 0 });
+    const { vars, self } = setupScenes(Cls);
+
+    vars[0].onKill?.(self);
+    expect(listeners.length).toBeGreaterThan(0);
+
+    await Promise.resolve();
+    expect(Cls.refresh).toHaveBeenCalledTimes(1);
+    expect(listeners).toHaveLength(0);
+  });
+
+  it('shifts GSAP\'s scroll record by the browser\'s anchoring', () => {
+    const scroller = { rec: 2500 };
+    const { Cls, gsapRefresh } = makeClass(scroller);
+    const { vars, self } = setupScenes(Cls);
+
+    anchorScroll(2500);
+    vars[0].onKill?.(self);
+    vars[1].onKill?.(self);
+    gsapRefresh();
+
+    expect(paddings()).toHaveLength(1);
+    expect(scroller.rec).toBe(2300);
+  });
+
+  // A resize changes the dwell above the viewport too, and GSAP scrolls back to its number then.
+  it('leaves GSAP\'s scroll record alone in a refresh no kill started', () => {
+    const scroller = { rec: 2500 };
+    const { Cls } = makeClass(scroller);
+    const { controller, vars, self } = setupScenes(Cls);
+
+    vars[0].onRefreshInit?.(self);
+    anchorScroll(2500);
+    dwell = 50;
+    Cls.isRefreshing = true;
+    controller.refresh();
+    Cls.isRefreshing = false;
+
+    expect(paddingTotal()).toBe(150);
+    expect(scroller.rec).toBe(2500);
+  });
+
+  // The next refresh puts back what a failed one left unpadded.
+  it('leaves GSAP\'s scroll record alone when the rebuild throws', async () => {
+    const scroller = { rec: 2500 };
+    const { Cls, gsapRefresh } = makeClass(scroller);
+    let fail = false;
+    const { vars, self } = setupScenes(Cls, () => {
+      if (fail) throw new Error('boom');
+
+      return '+=100';
+    });
+
+    anchorScroll(2500);
+    vars[0].onKill?.(self);
+    fail = true;
+
+    // The listener's throw goes off the stack, as the onRefreshInit handler's does.
+    const uncaught: unknown[] = [];
+    const onUncaught = (error: unknown) => uncaught.push(error);
+
+    process.on('uncaughtException', onUncaught);
+
+    try {
+      gsapRefresh();
+      await Promise.resolve();
+      await Promise.resolve();
+    } finally {
+      process.off('uncaughtException', onUncaught);
+      fail = false;
+    }
+
+    expect(uncaught).toHaveLength(1);
+    expect(scroller.rec).toBe(2500);
+  });
+});
