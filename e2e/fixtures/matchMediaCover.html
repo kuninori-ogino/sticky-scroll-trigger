@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>matchMediaCover fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .base {
+        height: 1000px;
+      }
+      .cover {
+        height: 1000px;
+        background: #ccc;
+      }
+      .tail {
+        height: 200vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <section class="base"></section>
+      <section class="cover"></section>
+      <section class="tail"></section>
+    </div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const base = document.querySelector('.base');
+      // ?explicit passes cover itself, which has to be base's sibling rather than its next one.
+      const coverOption = new URLSearchParams(location.search).has('explicit')
+        ? { cover: document.querySelector('.cover') }
+        : {};
+      const sticky = new StickyScrollTrigger('.root');
+      // What each setup sees as base's next sibling, and what createOverlapScroll threw.
+      const seen = [];
+      const errors = [];
+
+      // Both breakpoints build the same overlap, the usual shape of a matchMedia layout.
+      const setup = () => {
+        seen.push(base.nextElementSibling?.className ?? null);
+
+        try {
+          ScrollTrigger.create(sticky.createOverlapScroll({ trigger: base, ...coverOption }));
+          sticky.refresh();
+        } catch (error) {
+          errors.push(error.message);
+        }
+      };
+
+      const mm = gsap.matchMedia();
+
+      mm.add('(min-width: 800px)', setup);
+      mm.add('(max-width: 799px)', setup);
+
+      window.__matchMedia = { seen, errors };
+    </script>
+  </body>
+</html>

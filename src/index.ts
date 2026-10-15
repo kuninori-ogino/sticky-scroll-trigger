@@ -34,7 +34,7 @@ import {
 } from './dormancy';
 import type { DormancyClient, ScrollTriggerClassLike } from './dormancy';
 import { createScrollMarginSync } from './scrollMargin';
-import { buildStructure, isDomOrderStale, unbuildStructure } from './structure';
+import { buildStructure, isDomOrderStale, unbuildCover, unbuildStructure } from './structure';
 import { dwellBeforeReach, dwellConsumedAt, planLayers } from './freezeWindow';
 import type { LayerMeasurement } from './freezeWindow';
 import { measureLayer } from './measure';
@@ -143,8 +143,8 @@ export default class StickyScrollTrigger {
   #rootElement: HTMLElement;
   // The set of layers that "should" exist. Changes immediately on register, kill, and reorder.
   #layers: Layer[] = [];
-  // The layers actually built into the DOM. A layer that a kill removed from `#layers` stays here
-  // as long as it's still built, so teardown never loses it mid-batch.
+  // The layers last built into the DOM. A layer that a kill removed from `#layers` stays here until
+  // the batch's rebuild: a Scene one still built, a cover one already unbuilt by the kill.
   #builtLayers: Layer[] = [];
   // Restore callbacks for cover layers' z-order. Kept in a WeakMap so destroy() can call them
   // even without going through GSAP's onKill.
@@ -906,8 +906,7 @@ export default class StickyScrollTrigger {
       // function-valued tween props get re-measured too. An explicit value is respected.
       invalidateOnRefresh: rest.invalidateOnRefresh ?? true,
       // Removes the layer when GSAP kills it (a matchMedia switch, say). It leaves `#layers`
-      // immediately, while the DOM teardown #scheduleRebuild defers works from #builtLayers, so
-      // the wrapper survives that deferral.
+      // immediately; a Scene layer's wrappers stay until the teardown #scheduleRebuild defers.
       onKill: (self) => {
         this.#captureScrollTriggerClass(self);
 
@@ -1024,6 +1023,10 @@ export default class StickyScrollTrigger {
         // Read out of the map rather than closed over: #liftCovers replaces the restore on every
         // refresh, and the one made here stops matching the elements actually lifted.
         this.#coverRestoreByLayer.get(layer)?.();
+        // The wrapper holds trigger's siblings, which matchMedia's next setup reads in the same
+        // task (the default cover is trigger.nextElementSibling). It moves only what the deferred
+        // teardown would, so it can come off now.
+        unbuildCover(layer);
         onKill?.(self);
       },
       rest,

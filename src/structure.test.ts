@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
-import { buildStructure, isDomOrderStale, unbuildStructure } from './structure';
+import { buildStructure, isDomOrderStale, unbuildCover, unbuildStructure } from './structure';
 import type { CoverLayer, Layer, SceneLayer } from './types';
 
 // Structural operations don't depend on layout (they never look at height or position),
@@ -252,5 +252,25 @@ describe('unbuildStructure', () => {
     expect(scene.container).toBeNull();
     expect(scene.padding).toBeNull();
     expect(cover.wrapper).toBeNull();
+  });
+});
+
+describe('unbuildCover', () => {
+  it('restores the DOM and clears the wrapper, and does nothing a second time', () => {
+    const { root, byId } = setup(
+      '<div id="root"><div id="base"></div><div id="cover"></div><div id="tail"></div></div>',
+    );
+    const before = document.body.innerHTML;
+    const cover = coverLayer(byId('base'), byId('cover'));
+
+    buildStructure(root, [cover]);
+    unbuildCover(cover);
+
+    expect(document.body.innerHTML).toBe(before);
+    expect(cover.wrapper).toBeNull();
+
+    unbuildCover(cover);
+
+    expect(document.body.innerHTML).toBe(before);
   });
 });

@@ -724,12 +724,9 @@ describe('batching kill()', () => {
     expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(1);
   });
 
-  // unbuild() tears down by looking at builtLayers (a snapshot of what's actually built),
-  // not layers (the "should exist" set, which shrinks immediately on kill). This difference
-  // is only observable for cover layers: a Scene layer's root restoration looks directly
-  // at outermostContainer, independent of layers's contents, but tearing down a cover wrapper
-  // depends on whether that layer is still in the array.
-  it('a cover layer\'s wrapper removed from layers immediately by a kill is still torn down without being lost after the batch', async () => {
+  // gsap.matchMedia reverts the old setup and runs the next one in the same task, so a cover
+  // wrapper left for the batch would hide trigger's siblings from that setup.
+  it('a killed cover layer\'s wrapper comes off at once, without waiting for the batch', () => {
     document.body.innerHTML = `
       <div class="root">
         <section class="base"></section>
@@ -738,20 +735,143 @@ describe('batching kill()', () => {
       </div>`;
 
     const controller = new StickyScrollTrigger(query('.root'));
-    const vars = controller.createOverlapScroll({ trigger: query('.base'), cover: query('.cover') });
+    const vars = controller.createOverlapScroll({ trigger: query('.base') });
 
     controller.refresh();
-    // confirm trigger is wrapped inside wrapper (cover stays outside) before breaking it
-    expect(query('.base').parentElement).not.toBe(query('.root'));
+    expect(query('.base').nextElementSibling).toBeNull();
 
-    vars.onKill?.(fakeSelf); // removed from layers immediately, but the wrapper is still in the DOM
+    vars.onKill?.(fakeSelf);
+
+    expect(query('.base').parentElement).toBe(query('.root'));
+    expect(query('.base').nextElementSibling).toBe(query('.cover'));
+    expect(query('.root').children).toHaveLength(3);
+  });
+
+  // Inside a Scene layer's container the kill unwraps the cover in place, leaving the batch's
+  // teardown nothing to undo for it.
+  it('a cover killed inside a Scene layer\'s container comes off at once and the Scene is rebuilt', async () => {
+    document.body.innerHTML = `
+      <div class="host">
+        <div class="root">
+          <section class="scene"></section>
+          <section class="base"></section>
+          <section class="cover"></section>
+        </div>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+
+    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
+
+    const vars = controller.createOverlapScroll({ trigger: query('.base') });
+
+    controller.refresh();
+    vars.onKill?.(fakeSelf);
+
+    const children = () => Array.from(query('.root').children, (el) => el.className);
+
+    expect(children()).toEqual(['scene', 'base', 'cover']);
+    expect(query('.root').parentElement).not.toBe(query('.host'));
+
     await Promise.resolve();
 
-    // the wrapper is undone, and trigger is back at its original position (directly under root).
-    // If teardown looked only at layers and not builtLayers, this layer would already be gone
-    // from the array, unwrapCover would never be called, and the wrapper would be left stranded
-    // in the DOM with trigger stuck at its frozen position.
-    expect(query('.base').parentElement).toBe(query('.root'));
+    expect(children()).toEqual(['scene', 'base', 'cover']);
+    expect(query('.root').parentElement).not.toBe(query('.host'));
+    expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(1);
+  });
+
+  // #builtLayers still lists the killed layer until the batch, its wrapper already off: destroy()'s
+  // teardown has to pass over it.
+  it('destroy() right after a cover\'s kill restores the DOM', () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="base"></section>
+        <section class="cover"></section>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const vars = controller.createOverlapScroll({ trigger: query('.base') });
+
+    controller.refresh();
+    vars.onKill?.(fakeSelf);
+    controller.destroy();
+
+    expect(Array.from(query('.root').children, (el) => el.className)).toEqual(['base', 'cover']);
+    expect(query('.cover').style.cssText).toBe('');
+  });
+
+  // The default cover is trigger.nextElementSibling, and an explicit one has to be trigger's
+  // sibling: both threw while the wrapper stayed.
+  it.each([
+    ['the default cover', false],
+    ['an explicit cover', true],
+  ])('re-registering the same cover trigger with %s in the kill\'s task builds it again after the batch', async (_, explicit) => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="base"></section>
+        <section class="cover"></section>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const options = { trigger: query('.base'), ...(explicit ? { cover: query('.cover') } : {}) };
+    const killed = controller.createOverlapScroll(options);
+
+    controller.refresh();
+    killed.onKill?.(fakeSelf);
+    controller.createOverlapScroll(options);
+    controller.refresh();
+    await Promise.resolve();
+
+    expect(query('.base').parentElement).not.toBe(query('.root'));
+    expect(query('.base').parentElement!.parentElement).toBe(query('.root'));
+    expect(query('.root').lastElementChild).toBe(query('.cover'));
+    // The re-created layer lifts cover again.
+    expect(query('.cover').style.cssText).toBe('position: relative; z-index: 1;');
+  });
+
+  // Two covers in one parent nest: the later trigger's wrapper holds the earlier one's. Killing
+  // either leaves the other's wrapper holding exactly what it held.
+  describe.each([
+    ['the outer (later) one', 1, '.b', '.a'],
+    ['the inner (earlier) one', 0, '.a', '.b'],
+  ])('killing %s of two covers in one parent', (_, killedIndex, killedSelector, survivorSelector) => {
+    const setup = () => {
+      document.body.innerHTML = `
+        <div class="root">
+          <section class="a"></section>
+          <section class="a-cover"></section>
+          <section class="b"></section>
+          <section class="b-cover"></section>
+        </div>`;
+
+      const controller = new StickyScrollTrigger(query('.root'));
+      const vars = [
+        controller.createOverlapScroll({ trigger: query('.a') }),
+        controller.createOverlapScroll({ trigger: query('.b') }),
+      ];
+
+      controller.refresh();
+
+      return vars;
+    };
+
+    const order = () => Array.from(query('.root').querySelectorAll('section'), (el) => el.className);
+
+    it('keeps the document order and the survivor wrapped, before and after the batch', async () => {
+      const vars = setup();
+
+      vars[killedIndex].onKill?.(fakeSelf);
+
+      expect(order()).toEqual(['a', 'a-cover', 'b', 'b-cover']);
+      expect(query(killedSelector).nextElementSibling).toBe(query(`${killedSelector}-cover`));
+      expect(query(survivorSelector).nextElementSibling).toBeNull();
+
+      await Promise.resolve();
+
+      expect(order()).toEqual(['a', 'a-cover', 'b', 'b-cover']);
+      expect(query(survivorSelector).nextElementSibling).toBeNull();
+      expect(query(survivorSelector).parentElement!.parentElement).toBe(query('.root'));
+    });
   });
 
   it('the user\'s onKill callback is called immediately, without waiting for the batch', () => {

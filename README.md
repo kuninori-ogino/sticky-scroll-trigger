@@ -394,6 +394,8 @@ Recomputes each layer's sticky `top`, dwell spacer height, and freeze window (`s
 
 Kill-driven teardown/rebuild is deferred to a microtask and coalesced per task. This DOM move can reload `<iframe>` elements or drop focus for focused inputs inside the managed container. This behavior runs on every kill or relevant layout change and cannot be disabled, so be careful when placing iframes or focus-sensitive inputs under the controller.
 
+A killed `createOverlapScroll` layer's wrapper, which holds `trigger` and every sibling before it, comes off during the kill instead, so the iframe and focus effects there happen then. Code later in the same task (the next breakpoint's `gsap.matchMedia()` setup, say) finds `trigger` back among those siblings, unless another overlap in the same parent still wraps it. Scene layers' teardown and rebuild still wait for the microtask.
+
 If surviving layers' freeze windows change after kill, GSAP's cached `start`/`end` values are synced internally.
 
 ### `destroy()`

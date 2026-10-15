@@ -4,7 +4,7 @@
  */
 
 import { compareDocumentOrder, unwrapCover, wrapCover, wrapScene } from './dom';
-import type { Layer } from './types';
+import type { CoverLayer, Layer } from './types';
 
 // Returns whether layers is out of DOM order. buildStructure always sorts before building, so
 // anything out of order means the trigger elements moved since the last build. register and kill
@@ -57,6 +57,15 @@ export const buildStructure = (
   return outermost;
 };
 
+// Puts back what a cover layer's wrapper holds. A kill runs this ahead of the deferred rebuild,
+// which then finds nothing left to undo for that layer.
+export const unbuildCover = (layer: CoverLayer): void => {
+  if (!layer.wrapper) return;
+
+  unwrapCover(layer.wrapper);
+  layer.wrapper = null;
+};
+
 // Tears down the nesting, returning the shared container and everything cover layers wrapped to
 // their original positions.
 export const unbuildStructure = (
@@ -72,15 +81,12 @@ export const unbuildStructure = (
   for (let i = layers.length - 1; i >= 0; i -= 1) {
     const layer = layers[i];
 
-    if (layer.kind === 'cover' && layer.wrapper) unwrapCover(layer.wrapper);
-  }
-
-  layers.forEach((layer) => {
-    layer.wrapper = null;
-
-    if (layer.kind === 'scene') {
+    if (layer.kind === 'cover') {
+      unbuildCover(layer);
+    } else {
+      layer.wrapper = null;
       layer.container = null;
       layer.padding = null;
     }
-  });
+  }
 };

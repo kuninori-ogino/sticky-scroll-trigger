@@ -2315,3 +2315,51 @@ test('16 nested Scene layers load quickly with nestedStickyOptimization always',
 
   expect(elapsed).toBeLessThan(2000);
 });
+
+// matchMediaCover.html's record: base's next sibling as each setup saw it, and what threw.
+interface MatchMediaWindow {
+  __matchMedia: { seen: (string | null)[]; errors: string[] };
+}
+
+// gsap.matchMedia kills the old breakpoint's triggers and runs the next setup in the same task.
+// A cover wrapper left in place until the deferred rebuild hid base's next sibling from that setup,
+// so createOverlapScroll's default cover wasn't found and an explicit one wasn't base's sibling.
+for (const explicit of [false, true]) {
+  test(`a matchMedia switch re-creates an overlap on the same trigger (${explicit ? 'explicit' : 'default'} cover)`, async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 720 });
+    await page.goto(`/fixtures/matchMediaCover.html${explicit ? '?explicit' : ''}`);
+
+    const read = () => page.evaluate(() => (window as never as MatchMediaWindow).__matchMedia);
+
+    await expect.poll(async () => (await read()).seen.length).toBe(1);
+    await page.setViewportSize({ width: 600, height: 720 });
+    await expect.poll(async () => (await read()).seen.length).toBe(2);
+    await page.setViewportSize({ width: 1000, height: 720 });
+    await expect.poll(async () => (await read()).seen.length).toBe(3);
+
+    expect(await read()).toEqual({ seen: ['cover', 'cover', 'cover'], errors: [] });
+
+    // base holds with its bottom on the viewport's ('bottom bottom'), top at -280px, while cover
+    // scrolls over it.
+    const baseTop = await page.evaluate(async () => {
+      window.scrollTo(0, 580);
+      await new Promise(requestAnimationFrame);
+
+      return document.querySelector('.base')!.getBoundingClientRect().top;
+    });
+
+    expect(baseTop).toBeCloseTo(720 - 1000, 0);
+
+    // One wrapper around base, none left over from the earlier breakpoints.
+    const shape = await page.evaluate(() => {
+      const root = document.querySelector('.root')!;
+
+      return {
+        wrapperParent: document.querySelector('.base')!.parentElement!.parentElement === root,
+        rootChildren: root.children.length,
+      };
+    });
+
+    expect(shape).toEqual({ wrapperParent: true, rootChildren: 3 });
+  });
+}
