@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-15
+
 - Added the `nestedStickyOptimization` option. Deeply nested Scene layers no longer slow Safari down: on WebKit, once an instance's sticky layers nest 7 or more levels deep, sticky elements the library owns are laid out as `position: relative` at the same offset while the scroll is far from their range, so the engine lays out only the few levels near the scroll. 16 nested layers that took seconds to load in WebKit now load in about 150ms. Nothing moves differently. It needs at least one result handed to `ScrollTrigger.create()`, which is how the library tells GSAP's own refresh apart. `'always'` turns it on for every engine and `'off'` turns it off (see [Nested sticky performance](README.md#nested-sticky-performance))
 - Documented, as a known limit, that a few rare layouts with nested Scene layers resolve to window lengths no creation order of GSAP's pins gives, and that writing the affected `end` as a dwell avoids it. Behavior is unchanged (see [End syntax](README.md#end-syntax))
 - Documented that `refreshPriority` passes through to GSAP but doesn't change any layer's window. Behavior is unchanged (see [`createStickyTrigger`](README.md#createstickytriggeroptions))
