@@ -3099,7 +3099,11 @@ describe('nestedStickyOptimization', () => {
 describe('a kill followed by a GSAP refresh in the same task', () => {
   let dwell = 100;
 
-  const setupScenes = (cls: object, end: () => string = () => `+=${dwell}`) => {
+  const setupScenes = (
+    cls: object,
+    end: () => string = () => `+=${dwell}`,
+    options: ConstructorParameters<typeof StickyScrollTrigger>[1] = {},
+  ) => {
     document.body.innerHTML = `
       <div class="host">
         <div class="root">
@@ -3109,7 +3113,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         </div>
       </div>`;
 
-    const controller = new StickyScrollTrigger(query('.root'));
+    const controller = new StickyScrollTrigger(query('.root'), options);
     const vars = ['.s1', '.s2', '.s3'].map((sel) =>
       controller.createStickyTrigger({ trigger: query(sel), end }));
 
@@ -3207,6 +3211,42 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
     expect(paddings()).toHaveLength(1);
     expect(scroller.rec).toBe(2300);
+  });
+
+  // Once the shrunk dwell is written, no scroll read comes before the table demotes the wrappers
+  // again. jsdom puts everything at 0: the table built at 0 leaves every wrapper behind 5000, and
+  // the one rebuilt near 5000 leaves them ahead of the 0 GSAP measures at. No scroll-margin
+  // targets: their ramp reads the scroll too.
+  it('reads the scroll for the record only once the far wrappers are demoted again', () => {
+    const scroller = { rec: 5000 };
+    const { Cls, gsapRefresh } = makeClass(scroller);
+    const { vars, self } = setupScenes(Cls, undefined, {
+      nestedStickyOptimization: 'always',
+      scrollMarginTargets: null,
+    });
+    const stickyWrappers = () => Array.from(document.querySelectorAll<HTMLElement>('*'))
+      .filter((el) => el.style.position === 'sticky');
+    const total = paddingTotal();
+    const stickyAtReadAfterShrink: number[] = [];
+    let from = 0;
+
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => {
+      if (paddingTotal() < total) stickyAtReadAfterShrink.push(stickyWrappers().length);
+
+      return from - (total - paddingTotal());
+    });
+    vars[0].onRefreshInit?.(self);
+    from = 5000;
+    window.dispatchEvent(new Event('scroll'));
+    expect(stickyWrappers()).toHaveLength(0);
+
+    vars[0].onKill?.(self);
+    vars[1].onKill?.(self);
+    gsapRefresh();
+
+    expect(stickyAtReadAfterShrink.length).toBeGreaterThan(0);
+    expect(stickyAtReadAfterShrink.every((count) => count === 0)).toBe(true);
+    expect(scroller.rec).toBe(4800);
   });
 
   // A resize changes the dwell above the viewport too, and GSAP scrolls back to its number then.

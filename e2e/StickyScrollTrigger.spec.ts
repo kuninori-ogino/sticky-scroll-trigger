@@ -2375,30 +2375,39 @@ interface KillRefreshAnchorWindow {
   __state: () => { tailTop: number; scrollY: number };
 }
 
-const openKillRefreshAnchor = async (page: Page, end?: string) => {
-  const query = end ? `?end=${encodeURIComponent(end)}` : '';
+const openKillRefreshAnchor = async (page: Page, end?: string, optimization?: string) => {
+  const params = new URLSearchParams();
+
+  if (end) params.set('end', end);
+
+  if (optimization) params.set('optimization', optimization);
+
+  const query = params.size ? `?${params}` : '';
 
   await page.goto(`/fixtures/killRefreshAnchor.html${query}`);
   await page.waitForFunction(() => (window as never as KillRefreshAnchorWindow).__ready);
 };
 
 // The rebuild takes the killed dwell off above the viewport. The browser's anchoring keeps the
-// content in place, unless GSAP scrolls back to the number it recorded before.
-test('a kill and a ScrollTrigger.refresh() in the same task keep the content in place', async ({ page }) => {
-  await openKillRefreshAnchor(page);
+// content in place, unless GSAP scrolls back to the number it recorded before. 'always' turns
+// dormancy on in every engine.
+for (const optimization of ['auto', 'always']) {
+  test(`a kill and a ScrollTrigger.refresh() in the same task keep the content in place (nestedStickyOptimization ${optimization})`, async ({ page }) => {
+    await openKillRefreshAnchor(page, undefined, optimization);
 
-  const before = await page.evaluate(
-    () => (window as never as KillRefreshAnchorWindow).__scrollTo(2500),
-  );
-  const result = await page.evaluate(
-    () => (window as never as KillRefreshAnchorWindow).__killAndRefresh(false),
-  );
+    const before = await page.evaluate(
+      () => (window as never as KillRefreshAnchorWindow).__scrollTo(2500),
+    );
+    const result = await page.evaluate(
+      () => (window as never as KillRefreshAnchorWindow).__killAndRefresh(false),
+    );
 
-  expect(result.sameTask.tailTop).toBeCloseTo(before, 0);
-  expect(result.settled.tailTop).toBeCloseTo(before, 0);
-  // s1's and s2's dwell (2 x 200) are gone above the viewport.
-  expect(result.settled.scrollY).toBeCloseTo(2100, 0);
-});
+    expect(result.sameTask.tailTop).toBeCloseTo(before, 0);
+    expect(result.settled.tailTop).toBeCloseTo(before, 0);
+    // s1's and s2's dwell (2 x 200) are gone above the viewport.
+    expect(result.settled.scrollY).toBeCloseTo(2100, 0);
+  });
+}
 
 // With no layer left, no onRefreshInit runs refresh(), so the rebuild has to come from the kill.
 test('a GSAP refresh in the kill\'s task measures the layout without the killed layers', async ({ page }) => {
@@ -2427,3 +2436,34 @@ test('a resize refresh keeps GSAP\'s recorded scroll when the dwell above change
   await expect.poll(async () => (await state()).tailTop).toBeCloseTo(250, 0);
   expect((await state()).scrollY).toBeCloseTo(2500, 0);
 });
+
+// matchMediaNested.html's setup count.
+interface MatchMediaNestedWindow {
+  __setups: number;
+}
+
+// The switch rebuilds every layer inside GSAP's refresh. A layout read before dormancy demoted
+// them again froze WebKit for over 25s at 20 nested levels.
+for (const scroll of [1500, 3000]) {
+  test(`a matchMedia switch at ${scroll}px over 20 nested Scene layers finishes quickly`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto('/fixtures/matchMediaNested.html');
+    await page.waitForFunction(() => (window as never as MatchMediaNestedWindow).__setups === 1);
+    await page.evaluate(async (y) => {
+      window.scrollTo(0, y);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }, scroll);
+
+    const t0 = Date.now();
+
+    await page.setViewportSize({ width: 600, height: 720 });
+    await page.waitForFunction(
+      () => (window as never as MatchMediaNestedWindow).__setups === 2,
+      null,
+      { timeout: 10000 },
+    );
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+
+    expect(Date.now() - t0).toBeLessThan(5000);
+  });
+}

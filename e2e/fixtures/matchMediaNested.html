@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>matchMediaNested fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        display: block;
+        height: 300px;
+      }
+    </style>
+  </head>
+  <body>
+    <div style="height: 200px"></div>
+    <div class="root"></div>
+    <div style="height: 4000px"></div>
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const root = document.querySelector('.root');
+      const sections = Array.from({ length: 20 }, () =>
+        root.appendChild(document.createElement('section')),
+      );
+      // One instance for both breakpoints: each switch kills every layer and registers them again.
+      const sticky = new StickyScrollTrigger(root);
+
+      window.__setups = 0;
+
+      const setup = (end) => () => {
+        window.__setups += 1;
+        sections.forEach((trigger) =>
+          ScrollTrigger.create(sticky.createStickyTrigger({ trigger, end })),
+        );
+      };
+
+      const mm = gsap.matchMedia();
+
+      mm.add('(min-width: 800px)', setup('+=200'));
+      mm.add('(max-width: 799px)', setup('+=100'));
+    </script>
+  </body>
+</html>

@@ -722,9 +722,6 @@ export default class StickyScrollTrigger {
       failure = { error };
     }
 
-    // A failed rebuild leaves part of the layout unpadded, and the next refresh puts it back.
-    if (!failure) this.#followScrollAnchoring(scrollBefore);
-
     // After every sticky value is written, and on a throw too: the restores there put back
     // whatever the table expects, and the table has to follow what this refresh did manage.
     try {
@@ -737,6 +734,11 @@ export default class StickyScrollTrigger {
         throw error;
       });
     }
+
+    // Reading the scroll forces a layout, so it waits until the table has demoted the far layers:
+    // with every wrapper sticky, that layout is the cost dormancy avoids. A failed rebuild leaves
+    // part of the layout unpadded, and the next refresh puts it back.
+    if (!failure) this.#followScrollAnchoring(scrollBefore);
 
     if (failure) throw failure.error;
   }

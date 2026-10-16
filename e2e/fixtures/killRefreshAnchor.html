@@ -33,7 +33,11 @@
       const params = new URLSearchParams(location.search);
       const end = params.get('end') ?? '+=200';
       const tail = document.querySelector('.tail');
-      const sticky = new StickyScrollTrigger('.root');
+      const optimization = params.get('optimization');
+      const sticky = new StickyScrollTrigger(
+        '.root',
+        optimization ? { nestedStickyOptimization: optimization } : {},
+      );
       const triggers = ['.s1', '.s2', '.s3'].map((sel) =>
         ScrollTrigger.create(sticky.createStickyTrigger({ trigger: sel, end })),
       );
