@@ -308,12 +308,13 @@ describe('the JS ramp fallback', () => {
   const consumed = (host: HTMLElement, index: number) =>
     host.style.getPropertyValue(`--${instanceIdOf(host)}-c${index}`);
 
-  it('writes each layer\'s consumed dwell on sync, without waiting for a scroll', () => {
+  it('writes each layer\'s consumed dwell on applyRamps(), without waiting for a scroll', () => {
     const root = query('.root');
     const sync = createSync();
 
     setScrollY(600);
     sync.sync([dwell(0, 300), dwell(500, 1000)], root, naturalTops);
+    sync.applyRamps();
 
     // The first layer's window is behind us, so all 300 of its dwell is consumed; the second is
     // 100 into its own.
@@ -326,6 +327,7 @@ describe('the JS ramp fallback', () => {
     const sync = createSync();
 
     sync.sync([dwell(500, 1000)], root, naturalTops);
+    sync.applyRamps();
 
     expect(consumed(root, 0)).toBe('0px');
 
@@ -334,6 +336,16 @@ describe('the JS ramp fallback', () => {
 
     setScrollY(5000);
     expect(consumed(root, 0)).toBe('500px');
+  });
+
+  // Reading the scroll forces a layout, which the caller puts off until it's cheap.
+  it('leaves the scroll unread in sync()', () => {
+    const scrollY = vi.spyOn(window, 'scrollY', 'get');
+    const sync = createSync();
+
+    sync.sync([dwell(0, 500)], query('.root'), naturalTops);
+
+    expect(scrollY).not.toHaveBeenCalled();
   });
 
   // A null selector opts out of the module entirely, so the listener would spend the instance's

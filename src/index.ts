@@ -735,9 +735,11 @@ export default class StickyScrollTrigger {
       });
     }
 
-    // Reading the scroll forces a layout, so it waits until the table has demoted the far layers:
-    // with every wrapper sticky, that layout is the cost dormancy avoids. A failed rebuild leaves
-    // part of the layout unpadded, and the next refresh puts it back.
+    // Reading the scroll forces a layout, so both reads wait until the table has demoted the far
+    // layers: with every wrapper sticky, that layout is the cost dormancy avoids.
+    this.#scrollMarginSync.applyRamps();
+
+    // A failed rebuild leaves part of the layout unpadded, and the next refresh puts it back.
     if (!failure) this.#followScrollAnchoring(scrollBefore);
 
     if (failure) throw failure.error;

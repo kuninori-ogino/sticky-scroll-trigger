@@ -178,7 +178,8 @@ export const buildStylesheet = (instanceId: string, scenes: readonly SceneDwell[
 
 /**
  * Creates the per-controller state for keeping `scroll-margin-top` in sync. `sync` is called at
- * the end of every `refresh()`, once freeze windows are final; `restore` undoes everything.
+ * the end of every `refresh()`, once freeze windows are final, and `applyRamps` after it; `restore`
+ * undoes everything.
  *
  * `targetSelector` is fixed for the instance's lifetime, which is what lets the fallback listener
  * below be decided once here rather than per sync(). A null selector opts out of the whole module.
@@ -240,9 +241,8 @@ export const createScrollMarginSync = (
   };
 
   // Points the ramps at host and starts them: the CSS animation where it runs, else the scroll
-  // listener's values, written once now so the targets' calc() holds even if no scroll event comes
-  // before the next scroll-into-view. Where the animation runs, those writes would only lose to it
-  // in the cascade, so they're skipped.
+  // listener's values, which applyRamps() writes once the caller is done with layout. Where the
+  // animation runs, those writes would only lose to it in the cascade, so they're skipped.
   const startRamps = (ramps: readonly SceneDwell[], host: HTMLElement) => {
     if (animationHost !== host) {
       animationHost?.removeAttribute(`data-${instanceId}`);
@@ -253,7 +253,6 @@ export const createScrollMarginSync = (
     if (usesJsRamp) {
       jsRamps = ramps;
       jsHost = host;
-      applyJsRamp();
 
       return;
     }
@@ -343,6 +342,13 @@ export const createScrollMarginSync = (
         if (!next.has(target)) restoreTarget(target);
       });
       written = next;
+    },
+
+    // Writes the JS ramp's values for the current scroll, so the targets' calc() holds even if no
+    // scroll event comes before the next scroll-into-view. Separate from sync() because reading the
+    // scroll forces a layout, which refresh() puts off until dormancy has demoted the far layers.
+    applyRamps(): void {
+      applyJsRamp();
     },
 
     restore(): void {

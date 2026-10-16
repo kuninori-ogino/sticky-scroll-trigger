@@ -2891,6 +2891,52 @@ describe('nestedStickyOptimization', () => {
     }
   });
 
+  // jsdom always runs the scroll-margin ramp in its JS form.
+  it('reads the scroll for the JS ramp only once the far wrappers are demoted again', () => {
+    const listeners: Record<string, () => unknown> = {};
+
+    Object.assign(FakeScrollTrigger, {
+      addEventListener: (type: string, callback: () => unknown) => {
+        listeners[type] = callback;
+      },
+      removeEventListener: vi.fn(),
+    });
+
+    const { controller, sceneVars } = setupPinned('always');
+    const stickyAtRead: number[] = [];
+
+    window.dispatchEvent(new Event('scroll'));
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => {
+      stickyAtRead.push(Array.from(document.querySelectorAll<HTMLElement>('*'))
+        .filter((el) => el.style.position === 'sticky').length);
+
+      return scroll;
+    });
+    Object.assign(FakeScrollTrigger, { isRefreshing: true });
+
+    try {
+      listeners.refreshInit();
+      sceneVars.onRefreshInit?.(fakeSelf);
+    } finally {
+      Object.assign(FakeScrollTrigger, {
+        isRefreshing: false,
+        addEventListener: undefined,
+        removeEventListener: undefined,
+      });
+    }
+
+    // The ramps' host carries the instance's own attribute (see scrollMargin.test.ts).
+    const host = Array.from(document.querySelectorAll<HTMLElement>('*'))
+      .find((el) => el.getAttributeNames().some((name) => name.startsWith('data-sst')))!;
+    const id = host.getAttributeNames().find((name) => name.startsWith('data-sst'))!.slice(5);
+
+    expect(stickyAtRead.length).toBeGreaterThan(0);
+    expect(stickyAtRead.every((count) => count === 0)).toBe(true);
+    // The scene's whole dwell is behind a scroll of 5000.
+    expect(host.style.getPropertyValue(`--${id}-c0`)).toBe('100px');
+    controller.destroy();
+  });
+
   // Taken for the first time inside one of GSAP's refreshes, the class's own refreshInit listener
   // missed that dispatch: the instance's result carries the restore, the caller's render included.
   it('hands back the restore through its own result when it first sees GSAP mid-refresh', () => {
@@ -3215,15 +3261,11 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
   // Once the shrunk dwell is written, no scroll read comes before the table demotes the wrappers
   // again. jsdom puts everything at 0: the table built at 0 leaves every wrapper behind 5000, and
-  // the one rebuilt near 5000 leaves them ahead of the 0 GSAP measures at. No scroll-margin
-  // targets: their ramp reads the scroll too.
+  // the one rebuilt near 5000 leaves them ahead of the 0 GSAP measures at.
   it('reads the scroll for the record only once the far wrappers are demoted again', () => {
     const scroller = { rec: 5000 };
     const { Cls, gsapRefresh } = makeClass(scroller);
-    const { vars, self } = setupScenes(Cls, undefined, {
-      nestedStickyOptimization: 'always',
-      scrollMarginTargets: null,
-    });
+    const { vars, self } = setupScenes(Cls, undefined, { nestedStickyOptimization: 'always' });
     const stickyWrappers = () => Array.from(document.querySelectorAll<HTMLElement>('*'))
       .filter((el) => el.style.position === 'sticky');
     const total = paddingTotal();

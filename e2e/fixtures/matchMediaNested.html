@@ -32,6 +32,10 @@
       const sticky = new StickyScrollTrigger(root);
 
       window.__setups = 0;
+      window.__refreshes = 0;
+      ScrollTrigger.addEventListener('refresh', () => {
+        window.__refreshes += 1;
+      });
 
       const setup = (end) => () => {
         window.__setups += 1;

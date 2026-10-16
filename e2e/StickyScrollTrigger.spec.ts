@@ -2437,9 +2437,10 @@ test('a resize refresh keeps GSAP\'s recorded scroll when the dwell above change
   expect((await state()).scrollY).toBeCloseTo(2500, 0);
 });
 
-// matchMediaNested.html's setup count.
+// matchMediaNested.html's setup and GSAP refresh counts.
 interface MatchMediaNestedWindow {
   __setups: number;
+  __refreshes: number;
 }
 
 // The switch rebuilds every layer inside GSAP's refresh. A layout read before dormancy demoted
@@ -2460,6 +2461,45 @@ for (const scroll of [1500, 3000]) {
     await page.waitForFunction(
       () => (window as never as MatchMediaNestedWindow).__setups === 2,
       null,
+      { timeout: 10000 },
+    );
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+
+    expect(Date.now() - t0).toBeLessThan(5000);
+  });
+}
+
+// Without scroll-driven animations (Safari before 26), the JS ramp made the same read, so any
+// resize froze WebKit, breakpoint switch or not.
+for (const width of [600, 1000]) {
+  test(`a resize to ${width}px at 3000px over 20 nested Scene layers finishes quickly with the JS ramp`, async ({ page }) => {
+    await page.addInitScript(() => {
+      const supports = CSS.supports.bind(CSS);
+
+      Object.defineProperty(CSS, 'supports', {
+        value: (property: string, value?: string) => {
+          if (property.includes('animation-timeline')) return false;
+
+          return value === undefined ? supports(property) : supports(property, value);
+        },
+      });
+    });
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto('/fixtures/matchMediaNested.html');
+    await page.waitForFunction(() => (window as never as MatchMediaNestedWindow).__setups === 1);
+
+    const refreshes = await page.evaluate(async () => {
+      window.scrollTo(0, 3000);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      return (window as never as MatchMediaNestedWindow).__refreshes;
+    });
+    const t0 = Date.now();
+
+    await page.setViewportSize({ width, height: 720 });
+    await page.waitForFunction(
+      (before) => (window as never as MatchMediaNestedWindow).__refreshes > before,
+      refreshes,
       { timeout: 10000 },
     );
     await page.evaluate(() => new Promise(requestAnimationFrame));
