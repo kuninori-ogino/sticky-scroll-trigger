@@ -2565,3 +2565,71 @@ for (const width of [600, 1000]) {
     expect(Date.now() - t0).toBeLessThan(5000);
   });
 }
+
+// layoutReads.html's hooks and its log of layout reads.
+interface LayoutReadsWindow {
+  __reads: { sticky: number; caller: string }[] | undefined;
+  __layoutReads: { refreshes: () => number; refresh: () => void; killSomeAndRefresh: () => void };
+}
+
+// A layout read while every wrapper is sticky is what nestedStickyOptimization exists to avoid:
+// WebKit took over 25s for one at 16 nested levels. The table keeps a few levels near the scroll
+// sticky, so a read seeing more than that sits between refresh()'s sticky writes and the table
+// demoting them again.
+for (const ramp of ['css', 'js']) {
+  for (const [scenario, label] of [
+    ['refresh', 'a refresh() call'],
+    ['resize', 'a resize'],
+    ['kill', 'a kill and ScrollTrigger.refresh()'],
+  ] as const) {
+    test(`no layout read in ${label} sees every wrapper sticky (${ramp} scroll-margin ramp)`, async ({ page, browserName }) => {
+      test.skip(browserName !== 'chromium', 'counts reads, which any engine would count the same');
+
+      // A refresh() that threw partway would make fewer reads and could pass for the wrong reason.
+      const errors: string[] = [];
+
+      page.on('pageerror', (error) => errors.push(error.message));
+      await page.setViewportSize({ width: 1280, height: 720 });
+      await page.goto(`/fixtures/layoutReads.html?ramp=${ramp}`);
+      await page.waitForFunction(() => (window as never as LayoutReadsWindow).__layoutReads);
+
+      const refreshes = await page.evaluate(async () => {
+        const w = window as never as LayoutReadsWindow;
+
+        window.scrollTo(0, 3000);
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        w.__reads = [];
+
+        return w.__layoutReads.refreshes();
+      });
+
+      if (scenario === 'refresh') {
+        await page.evaluate(() => (window as never as LayoutReadsWindow).__layoutReads.refresh());
+      } else if (scenario === 'kill') {
+        await page.evaluate(
+          () => (window as never as LayoutReadsWindow).__layoutReads.killSomeAndRefresh(),
+        );
+      } else {
+        await page.setViewportSize({ width: 1000, height: 720 });
+        await page.waitForFunction(
+          (before) => (window as never as LayoutReadsWindow).__layoutReads.refreshes() > before,
+          refreshes,
+        );
+      }
+
+      const reads = await page.evaluate(() => {
+        const w = window as never as LayoutReadsWindow;
+        const log = w.__reads!;
+
+        w.__reads = undefined;
+
+        return log;
+      });
+      const offending = reads.filter(({ sticky }) => sticky > 8).map(({ caller }) => caller);
+
+      expect(errors).toEqual([]);
+      expect(reads.length).toBeGreaterThan(0);
+      expect([...new Set(offending)]).toEqual([]);
+    });
+  }
+}

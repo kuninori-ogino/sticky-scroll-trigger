@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>layoutReads fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        height: 300px;
+      }
+      .base,
+      .cover {
+        height: 600px;
+      }
+      .pin {
+        height: 100px;
+      }
+      .pinBox {
+        height: 800px;
+      }
+    </style>
+    <script>
+      // A block, so none of these names shadow the globals the library reads (getComputedStyle).
+      {
+        // ?ramp=js stands in for an engine without scroll-driven animations, before the library loads.
+        if (new URLSearchParams(location.search).get('ramp') === 'js') {
+          const supports = CSS.supports.bind(CSS);
+
+          CSS.supports = (...args) =>
+            String(args[0]).includes('animation-timeline') ? false : supports(...args);
+        }
+
+        // Every layout read while window.__reads is an array is logged with how many elements are
+        // sticky at that moment and the calls that made it.
+        const stickyCount = () => document.querySelectorAll('[style*="position: sticky"]').length;
+        const record = () => {
+          if (!window.__reads) return;
+
+          // Function names only, innermost first: 'documentTop < measureLiveEndTriggerTop < ...'.
+          const caller = new Error().stack
+            .split('\n')
+            .slice(3, 7)
+            .map((line) => line.trim().match(/^at (?:new )?([^ ]+)/)?.[1] ?? '?')
+            .join(' < ');
+
+          window.__reads.push({ sticky: stickyCount(), caller });
+        };
+        const wrapGetter = (proto, property) => {
+          const descriptor = Object.getOwnPropertyDescriptor(proto, property);
+
+          Object.defineProperty(proto, property, {
+            ...descriptor,
+            get() {
+              record();
+
+              return descriptor.get.call(this);
+            },
+          });
+        };
+
+        ['offsetTop', 'offsetLeft', 'offsetHeight', 'offsetWidth', 'offsetParent'].forEach((property) =>
+          wrapGetter(HTMLElement.prototype, property),
+        );
+        ['clientTop', 'clientHeight', 'clientWidth', 'scrollHeight', 'scrollTop'].forEach((property) =>
+          wrapGetter(Element.prototype, property),
+        );
+        ['scrollY', 'pageYOffset', 'innerHeight'].forEach((property) => {
+          const descriptor =
+            Object.getOwnPropertyDescriptor(window, property) ??
+            Object.getOwnPropertyDescriptor(Window.prototype, property);
+
+          Object.defineProperty(window, property, {
+            configurable: true,
+            get() {
+              record();
+
+              return descriptor.get.call(window);
+            },
+          });
+        });
+
+        // A computed value that depends on layout (a used height, a percentage margin) is a layout
+        // read too; one that doesn't (position, scroll-margin-top) is style only.
+        const layoutDependent = /^(width|height|top|right|bottom|left|inset|margin|padding|min|max)/i;
+        const getComputedStyle = window.getComputedStyle;
+
+        window.getComputedStyle = function (...args) {
+          const style = getComputedStyle.apply(this, args);
+
+          return new Proxy(style, {
+            get(target, property) {
+              if (typeof property === 'string' && layoutDependent.test(property)) record();
+
+              const value = Reflect.get(target, property, target);
+
+              if (property === 'getPropertyValue') {
+                return (name) => {
+                  if (layoutDependent.test(name)) record();
+
+                  return value.call(target, name);
+                };
+              }
+
+              return typeof value === 'function' ? value.bind(target) : value;
+            },
+          });
+        };
+
+        const getBoundingClientRect = Element.prototype.getBoundingClientRect;
+
+        Element.prototype.getBoundingClientRect = function () {
+          record();
+
+          return getBoundingClientRect.call(this);
+        };
+      }
+    </script>
+  </head>
+  <body>
+    <div style="height: 200px"></div>
+    <div class="root"></div>
+    <div class="outside" style="height: 300px"></div>
+    <div class="pinBox"><div class="pin" id="pinOut"></div></div>
+    <div style="height: 4000px"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      // Every refresh() path that reads layout: 16 nested Scene layers, a pin inside the container
+      // and one outside it, a cover with a 'max' end, one with an endTrigger outside the
+      // container, and a resolved trigger inside the nesting.
+      const root = document.querySelector('.root');
+
+      root.innerHTML = `
+        ${Array.from({ length: 16 }, (_, i) => `<section id="s${i}"></section>`).join('')}
+        <div class="pinBox"><div class="pin" id="pinIn"></div></div>
+        <div class="base" id="base1"></div><div class="cover" id="cover1"></div>
+        <div class="base" id="base2"></div><div class="cover" id="cover2"></div>
+        <p id="probe">probe</p>`;
+
+      // 'always' lays out the far elements as relative on every engine, as WebKit's 'auto' does.
+      const sticky = new StickyScrollTrigger(root, { nestedStickyOptimization: 'always' });
+      const scenes = Array.from(root.querySelectorAll('section'), (trigger) =>
+        ScrollTrigger.create(sticky.createStickyTrigger({ trigger, end: '+=200' })),
+      );
+
+      ScrollTrigger.create(sticky.createStickyPin({ trigger: '#pinIn' }));
+      ScrollTrigger.create(sticky.createStickyPin({ trigger: '#pinOut', end: '+=500' }));
+      ScrollTrigger.create(sticky.createOverlapScroll({ trigger: '#base1', end: 'max' }));
+      ScrollTrigger.create(
+        sticky.createOverlapScroll({ trigger: '#base2', end: 'top top', endTrigger: '.outside' }),
+      );
+      ScrollTrigger.create(sticky.createResolvedTrigger({ trigger: '#probe', endTrigger: '.outside' }));
+
+      let refreshes = 0;
+
+      ScrollTrigger.addEventListener('refresh', () => {
+        refreshes += 1;
+      });
+
+      window.__layoutReads = {
+        refreshes: () => refreshes,
+        refresh: () => sticky.refresh(),
+        killSomeAndRefresh: () => {
+          scenes.slice(0, 2).forEach((trigger) => trigger.kill());
+          ScrollTrigger.refresh();
+        },
+      };
+    </script>
+  </body>
+</html>
