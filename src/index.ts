@@ -165,7 +165,11 @@ export default class StickyScrollTrigger {
   #pinLayers: PinLayer[] = [];
   // Keeps scroll-margin-top on same-page-link targets in step with the current freeze windows,
   // so the browser's own scroll-into-view accounts for Scene layer dwell (see scrollMargin.ts).
-  #scrollMarginSync: ReturnType<typeof createScrollMarginSync>;
+  // Null while the instance is disarmed.
+  #scrollMarginSync: ReturnType<typeof createScrollMarginSync> | null = null;
+  #scrollMarginTargets: string | null;
+  // True while a layer or pin is registered (see #arm).
+  #armed = false;
   // This instance's share of the page-level dormancy table, or null where it stays off (see
   // dormancy.ts).
   #dormancyClient: DormancyClient | null = null;
@@ -179,8 +183,7 @@ export default class StickyScrollTrigger {
 
     // Validated here rather than inside refresh(): refresh() runs from GSAP's own dispatch, so
     // an uncaught SyntaxError from querySelectorAll on an invalid selector would abort every
-    // other ScrollTrigger's refresh on the page. Before createScrollMarginSync too, so a throw
-    // leaves nothing of this instance attached to the window.
+    // other ScrollTrigger's refresh on the page.
     if (scrollMarginTargets !== null) {
       try {
         this.#rootElement.querySelectorAll(scrollMarginTargets);
@@ -204,7 +207,7 @@ export default class StickyScrollTrigger {
       );
     }
 
-    this.#scrollMarginSync = createScrollMarginSync(this.#rootElement, scrollMarginTargets);
+    this.#scrollMarginTargets = scrollMarginTargets;
 
     // Other engines don't slow down with depth, so 'auto' leaves them at this one check.
     if (optimization === 'always' || (optimization === 'auto' && isWebKit())) {
@@ -212,8 +215,40 @@ export default class StickyScrollTrigger {
         mode: optimization,
         ownedElements: () => this.#ownedStickyElements(),
       };
-      registerDormancyClient(this.#dormancyClient);
     }
+  }
+
+  // Page-level side effects start with the first layer or pin, not at construction: an instance
+  // created per gsap.matchMedia setup and never destroyed acts on the page only while it has one.
+  #arm(): void {
+    if (this.#armed) return;
+
+    this.#armed = true;
+    this.#scrollMarginSync = createScrollMarginSync(this.#rootElement, this.#scrollMarginTargets);
+
+    if (this.#dormancyClient) registerDormancyClient(this.#dormancyClient);
+  }
+
+  // The last kill hands the page back at once, as destroy() does, and the next registration arms
+  // the instance again. The scheduled batch still refreshes GSAP for the triggers left.
+  #disarmIfEmpty(): void {
+    if (this.#armed && !this.#destroyed && !this.#layers.length && !this.#pinLayers.length) {
+      this.#disarm();
+    }
+  }
+
+  #disarm(): void {
+    this.#armed = false;
+
+    // Even with no client of its own, its wrappers were ancestors in the other instances' ranges.
+    unregisterDormancyClient(this.#dormancyClient);
+
+    // Before #unbuild removes the outermost container, which hosts the scroll-driven ramps.
+    this.#scrollMarginSync?.restore();
+    this.#scrollMarginSync = null;
+    this.#restoreCoverLifts();
+    this.#unbuild();
+    this.#builtLayers = [];
   }
 
   // Every element this instance has made sticky: the wrappers still built, and the wrapped pins.
@@ -246,7 +281,8 @@ export default class StickyScrollTrigger {
 
   // Defers teardown and rebuild to a microtask, or to a GSAP refresh later in the task, so kills
   // within the same task coalesce into one refresh(). Rebuilding per kill would be O(n^2), and
-  // moving the shared container's subtree each time breaks iframes and focus.
+  // moving the shared container's subtree each time breaks iframes and focus. Only the last kill
+  // tears down at once (see #disarmIfEmpty), which still moves the subtree only once.
   //
   // GSAP doesn't re-read function-valued start/end until ScrollTrigger.refresh() is called, so
   // refresh() alone would leave GSAP's cache holding stale freezeStart/freezeEnd. The microtask
@@ -707,7 +743,7 @@ export default class StickyScrollTrigger {
   // Public entry point. Rebuilds the nesting if triggers were added/removed, and recomputes
   // both the Scene/Cover layers and the pin layers.
   refresh(): void {
-    if (this.#destroyed) return;
+    if (this.#destroyed || !this.#armed) return;
 
     let failure: { error: unknown } | null = null;
     // Only a kill's rebuild: GSAP removes a killed pin's spacing at once, so the browser's
@@ -737,7 +773,7 @@ export default class StickyScrollTrigger {
 
     // Reading the scroll forces a layout, so both reads wait until the table has demoted the far
     // layers: with every wrapper sticky, that layout is the cost dormancy avoids.
-    this.#scrollMarginSync.applyRamps();
+    this.#scrollMarginSync?.applyRamps();
 
     // A failed rebuild leaves part of the layout unpadded, and the next refresh puts it back.
     if (!failure) this.#followScrollAnchoring(scrollBefore);
@@ -836,7 +872,7 @@ export default class StickyScrollTrigger {
   // inheritance without ever styling an element the caller owns. Targets are measured the way
   // resolveScrollPosition measures its element, with every wrapper's sticky state reset.
   #syncScrollMargins(): void {
-    this.#scrollMarginSync.sync(
+    this.#scrollMarginSync?.sync(
       this.#engagedWindows(),
       this.#outermostContainer,
       (targets) => {
@@ -950,6 +986,7 @@ export default class StickyScrollTrigger {
       + 'a pin trigger wraps it twice and produces conflicting position:sticky behavior.',
     );
 
+    this.#arm();
     this.#layers.push(layer);
     this.#dirty = true;
 
@@ -967,13 +1004,15 @@ export default class StickyScrollTrigger {
       // function-valued tween props get re-measured too. An explicit value is respected.
       invalidateOnRefresh: rest.invalidateOnRefresh ?? true,
       // Removes the layer when GSAP kills it (a matchMedia switch, say). It leaves `#layers`
-      // immediately; a Scene layer's wrappers stay until the teardown #scheduleRebuild defers.
+      // immediately; a Scene layer's wrappers stay until the teardown #scheduleRebuild defers,
+      // unless it was the last layer or pin.
       onKill: (self) => {
         this.#captureScrollTriggerClass(self);
 
         removeItem(this.#layers, layer);
         this.#dirty = true;
         this.#scheduleRebuild();
+        this.#disarmIfEmpty();
         onKill?.(self);
       },
       onRefreshInit: this.#createAutoRefreshHandler(rest.onRefreshInit),
@@ -1177,6 +1216,7 @@ export default class StickyScrollTrigger {
       end,
     };
 
+    this.#arm();
     this.#pinLayers.push(layer);
 
     return {
@@ -1193,6 +1233,7 @@ export default class StickyScrollTrigger {
         // freeze window. A pin that was never wrapped moved nothing.
         if (this.#unwrapPinLayer(layer)) this.#scheduleRebuild();
 
+        this.#disarmIfEmpty();
         onKill?.(self);
       },
       onRefreshInit: this.#createAutoRefreshHandler(rest.onRefreshInit),
@@ -1361,16 +1402,8 @@ export default class StickyScrollTrigger {
     if (this.#destroyed) return;
 
     this.#destroyed = true;
-
-    // Even with no client of its own, its wrappers were ancestors in the other instances' ranges.
-    unregisterDormancyClient(this.#dormancyClient);
-
-    // Before #unbuild removes the outermost container, which hosts the scroll-driven ramps.
-    this.#scrollMarginSync.restore();
-    this.#restoreCoverLifts();
-    this.#unbuild();
+    this.#disarm();
     this.#layers.length = 0;
-    this.#builtLayers = [];
     this.#pinLayers.forEach((layer) => this.#unwrapPinLayer(layer));
     this.#pinLayers.length = 0;
     this.#scrollTriggerClass = null;

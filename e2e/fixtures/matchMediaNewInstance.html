@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>matchMediaNewInstance fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        display: block;
+        height: 400px;
+      }
+      .tail {
+        height: 200vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <section id="s1"></section>
+      <section id="s2"></section>
+    </div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const root = document.querySelector('.root');
+      const errors = [];
+      let setups = 0;
+
+      // A new instance per setup, never destroyed: the setup's cleanup only kills its triggers.
+      const setup = (end) => () => {
+        setups += 1;
+
+        try {
+          const sticky = new StickyScrollTrigger(root);
+
+          ['#s1', '#s2'].forEach((trigger) =>
+            ScrollTrigger.create(sticky.createStickyTrigger({ trigger, end })),
+          );
+        } catch (error) {
+          errors.push(error.message);
+        }
+      };
+
+      const mm = gsap.matchMedia();
+
+      mm.add('(min-width: 800px)', setup('+=200'));
+      mm.add('(max-width: 799px)', setup('+=100'));
+
+      window.__matchMediaNewInstance = () => ({
+        setups,
+        errors,
+        rootConnected: root.isConnected,
+        documentHeight: document.documentElement.scrollHeight,
+        scrollMarginTop: root.isConnected ? getComputedStyle(root.lastElementChild).scrollMarginTop : null,
+      });
+    </script>
+  </body>
+</html>

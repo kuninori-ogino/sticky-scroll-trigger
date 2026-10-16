@@ -1629,7 +1629,7 @@ interface CspReport {
   probePosition: string;
   moduleSheetCount: number;
   rampProperty: string;
-  scrollMarginTop: string;
+  scrollMarginTop: string | null;
 }
 
 test('both halves still work under a style-src policy without \'unsafe-inline\'', async ({ page }) => {
@@ -2363,6 +2363,45 @@ for (const explicit of [false, true]) {
     expect(shape).toEqual({ wrapperParent: true, rootChildren: 3 });
   });
 }
+
+// matchMediaNewInstance.html's record, read after each switch settles.
+interface MatchMediaNewInstanceState {
+  setups: number;
+  errors: string[];
+  rootConnected: boolean;
+  documentHeight: number;
+  scrollMarginTop: string | null;
+}
+
+// Each setup builds its own instance and never destroys it. The previous instance's teardown took
+// the new one's wrappers, and root with them, out of the document on the second switch, and each
+// instance read the one before's scroll-margin-top as the author's own.
+test('a matchMedia switch with a new instance per setup keeps the layout of the first visit', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 720 });
+  await page.goto('/fixtures/matchMediaNewInstance.html');
+
+  const read = () => page.evaluate(async () => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    return (window as never as { __matchMediaNewInstance: () => MatchMediaNewInstanceState })
+      .__matchMediaNewInstance();
+  });
+  const states: MatchMediaNewInstanceState[] = [];
+
+  for (const [index, width] of [1000, 600, 1000, 600].entries()) {
+    await page.setViewportSize({ width, height: 720 });
+    await expect.poll(async () => (await read()).setups).toBe(index + 1);
+    states.push(await read());
+  }
+
+  expect(states.map(({ errors, rootConnected }) => ({ errors, rootConnected }))).toEqual(
+    Array(4).fill({ errors: [], rootConnected: true }),
+  );
+  expect(states[2].documentHeight).toBe(states[0].documentHeight);
+  expect(states[3].documentHeight).toBe(states[1].documentHeight);
+  expect(states[2].scrollMarginTop).toBe(states[0].scrollMarginTop);
+  expect(states[3].scrollMarginTop).toBe(states[1].scrollMarginTop);
+});
 
 // killRefreshAnchor.html's hooks.
 interface KillRefreshAnchorWindow {

@@ -697,16 +697,50 @@ describe('batching kill()', () => {
     const { query, vars } = setupThreeScenes();
     const wrapperBefore = query('.root').parentElement;
 
+    vars[0].onKill?.(fakeSelf);
+    vars[1].onKill?.(fakeSelf);
+    // still synchronous: waiting on the batch, so the DOM shouldn't have moved at all yet
+    expect(query('.root').parentElement).toBe(wrapperBefore);
+    expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(3);
+
+    await Promise.resolve(); // let exactly one microtask run
+    expect(query('.root').parentElement).not.toBe(wrapperBefore);
+    expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(1);
+  });
+
+  // Nothing is left to rebuild, so the one move back to host happens in the kill's own task.
+  it('killing every layer puts root back at once, and the batch still refreshes GSAP', async () => {
+    const { query, vars } = setupThreeScenes();
+
     vars.forEach((entry) => {
       entry.onKill?.(fakeSelf);
     });
-    // still synchronous: waiting on the batch, so the DOM shouldn't have moved at all yet
-    expect(query('.root').parentElement).toBe(wrapperBefore);
-
-    await Promise.resolve(); // let exactly one microtask run
-    // every layer was killed, so root goes straight back to its original parent (host);
-    // no nesting wrapper is needed at all
     expect(query('.root').parentElement).toBe(document.querySelector('.host'));
+    expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(0);
+
+    await Promise.resolve();
+    expect(FakeScrollTrigger.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  // The caller's onKill runs after the instance has handed the page back, as GSAP's own onKill
+  // runs after its cleanup.
+  it('the last kill hands the page back before the caller\'s onKill runs', () => {
+    document.body.innerHTML = '<div class="host"><div class="root"><section class="s1"></section></div></div>';
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    let parentInOnKill: Element | null = null;
+    const vars = controller.createStickyTrigger({
+      trigger: query('.s1'),
+      end: '+=100',
+      onKill: () => {
+        parentInOnKill = query('.root').parentElement;
+      },
+    });
+
+    controller.refresh();
+    vars.onKill?.(fakeSelf);
+
+    expect(parentInOnKill).toBe(query('.host'));
   });
 
   it('layers that survive a partial kill are still correctly recomputed after the batch', async () => {
@@ -1042,6 +1076,119 @@ describe('destroy()', () => {
 // function-valued position is called, that a malformed clause reaches position.ts's rejection, that
 // an absolute value passes through untouched, and that cover layers stay out of the gap total,
 // which a dwell distance makes exact even at 0.
+// gsap.matchMedia runs each setup's cleanup by killing its triggers, so an instance created per
+// setup and never destroyed stays around with nothing registered.
+describe('an instance with no layer or pin', () => {
+  const fakeSelf = makeFakeSelf();
+  const scrollListeners = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.filter(([type]) => type === 'scroll').map(([, listener]) => listener);
+
+  const setupAnchors = () => {
+    document.body.innerHTML = `
+      <div class="host">
+        <div class="root">
+          <section class="scene"></section>
+          <div id="anchor"></div>
+        </div>
+      </div>`;
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // jsdom takes the scroll-margin ramp's JS form, the one with a window listener.
+  it('attaches nothing to the page until its first registration', () => {
+    setupAnchors();
+
+    const add = vi.spyOn(window, 'addEventListener');
+    const controller = new StickyScrollTrigger(query('.root'));
+
+    expect(scrollListeners(add)).toHaveLength(0);
+
+    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
+    expect(scrollListeners(add).length).toBeGreaterThan(0);
+    controller.destroy();
+  });
+
+  it('hands everything back when its last layer is killed', () => {
+    setupAnchors();
+
+    const add = vi.spyOn(window, 'addEventListener');
+    const remove = vi.spyOn(window, 'removeEventListener');
+    const controller = new StickyScrollTrigger(query('.root'), { nestedStickyOptimization: 'always' });
+    const vars = controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
+
+    vars.onRefreshInit?.(fakeSelf);
+    expect(query('#anchor').style.scrollMarginTop).not.toBe('');
+
+    vars.onKill?.(fakeSelf);
+
+    expect(query('.root').parentElement).toBe(query('.host'));
+    expect(query('#anchor').style.scrollMarginTop).toBe('');
+    // The dormancy table's own listener goes off the stack (see dormancy.ts).
+    expect(scrollListeners(remove)).toContain(scrollListeners(add)[0]);
+
+    // Nothing to build: refresh() leaves the page alone.
+    controller.refresh();
+    expect(query('.root').parentElement).toBe(query('.host'));
+    controller.destroy();
+  });
+
+  it('hands everything back when its last pin is killed', () => {
+    document.body.innerHTML = '<div class="root"><div id="anchor"></div></div><div class="pin"></div>';
+
+    const remove = vi.spyOn(window, 'removeEventListener');
+    const controller = new StickyScrollTrigger(query('.root'));
+    const vars = controller.createStickyPin({ trigger: query('.pin') });
+
+    controller.refresh();
+    vars.onKill?.(fakeSelf);
+
+    expect(query('.pin').style.cssText).toBe('');
+    expect(scrollListeners(remove).length).toBeGreaterThan(0);
+    controller.destroy();
+  });
+
+  it('acts on the page again from its next registration', () => {
+    setupAnchors();
+
+    const controller = new StickyScrollTrigger(query('.root'));
+
+    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' }).onKill?.(fakeSelf);
+    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
+    controller.refresh();
+
+    expect(query('.root').parentElement).not.toBe(query('.host'));
+    expect(query('#anchor').style.scrollMarginTop).not.toBe('');
+    controller.destroy();
+    expect(query('.root').parentElement).toBe(query('.host'));
+  });
+
+  // The matchMedia shape: the next setup builds a new instance on the same root in the same task.
+  // The first one's deferred teardown used to take that instance's wrappers out with its own.
+  it('leaves a new instance on the same root alone after its last kill', async () => {
+    setupAnchors();
+
+    const first = new StickyScrollTrigger(query('.root'));
+    const firstVars = first.createStickyTrigger({ trigger: query('.scene'), end: '+=200' });
+
+    first.refresh();
+    firstVars.onKill?.(fakeSelf);
+
+    const second = new StickyScrollTrigger(query('.root'));
+
+    second.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
+    second.refresh();
+    await Promise.resolve();
+
+    expect(query('.root').parentElement).not.toBe(query('.host'));
+    expect(query('.host').contains(query('.root'))).toBe(true);
+    expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(1);
+    second.destroy();
+  });
+});
+
 describe('resolveScrollPosition()', () => {
   it('when passed a function returning a position clause, uses the result of calling it', () => {
     const { query, controller } = setup();
@@ -3218,15 +3365,16 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
     return { Cls, listeners, gsapRefresh };
   };
 
-  it('rebuilds in that refresh\'s refreshInit even with no layer left, and skips the batch', async () => {
+  it('rebuilds in that refresh\'s refreshInit, and skips the batch', async () => {
     const { Cls, listeners, gsapRefresh } = makeClass({ rec: 0 });
     const { vars, self } = setupScenes(Cls);
 
-    vars.forEach((entry) => entry.onKill?.(self));
-    expect(query('.root').parentElement).not.toBe(query('.host'));
+    vars[0].onKill?.(self);
+    vars[1].onKill?.(self);
+    expect(paddings()).toHaveLength(3);
 
     gsapRefresh();
-    expect(query('.root').parentElement).toBe(query('.host'));
+    expect(paddings()).toHaveLength(1);
 
     await Promise.resolve();
     expect(Cls.refresh).not.toHaveBeenCalled();

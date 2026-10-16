@@ -394,7 +394,7 @@ Recomputes each layer's sticky `top`, dwell spacer height, and freeze window (`s
 
 Kill-driven teardown/rebuild is deferred to a microtask, or to a GSAP refresh later in the same task, and coalesced per task. This DOM move can reload `<iframe>` elements or drop focus for focused inputs inside the managed container. This behavior runs on every kill or relevant layout change and cannot be disabled, so be careful when placing iframes or focus-sensitive inputs under the controller.
 
-A killed `createOverlapScroll` layer's wrapper, which holds `trigger` and every sibling before it, comes off during the kill instead, so the iframe and focus effects there happen then. Code later in the same task (the next breakpoint's `gsap.matchMedia()` setup, say) finds `trigger` back among those siblings, unless another overlap in the same parent still wraps it. Scene layers' teardown and rebuild still wait for the microtask or a GSAP refresh in the same task.
+A killed `createOverlapScroll` layer's wrapper, which holds `trigger` and every sibling before it, comes off during the kill instead, so the iframe and focus effects there happen then. Code later in the same task (the next breakpoint's `gsap.matchMedia()` setup, say) finds `trigger` back among those siblings, unless another overlap in the same parent still wraps it. Scene layers' teardown and rebuild still wait for the microtask or a GSAP refresh in the same task, unless the kill leaves the instance with no layer or pin: then everything it put on the page comes off during the kill (see [`destroy()`](#destroy)).
 
 If surviving layers' freeze windows change after kill, GSAP's cached `start`/`end` values are synced internally.
 
@@ -403,6 +403,8 @@ If surviving layers' freeze windows change after kill, GSAP's cached `start`/`en
 Tears down the controller, restores the original DOM layout, and reverts z-order changes from `createOverlapScroll`. This is also the only entry point that can clean up cover layers that were never passed to `ScrollTrigger.create()`.
 
 It only cleans up DOM/styles managed by this module. You still need to kill active ScrollTrigger instances yourself. After `destroy()`, `createStickyTrigger`, `createOverlapScroll` and `createStickyPin` throw and `refresh()` is a no-op. Calling `destroy()` twice is safe.
+
+Killing an instance's last layer or pin hands the page back the same way, `scroll-margin-top` and `scroll` listeners included, without destroying it: the next registration puts it back to work. So an instance created in each `gsap.matchMedia()` setup needs no `destroy()` in the setup's cleanup, as long as every layer and pin it returns goes to `ScrollTrigger.create()`.
 
 ## Same-page links
 
@@ -574,7 +576,7 @@ sticky.createOverlapScroll({
 - Using the same element as the `trigger` of two different `createStickyTrigger`/`createOverlapScroll`/`createStickyPin` calls throws
 - You must call `refresh()` once manually after registration. Window resize/load recomputation is automatically wired to GSAP's own `refreshInit`, but for layout changes that don't involve those (e.g. content height changes), call `ScrollTrigger.refresh()` yourself (see [Calling refresh](#calling-refresh))
 - Resizes from mobile browsers showing/hiding their address bar are absorbed automatically (see the repository's `ARCHITECTURE.md`, "Two-pass position measurement"), but other causes like `visualViewport` zoom are not handled
-- `refresh()` writes an inline `scroll-margin-top` on every element matching `scrollMarginTargets` inside the shared container, and, on engines that drive the correction's ramps in CSS, adopts one stylesheet of its own per instance. That sheet is a constructed one, so a Content Security Policy needs no `style-src` exception for it. Both are undone by `destroy()`. Pass `scrollMarginTargets: null` to opt out (see [Same-page links](#same-page-links))
+- `refresh()` writes an inline `scroll-margin-top` on every element matching `scrollMarginTargets` inside the shared container, and, on engines that drive the correction's ramps in CSS, adopts one stylesheet of its own per instance. That sheet is a constructed one, so a Content Security Policy needs no `style-src` exception for it. Both are undone by `destroy()`, and when the instance's last layer or pin is killed. Pass `scrollMarginTargets: null` to opt out (see [Same-page links](#same-page-links))
 - Don't nest one `StickyScrollTrigger` instance's shared container inside another's. The inner instance's layers don't count the outer one's dwell, so their windows open too early by however much of that dwell comes before them, and a `refresh()` run while an outer layer is stuck shifts them again by a different amount. For a target inside both, [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances)'s ownership check also picks whichever instance is listed first. Give each instance its own part of the page instead
 
 ## License
