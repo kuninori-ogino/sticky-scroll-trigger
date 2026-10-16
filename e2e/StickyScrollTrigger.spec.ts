@@ -2633,3 +2633,34 @@ for (const ramp of ['css', 'js']) {
     });
   }
 }
+
+// refreshInitChanges.html's hooks.
+interface RefreshInitChangesWindow {
+  __refreshInitChanges: { refreshes: () => number; windows: () => [number, number][] };
+}
+
+// GSAP's refresh calls every layer's onRefreshInit before it measures. A later layer's callback
+// can change the DOM or a variable an earlier layer's end reads, and every window has to see both.
+test('a later layer\'s onRefreshInit changes reach every window in GSAP\'s refresh', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/fixtures/refreshInitChanges.html');
+  await page.waitForFunction(
+    () => (window as never as RefreshInitChangesWindow).__refreshInitChanges,
+  );
+
+  const read = () => page.evaluate(() => {
+    const hooks = (window as never as RefreshInitChangesWindow).__refreshInitChanges;
+
+    return { refreshes: hooks.refreshes(), windows: hooks.windows() };
+  });
+  const wide = await read();
+
+  // 200 above, 300 per section, each scene's dwell pushing the next one down.
+  expect(wide.windows).toEqual([[200, 400], [700, 900], [1200, 1400]]);
+
+  await page.setViewportSize({ width: 1000, height: 720 });
+  await expect.poll(async () => (await read()).refreshes).toBeGreaterThan(wide.refreshes);
+
+  // #s0 dwells 250 longer, which also delays #s1 and #s2; #s1 is 250 taller, which delays #s2.
+  expect((await read()).windows).toEqual([[200, 650], [950, 1150], [1700, 1900]]);
+});

@@ -572,6 +572,109 @@ describe('registerLayer\'s onRefreshInit', () => {
     expect(refreshesBefore).toEqual([0, 1, 2]);
     expect(refresh).toHaveBeenCalledTimes(3);
   });
+
+  describe('inside GSAP\'s refresh', () => {
+    class RefreshingScrollTrigger {
+      static refresh = vi.fn();
+
+      static isRefreshing = true;
+    }
+
+    const refreshingSelf = Object.create(RefreshingScrollTrigger.prototype) as ScrollTrigger;
+
+    const setupThree = (callbacks: ((() => void) | undefined)[] = []) => {
+      document.body.innerHTML = `
+        <div class="root">
+          <section class="s1"></section>
+          <section class="s2"></section>
+          <section class="s3"></section>
+        </div>`;
+
+      const controller = new StickyScrollTrigger(query('.root'));
+      const vars = ['.s1', '.s2', '.s3'].map((selector, index) => controller.createStickyTrigger({
+        trigger: query(selector),
+        end: '+=100',
+        onRefreshInit: callbacks[index],
+      }));
+      const refresh = vi.spyOn(controller, 'refresh');
+
+      return { vars, refresh };
+    };
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('refreshes once when nothing changes between the layers\' calls', () => {
+      const { vars, refresh } = setupThree();
+
+      vars.forEach(({ onRefreshInit }) => onRefreshInit?.(refreshingSelf));
+
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('refreshes again once the DOM has changed since', () => {
+      const { vars, refresh } = setupThree();
+
+      vars[0].onRefreshInit?.(refreshingSelf);
+      query('.s2').style.height = '500px';
+      vars[1].onRefreshInit?.(refreshingSelf);
+      vars[2].onRefreshInit?.(refreshingSelf);
+
+      expect(refresh).toHaveBeenCalledTimes(2);
+    });
+
+    // A callback can change what refresh() reads without touching the DOM: a variable a
+    // function-valued end reads, say.
+    it('refreshes after every layer\'s own callback', () => {
+      let dwell = 100;
+      const { vars, refresh } = setupThree([undefined, () => {
+        dwell = 300;
+      }]);
+
+      vars.forEach(({ onRefreshInit }) => onRefreshInit?.(refreshingSelf));
+
+      expect(dwell).toBe(300);
+      expect(refresh).toHaveBeenCalledTimes(2);
+    });
+
+    it('refreshes again in the next GSAP refresh', async () => {
+      const { vars, refresh } = setupThree();
+
+      vars.forEach(({ onRefreshInit }) => onRefreshInit?.(refreshingSelf));
+      await Promise.resolve();
+      vars.forEach(({ onRefreshInit }) => onRefreshInit?.(refreshingSelf));
+
+      expect(refresh).toHaveBeenCalledTimes(2);
+    });
+
+    // ScrollTrigger.refresh() twice in one task, a variable an end reads changed in between.
+    it('refreshes again in a second GSAP refresh in the same task', () => {
+      const refreshListeners: (() => void)[] = [];
+
+      Object.assign(RefreshingScrollTrigger, {
+        addEventListener: (type: string, callback: () => void) => {
+          if (type === 'refresh') refreshListeners.push(callback);
+        },
+        removeEventListener: vi.fn(),
+      });
+
+      try {
+        const { vars, refresh } = setupThree();
+
+        vars.forEach(({ onRefreshInit }) => onRefreshInit?.(refreshingSelf));
+        [...refreshListeners].forEach((callback) => callback());
+        vars.forEach(({ onRefreshInit }) => onRefreshInit?.(refreshingSelf));
+
+        expect(refresh).toHaveBeenCalledTimes(2);
+      } finally {
+        Object.assign(RefreshingScrollTrigger, {
+          addEventListener: undefined,
+          removeEventListener: undefined,
+        });
+      }
+    });
+  });
 });
 
 // The guard in #createAutoRefreshHandler keeps a throw out of GSAP's unguarded refreshInit

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>refreshInitChanges fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        height: 300px;
+      }
+    </style>
+  </head>
+  <body>
+    <div style="height: 200px"></div>
+    <div class="root">
+      <section id="s0"></section>
+      <section id="s1"></section>
+      <section id="s2"></section>
+    </div>
+    <div style="height: 4000px"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      // Below 1100px wide, #s1's onRefreshInit grows it by 250px, and #s2's adds 250px to #s0's
+      // dwell, a variable #s0's end reads. Both run after #s0's call in GSAP's refresh.
+      const narrow = () => window.innerWidth < 1100;
+      let extraDwell = 0;
+      const sticky = new StickyScrollTrigger('.root');
+      const triggers = ['#s0', '#s1', '#s2'].map((trigger, index) =>
+        ScrollTrigger.create(
+          sticky.createStickyTrigger({
+            trigger,
+            end: index === 0 ? () => `+=${200 + extraDwell}` : '+=200',
+            onRefreshInit: [
+              undefined,
+              () => {
+                document.querySelector('#s1').style.height = narrow() ? '550px' : '';
+              },
+              () => {
+                extraDwell = narrow() ? 250 : 0;
+              },
+            ][index],
+          }),
+        ),
+      );
+
+      let refreshes = 0;
+
+      ScrollTrigger.addEventListener('refresh', () => {
+        refreshes += 1;
+      });
+
+      window.__refreshInitChanges = {
+        refreshes: () => refreshes,
+        windows: () => triggers.map(({ start, end }) => [Math.round(start), Math.round(end)]),
+      };
+    </script>
+  </body>
+</html>

@@ -170,6 +170,8 @@ Nested Scene layers are accounted for automatically, so `pinnedContainer` isn't 
 
 You can specify `onKill`, `invalidateOnRefresh`, and `onRefreshInit`; the module also uses them internally. `invalidateOnRefresh` defaults to `true` (GSAP defaults to `false`) so function-valued tween props are re-measured on refresh, and an explicit value is respected. Freeze-window tracking is independent of the flag, so `invalidateOnRefresh: false` won't break it.
 
+Inside GSAP's own refresh, a layer's `onRefreshInit` runs `refresh()` again only when that layer has its own callback or the DOM has changed since the last run. A change another listener makes between the layers through a variable or a stylesheet's rules alone shows in the next refresh.
+
 | option       | default        | description                                                                                                                                                                                                                                               |
 | ------------ | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `trigger`    | (required)     | The scene element to pin and animate. Must be inside the shared container; throws otherwise                                                                                                                                                               |

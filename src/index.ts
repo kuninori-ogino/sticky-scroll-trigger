@@ -170,6 +170,9 @@ export default class StickyScrollTrigger {
   #scrollMarginTargets: string | null;
   // True while a layer or pin is registered (see #arm).
   #armed = false;
+  // Watches the DOM through one GSAP refresh, from this instance's last refresh() on (see
+  // #createAutoRefreshHandler).
+  #dispatchObserver: MutationObserver | null = null;
   // This instance's share of the page-level dormancy table, or null where it stays off (see
   // dormancy.ts).
   #dormancyClient: DormancyClient | null = null;
@@ -362,17 +365,26 @@ export default class StickyScrollTrigger {
       // place to be measured expects to run before refresh() too. This call stays outside the
       // guard below: a plain ScrollTrigger's onRefreshInit gets the same unguarded dispatch.
       const result = userOnRefreshInit?.(self);
+      // GSAP's refresh calls this once per layer before it measures anything. A call after the
+      // first refreshes again only if this layer's own callback ran (it may have changed anything,
+      // a variable a function-valued end reads included) or the DOM has changed since: otherwise
+      // it would compute the same thing, at a cost that grows with the depth on every call.
+      const inGsapRefresh = this.#scrollTriggerClass?.isRefreshing === true;
+      const unchanged = inGsapRefresh && !userOnRefreshInit && this.#dispatchObserver !== null
+        && this.#dispatchObserver.takeRecords().length === 0;
 
       // GSAP's dispatch is `_listeners[type].map(f => f())` with no try/catch, so an error escaping
       // here would stop every later listener and every trigger's own refresh. The catch rethrows
       // off the stack instead of swallowing, since a stale freeze window with no signal is worse.
       try {
-        this.refresh();
+        if (!unchanged) this.refresh();
       } catch (error) {
         queueMicrotask(() => {
           throw error;
         });
       }
+
+      if (inGsapRefresh) this.#watchGsapRefresh();
 
       // GSAP reverts an animation a refreshInit listener returns, once the refresh is done
       // (ScrollTrigger.js's `refreshInits.forEach(...render(-1))`). The same call puts back the
@@ -388,6 +400,39 @@ export default class StickyScrollTrigger {
         },
       };
     };
+  }
+
+  // Starts watching for the rest of GSAP's refresh, or drops what this instance's own refresh()
+  // just wrote. The watch ends with that refresh's 'refresh' event, so a second GSAP refresh in the
+  // same task starts from a refresh() again; the microtask ends one that threw before the event.
+  #watchGsapRefresh(): void {
+    if (this.#dispatchObserver) {
+      this.#dispatchObserver.takeRecords();
+
+      return;
+    }
+
+    const observer = new MutationObserver(() => {});
+    const cls = this.#scrollTriggerClass;
+
+    const end = () => {
+      observer.disconnect();
+
+      if (this.#dispatchObserver === observer) this.#dispatchObserver = null;
+
+      // Off the stack: GSAP's dispatch maps over its live listener array.
+      queueMicrotask(() => cls?.removeEventListener?.('refresh', end));
+    };
+
+    observer.observe(document, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+    this.#dispatchObserver = observer;
+    cls?.addEventListener?.('refresh', end);
+    queueMicrotask(end);
   }
 
   // Wraps any not-yet-built pin layer. Must run before #refreshScenesAndCovers measures Scene and
