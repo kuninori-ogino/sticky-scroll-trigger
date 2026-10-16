@@ -700,6 +700,10 @@ export default class StickyScrollTrigger {
     // cover layer's freezeEnd feeds into no other layer's measurement, so it's corrected below
     // before anything reads it a second time.
     let documentMaxScroll = 0;
+    // Sticky goes on only after the last pass: the reads below would otherwise lay out every
+    // wrapper sticky, the cost dormancy.ts avoids. What they read (the document's height, an
+    // element outside the container) doesn't depend on it.
+    const stickyTops = new Map<HTMLElement, number>();
     const applyLayers = () =>
       planLayers(measured, {
         viewportHeight,
@@ -716,7 +720,7 @@ export default class StickyScrollTrigger {
 
           if (!layer.wrapper) return;
 
-          applyStickyPosition(layer.wrapper, plan.stickyTop);
+          stickyTops.set(layer.wrapper, plan.stickyTop);
 
           if (layer.kind === 'scene' && layer.padding && plan.paddingHeight !== null) {
             layer.padding.style.height = `${plan.paddingHeight}px`;
@@ -738,6 +742,8 @@ export default class StickyScrollTrigger {
     if (needsMaxRemeasure) documentMaxScroll = measureDocumentMaxScroll(viewportHeight);
 
     if (needsLiveRemeasure || needsMaxRemeasure) applyLayers();
+
+    stickyTops.forEach((top, wrapper) => applyStickyPosition(wrapper, top));
   }
 
   // Public entry point. Rebuilds the nesting if triggers were added/removed, and recomputes

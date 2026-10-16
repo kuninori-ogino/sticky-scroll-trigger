@@ -2944,6 +2944,45 @@ describe('refresh() pass ordering', () => {
       countStrips((controller) => controller.createStickyPin({ trigger: query('.pin') })),
     ).toBe(2);
   });
+
+  // Why those reads come first: see #planLayerPositions.
+  for (const [label, end, readOf, property] of [
+    ['\'max\' end', { end: 'max' }, () => document.documentElement, 'scrollHeight'],
+    ['outside endTrigger', { end: 'top top', endTrigger: '.out' }, () => query('.out'), 'offsetTop'],
+  ] as const) {
+    it(`reads what a cover's ${label} needs before writing sticky`, () => {
+      document.body.innerHTML = `
+        <div class="root">
+          <section class="scene"></section>
+          <section class="base"></section>
+          <section class="cover"></section>
+        </div>
+        <div class="out"></div>
+      `;
+
+      const controller = new StickyScrollTrigger(query('.root'));
+
+      controller.createStickyTrigger({ trigger: query('.scene'), end: '+=800' });
+      controller.createOverlapScroll({ trigger: query('.base'), cover: query('.cover'), ...end });
+      controller.refresh();
+
+      const stickyAtRead: number[] = [];
+      const sticky = () => Array.from(document.querySelectorAll<HTMLElement>('*'))
+        .filter((el) => el.style.position === 'sticky').length;
+
+      vi.spyOn(readOf(), property, 'get').mockImplementation(() => {
+        stickyAtRead.push(sticky());
+
+        return 0;
+      });
+      controller.refresh();
+      vi.restoreAllMocks();
+
+      expect(stickyAtRead.length).toBeGreaterThan(0);
+      expect(stickyAtRead.every((count) => count === 0)).toBe(true);
+      expect(sticky()).toBeGreaterThan(0);
+    });
+  }
 });
 
 // dormancy.test.ts owns the table and its windows. What's checked here is that each instance

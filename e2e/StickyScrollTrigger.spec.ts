@@ -2316,6 +2316,25 @@ test('16 nested Scene layers load quickly with nestedStickyOptimization always',
   expect(elapsed).toBeLessThan(2000);
 });
 
+// A cover's 'max' or outside end takes a second pass, whose reads saw every wrapper sticky.
+for (const coverEnd of ['max', 'outside']) {
+  test(`16 nested Scene layers with a cover's ${coverEnd} end load quickly with nestedStickyOptimization always`, async ({ page }) => {
+    await page.goto(`/fixtures/nestedSticky.html?layout=pincover&mode=always&n=16&coverEnd=${coverEnd}`);
+
+    const elapsed = await page.evaluate(async () => {
+      const w = window as never as NestedStickyWindow;
+      const t0 = performance.now();
+
+      w.__sticky.refresh();
+      await w.__sweep([1500, 4000]);
+
+      return performance.now() - t0;
+    });
+
+    expect(elapsed).toBeLessThan(2000);
+  });
+}
+
 // matchMediaCover.html's record: base's next sibling as each setup saw it, and what threw.
 interface MatchMediaWindow {
   __matchMedia: { seen: (string | null)[]; errors: string[] };

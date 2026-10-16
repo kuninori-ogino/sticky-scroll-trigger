@@ -78,7 +78,8 @@
       // calls refresh() from an onRefresh callback, ?pinEnd= sets the inner pin's end (a long one
       // runs its range to the page's end), ?important=1 holds the outer pin sticky with !important,
       // ?importantTop=1 overrides its top with !important, ?authorTop=auto leaves the author sticky
-      // element with no inset.
+      // element with no inset, ?coverEnd=max|outside gives the pincover cover layer a 'max' end or
+      // one against an element outside the container.
       const params = new URLSearchParams(location.search);
       const layout = params.get('layout') ?? 'scenes';
       const mode = params.get('mode') ?? 'always';
@@ -132,7 +133,12 @@
       });
 
       if (layout === 'pincover') {
-        triggers.push(create(sticky.createOverlapScroll({ trigger: '#under' })));
+        const coverEnd = {
+          max: { end: 'max' },
+          outside: { end: 'top top', endTrigger: '.room' },
+        }[params.get('coverEnd')];
+
+        triggers.push(create(sticky.createOverlapScroll({ trigger: '#under', ...coverEnd })));
         triggers.push(create(sticky.createStickyPin({ trigger: '#pinIn', end: params.get('pinEnd') ?? '+=300' })));
         triggers.push(create(sticky.createStickyPin({ trigger: '#pinOut', top: 100, end: '+=500' })));
       }
