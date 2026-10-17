@@ -215,9 +215,9 @@ let gsapPhase: 'idle' | 'measuring' | 'restored' = 'idle';
 // The class was taken during one of its refreshes, whose refreshInit the listener missed (see
 // takeGsapRefreshRestore).
 let adoptedMidRefresh = false;
-// The whole-document scan, kept until the next microtask checkpoint. GSAP's dispatch calls
-// refresh() once per layer in one synchronous run (so does a kill's rebuild, right before
-// ScrollTrigger.refresh()); the later builds in it take the elements already known plus every
+// The whole-document scan, kept until the next microtask checkpoint. GSAP's dispatch can call
+// refresh() once per layer in one synchronous run, and a kill's rebuild calls it right before
+// ScrollTrigger.refresh(); the later builds in it take the elements already known plus every
 // library-owned one. An author sticky element added in between waits for the next task.
 let scannedThisTask: HTMLElement[] | null = null;
 // Every class an instance has seen: one, unless the page runs two copies of GSAP. Without one a

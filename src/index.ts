@@ -352,9 +352,9 @@ export default class StickyScrollTrigger {
 
   // Binds refresh() to the refreshInit GSAP itself fires (resize/load), so callers get the right
   // ordering without writing ScrollTrigger.addEventListener('refreshInit', refresh) themselves.
-  // Every layer refreshes: GSAP runs all refreshInit listeners before it measures anything, so a
-  // layer that skipped refresh() would leave its callback's layout changes out of the freeze
-  // window. That costs one refresh() per layer, on the resize and load refreshes GSAP fires.
+  // Every layer's handler can refresh: GSAP runs all refreshInit listeners before it measures
+  // anything, so a callback with no refresh() after it would leave its layout changes out of the
+  // freeze window.
   #createAutoRefreshHandler(
     userOnRefreshInit: ScrollTrigger.Vars['onRefreshInit'],
   ): ScrollTrigger.Vars['onRefreshInit'] {
