@@ -140,6 +140,59 @@ To extend pinning through `endTrigger`, `trigger` needs a containing block that 
 
 `#reservePinSpace` measures that margin box instead of computing it: it clears `inner`'s range and `outer`'s own height, then reads back the natural height `outer` collapses to. Because `outer` is a `display: flow-root` formatting context, `trigger`'s margins land inside it rather than collapsing out, so that natural height is the margin box already, resolved by the browser through whatever `box-sizing`, borders, floats or line boxes `trigger` happens to have. Reading it off the computed style (`measureUsedHeight`) keeps the fractional part that `offsetHeight` rounds away, and keeps out a transform that `getBoundingClientRect` would include and no other measurement here does.
 
-Margin collapsing is the one thing the reserved height can't stand in for: `trigger`'s vertical margins stop at `outer` instead of collapsing with its siblings', and no sizing of `outer` can fix that, since the collapsing partner is outside it. A 30px `margin-bottom` above a `trigger` with a 20px `margin-top` occupies 30px unwrapped and 50px wrapped. That leftover shift is why a pin's kill still schedules a rebuild. `inner` carries no `overflow` or `contain` of its own on purpose: either would make it a formatting context too, and `trigger`'s top margin would then push it down inside the reserved box rather than collapsing out to `outer`.
+Margin collapsing is the one thing the reserved height can't stand in for: `trigger`'s vertical margins stop at `outer` instead of collapsing with its siblings', and no sizing of `outer` can fix that, since the collapsing partner is outside it. A 30px `margin-bottom` above a `trigger` with a 20px `margin-top` occupies 30px unwrapped and 50px wrapped. That leftover shift is why a pin's kill still schedules a deferred `refresh()`. `inner` carries no `overflow` or `contain` of its own on purpose: either would make it a formatting context too, and `trigger`'s top margin would then push it down inside the reserved box rather than collapsing out to `outer`.
 
 `outer` is a flow-root rather than `contain: layout`, which would also confine `inner`'s overflow but makes `outer` a stacking context and the containing block for `trigger`'s fixed-position descendants. Measured in all three engines, a pin's own `z-index` then lost to a later `position: relative` sibling, and a `position: fixed` element inside `trigger` scrolled with the page. Without containment, the one place `inner`'s overflow shows is a range running past the page's end, which made the page taller by that much. `#refreshPinLayers` stops the range at the page's end instead: the page runs out of scroll before such a pin could release anyway. The end is measured with every pin range on the page cleared, whichever instance owns it, since another instance's range, sized for a longer page, would otherwise count as page and keep it from shrinking. A stuck Scene/Cover wrapper carrying the pin further down doesn't count, since all three engines leave sticky offsets out of the scrollable area.
+
+## Lifecycle
+
+Registering a layer or pin records it in `#layers` or `#pinLayers` and builds nothing (a cover's z-order lift aside). `refresh()` builds the nesting from `#layers` and wraps every pin not yet wrapped, and `#builtLayers` keeps the layers of the last build, which the next unbuild undoes. Turning the returned vars into a ScrollTrigger, through `ScrollTrigger.create()` or a tween's `scrollTrigger`, also runs `refresh()`: GSAP refreshes a new trigger at once (one whose animation is a timeline, 0.01s later), calling its `onRefreshInit`. Registering and creating one layer at a time therefore rebuilds the nesting at every create; registering everything first builds it once.
+
+An instance is unarmed until its first layer or pin, armed while it has one, and unarmed again once the last one is killed. `destroy()` ends it from either state. `refresh()` does nothing while the instance is unarmed or destroyed.
+
+### Why page-level effects start with the first layer
+
+Arming starts the scroll-margin sync and, where `nestedStickyOptimization` turns it on, adds the instance to the dormancy table. Disarming hands the page back: it takes the instance out of the table, restores the scroll margins and the cover lifts, and unbuilds the nesting. It runs in the kill of the last layer or pin, before the caller's own `onKill`, and the next registration arms the instance again.
+
+This is for `gsap.matchMedia`, which reverts the previous setup and runs the matching one again on every breakpoint switch. A page that creates its instance inside the setup gets a new one per switch, and nothing destroys the old one. Reverting kills the setup's ScrollTriggers with `kill(true)` (ScrollTrigger.js:1256, there for `gsap.context()` and `gsap.matchMedia()`), which runs the library's `onKill` like any other kill, so the old instance has handed the page back before the next setup registers on the same container. When the old instance tore down only after the next setup had built, its unbuild took the new instance's wrappers with its own, and on a page with Scene layers the shared container left the document at the second switch, in all three engines. A `gsap.context()` revert takes the same path.
+
+`destroy()` disarms, unwraps every pin, empties both lists, rejects any later registration and drops the captured ScrollTrigger class. It kills no ScrollTrigger, so GSAP keeps calling the handlers, which then schedule and refresh nothing; the caller's own callbacks still run. A layer or pin whose vars never became a ScrollTrigger never gets an `onKill`, so an instance holding one stays armed until `destroy()`.
+
+### Why kills take effect at different times
+
+A kill takes its layer or pin out of `#layers` or `#pinLayers` at once. What it leaves in the DOM until the next measurement depends on the kind:
+
+- A Scene layer's wrappers stay until the next `refresh()` rebuilds the nesting. Kills in one task then share one rebuild, which moves the shared container's subtree once: rebuilding per kill would be O(n²), and every move breaks iframes and focus inside the container.
+- A cover layer's wrapper comes off in the kill. It holds `trigger`'s siblings, which the next `gsap.matchMedia` setup reads in the same task (the default `cover` is `trigger.nextElementSibling`). The rest of the nesting is rebuilt at the next `refresh()`, as for a Scene layer.
+- A pin is unwrapped in the kill. That restores the margin collapsing its wrappers blocked, which can move everything below (see [Why `trigger` needs to be wrapped](#why-trigger-needs-to-be-wrapped)), so a wrapped pin's kill schedules the same deferred `refresh()`, without rebuilding the nesting.
+- The last layer or pin disarms the instance in the kill, so nothing is left to measure. Unless GSAP refreshes later in the same task, the deferred step still calls `ScrollTrigger.refresh()` for the triggers left on the page.
+
+Whichever `refresh()` runs first after the kill does the deferred work, including one from a `ScrollTrigger.create()`. The kill only makes sure one runs before GSAP measures again:
+
+- If GSAP refreshes later in the same task (a caller's `ScrollTrigger.refresh()`, or `gsap.matchMedia` after its setups unless the page is mid-scroll; ScrollTrigger.js:2066, 484-487), that `refresh()` runs inside GSAP's `refreshInit` dispatch, before GSAP measures: in whichever comes first of the instance's own `onRefreshInit` handlers and a `refreshInit` listener the kill adds, which covers an instance with no handler left. GSAP records the scroll before that dispatch and scrolls back to it after measuring. A GSAP pin's spacing goes in its kill, before the record, so the record already includes the browser's scroll anchoring. The rebuild removes padding after the record, so `refresh()` adds the anchoring's shift to the record itself; otherwise the content would jump by the removed dwell. A resize's refresh leaves the record alone, as GSAP does.
+- Otherwise a microtask runs `refresh()` and then `ScrollTrigger.refresh()`, since GSAP reads the function-valued `start`/`end` only when it refreshes.
+
+### `refresh()` pass order
+
+Each `refresh()` runs these steps in order (`#refreshLayout` holds steps 1 to 8):
+
+1. Build the nesting if none is built yet, or rebuild it if a layer was added or killed or a trigger moved out of DOM order.
+2. Take every cover lift off, so step 3 never mistakes a lift's value for the caller's.
+3. Wrap the pins not yet wrapped and size each pin's `outer` to `trigger`'s margin box.
+4. Put the cover lifts back over the sibling chain steps 1 and 3 left, even when step 3 throws for a detached `trigger`.
+5. Measure the viewport height once, for the Scene/Cover passes and the pins alike.
+6. Plan the Scene and Cover layers in the two passes of [Two-pass position measurement](#two-pass-position-measurement), writing each padding as its window is planned and every sticky top after the last pass.
+7. Size the pins, now that the padding between each `trigger` and `endTrigger` is final.
+8. Sync the scroll margins to the settled freeze windows.
+9. Rebuild the page-level dormancy table, also after a throw in steps 1 to 8.
+10. Write the scroll-margin ramps from the current scroll, on engines that drive them from script.
+11. Move GSAP's scroll record, after a kill, inside GSAP's refresh, when nothing threw.
+12. Rethrow the error from steps 1 to 8, if there was one.
+
+No layout read between step 6's sticky write and step 9 sees the instance's wrappers sticky. Before that write, no more of them are sticky than the last dormancy table left; after it, every level is, and a read would lay out the whole nesting, the cost the table exists to avoid (see [Why far-off sticky layers are switched to relative](#why-far-off-sticky-layers-are-switched-to-relative)). So the pin pass and the scroll-margin targets strip the wrappers before they measure, and the reads a cover's `'max'` end or an `endTrigger` outside the container needs come before the write. Such a read can see only the pins the pin pass has already written. Steps 10 and 11 read the scroll, which forces a layout, so they wait for the table. `layoutReads.html` in the e2e suite (Chromium) logs the sticky elements at every layout read in a `refresh()`, a resize and a kill, and fails on a read that sees more of them than the table leaves near the scroll. The unit tests under "refresh() pass ordering" hold parts of the order.
+
+### How `refresh()` runs inside GSAP's refresh
+
+Every layer's and pin's `onRefreshInit` handler can call `refresh()`. GSAP runs every `refreshInit` listener before it measures anything, so an `onRefreshInit` passed in the vars that changes the layout is measured however late in the dispatch it runs. ([Why far-off sticky layers are switched to relative](#why-far-off-sticky-layers-are-switched-to-relative) covers what the table does in the same dispatch.) The first handler in a GSAP refresh always refreshes. A later one refreshes again only if its layer has an `onRefreshInit` of the caller's, which may have changed anything, or the DOM has changed since the instance's last `refresh()`, which a `MutationObserver` on the document reports. The observer starts after that `refresh()`, ignores the instance's own writes, and stops at GSAP's `refresh` event, or in a microtask if the refresh threw before it. A change another listener makes between two of the instance's handlers through a JavaScript variable or a stylesheet's rules alone shows only in the next refresh, as the README notes. The listener a kill adds refreshes without this check.
+
+GSAP's dispatch has no `try`/`catch` (`_dispatch` maps over the listeners), so an error escaping a handler would stop every later listener and every trigger's measurement on the page. The handlers catch what `refresh()` throws and rethrow it in a microtask, off GSAP's stack. A throw from the caller's own `onRefreshInit` goes through as it would from a plain ScrollTrigger's.
