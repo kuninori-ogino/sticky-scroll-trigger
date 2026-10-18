@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>revertMidScroll fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section,
+      .tail {
+        display: block;
+        height: 400px;
+      }
+    </style>
+  </head>
+  <body>
+    <div style="height: 200px"></div>
+    <div class="root">
+      <section>S1</section>
+      <section>S2</section>
+      <section>S3</section>
+    </div>
+    <div class="tail">TAIL</div>
+    <div style="height: 6000px"></div>
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const params = new URLSearchParams(location.search);
+
+      if (params.has('noanchor')) document.documentElement.style.overflowAnchor = 'none';
+
+      // ?destroy: the setup's cleanup destroys its instance; otherwise each setup makes a new one.
+      const destroy = params.has('destroy');
+      const root = document.querySelector('.root');
+      const tail = document.querySelector('.tail');
+      const setup = () => {
+        const sticky = new StickyScrollTrigger(root);
+
+        [...root.children].forEach((trigger) =>
+          ScrollTrigger.create(sticky.createStickyTrigger({ trigger, end: '+=200' })),
+        );
+
+        return destroy ? () => sticky.destroy() : undefined;
+      };
+      const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+      let ctx = gsap.context(setup);
+      const libraryScrolls = [];
+      const scrollTo = window.scrollTo.bind(window);
+
+      window.scrollTo = (...args) => {
+        if (ScrollTrigger.isScrolling()) libraryScrolls.push(JSON.stringify(args));
+
+        return scrollTo(...args);
+      };
+
+      // Scrolls in relative steps and runs the setup again partway, as a gsap.context revert and
+      // re-run does. Returns how far the tail moved at each step, and every scrollTo() made while
+      // GSAP reported the scroll.
+      window.__scrollAndRerun = async (steps, by) => {
+        const moves = [];
+        let scrolling = false;
+
+        for (let i = 0; i < steps; i += 1) {
+          const top = tail.getBoundingClientRect().top;
+
+          window.scrollBy(0, by);
+
+          if (i === steps / 2) {
+            scrolling = ScrollTrigger.isScrolling();
+            ctx.revert();
+            ctx = gsap.context(setup);
+          }
+
+          await frame();
+          moves.push(Math.round(tail.getBoundingClientRect().top - top));
+        }
+
+        return { moves, scrolling, libraryScrolls };
+      };
+
+      // Runs the setup again at rest, or with ?destroy only reverts it, and reports how far the
+      // tail moved.
+      window.__rerunAtRest = async (rerun) => {
+        const top = tail.getBoundingClientRect().top;
+
+        ctx.revert();
+
+        if (rerun) ctx = gsap.context(setup);
+
+        await frame();
+        await frame();
+
+        return Math.round(tail.getBoundingClientRect().top - top);
+      };
+
+      window.__ready = true;
+    </script>
+  </body>
+</html>

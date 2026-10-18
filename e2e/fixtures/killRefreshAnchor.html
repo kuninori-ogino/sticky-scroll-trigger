@@ -31,6 +31,9 @@
       gsap.registerPlugin(ScrollTrigger);
 
       const params = new URLSearchParams(location.search);
+
+      // Safari before 26 and iOS have no scroll anchoring.
+      if (params.has('noanchor')) document.documentElement.style.overflowAnchor = 'none';
       const end = params.get('end') ?? '+=200';
       const tail = document.querySelector('.tail');
       const optimization = params.get('optimization');
@@ -70,6 +73,68 @@
         await frames();
 
         return { sameTask, settled: { tailTop: tailTop(), scrollY: window.scrollY } };
+      };
+
+      // Kills with no GSAP refresh in the task: the batch's microtask, or the last kill at once.
+      // Reports the padding left in the kill's task and the tail after one microtask.
+      window.__kill = async (killAll) => {
+        // A kill while scrolling waits for the scroll to stop; this one runs at rest.
+        while (ScrollTrigger.isScrolling()) await frames();
+
+        (killAll ? triggers : triggers.slice(0, 2)).forEach((t) => t.kill());
+
+        const paddingsInTask = document.querySelectorAll('div[aria-hidden="true"]').length;
+
+        await Promise.resolve();
+
+        const sameTask = tailTop();
+
+        await frames();
+
+        return { paddingsInTask, sameTask, settled: { tailTop: tailTop(), scrollY: window.scrollY } };
+      };
+
+      // Kills s1 at rest, or at once while GSAP still reports the scroll that got here, and waits
+      // past the end of that scroll. Reports s2's progress through its freeze too.
+      window.__killFirst = async (atRest) => {
+        if (atRest) while (ScrollTrigger.isScrolling()) await frames();
+
+        const scrolling = ScrollTrigger.isScrolling();
+        const progress = triggers[1].progress;
+
+        triggers[0].kill();
+        await frames();
+
+        const held = { tailTop: tailTop(), scrollY: window.scrollY };
+
+        while (ScrollTrigger.isScrolling()) await frames();
+        // Past the poll for the end of the scroll.
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        await frames();
+
+        return {
+          scrolling,
+          progress,
+          held,
+          settled: { tailTop: tailTop(), scrollY: window.scrollY, progress: triggers[1].progress },
+        };
+      };
+
+      // At rest, kills s2 and creates it again in one task, as a gsap.context revert and re-run of
+      // its setup alone does while s1 and s3 stay. Reports s2's progress before and after.
+      window.__recreateSecond = async () => {
+        while (ScrollTrigger.isScrolling()) await frames();
+
+        const progress = triggers[1].progress;
+
+        triggers[1].kill();
+        triggers[1] = ScrollTrigger.create(sticky.createStickyTrigger({ trigger: '.s2', end }));
+        await frames();
+
+        return {
+          progress,
+          settled: { tailTop: tailTop(), scrollY: window.scrollY, progress: triggers[1].progress },
+        };
       };
 
       window.__state = () => ({ tailTop: tailTop(), scrollY: window.scrollY });

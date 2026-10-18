@@ -150,12 +150,14 @@
         ScrollTrigger.create(sticky.createStickyTrigger({ trigger, end: '+=200' })),
       );
 
-      ScrollTrigger.create(sticky.createStickyPin({ trigger: '#pinIn' }));
-      ScrollTrigger.create(sticky.createStickyPin({ trigger: '#pinOut', end: '+=500' }));
-      ScrollTrigger.create(sticky.createOverlapScroll({ trigger: '#base1', end: 'max' }));
-      ScrollTrigger.create(
-        sticky.createOverlapScroll({ trigger: '#base2', end: 'top top', endTrigger: '.outside' }),
-      );
+      const others = [
+        ScrollTrigger.create(sticky.createStickyPin({ trigger: '#pinIn' })),
+        ScrollTrigger.create(sticky.createStickyPin({ trigger: '#pinOut', end: '+=500' })),
+        ScrollTrigger.create(sticky.createOverlapScroll({ trigger: '#base1', end: 'max' })),
+        ScrollTrigger.create(
+          sticky.createOverlapScroll({ trigger: '#base2', end: 'top top', endTrigger: '.outside' }),
+        ),
+      ];
       ScrollTrigger.create(sticky.createResolvedTrigger({ trigger: '#probe', endTrigger: '.outside' }));
 
       let refreshes = 0;
@@ -171,6 +173,19 @@
           scenes.slice(0, 2).forEach((trigger) => trigger.kill());
           ScrollTrigger.refresh();
         },
+        // No GSAP refresh in the task: the batch's microtask, or the last kill at once, unless
+        // GSAP reports a scroll, which holds both until it stops. Returns whether it did.
+        killSome: () => {
+          scenes.slice(0, 2).forEach((trigger) => trigger.kill());
+
+          return ScrollTrigger.isScrolling();
+        },
+        killAll: () => {
+          [...scenes, ...others].forEach((trigger) => trigger.kill());
+
+          return ScrollTrigger.isScrolling();
+        },
+        isScrolling: () => ScrollTrigger.isScrolling(),
       };
     </script>
   </body>

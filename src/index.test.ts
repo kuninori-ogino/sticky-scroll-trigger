@@ -3484,6 +3484,12 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       static isRefreshing = false;
 
+      static scrolling = false;
+
+      static isScrolling = () => Cls.scrolling;
+
+      static isUpdating = false;
+
       static getScrollFunc = () => scroller;
 
       static addEventListener = (type: string, callback: () => unknown) => {
@@ -3535,7 +3541,23 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
     expect(listeners).toHaveLength(0);
   });
 
-  it('shifts GSAP\'s scroll record by the browser\'s anchoring', () => {
+  // Every padding is above the viewport: the content there sits 200px higher without the two.
+  it('moves GSAP\'s scroll record so the content at the viewport\'s top stays put', () => {
+    const scroller = { rec: 2500 };
+    const { Cls, gsapRefresh } = makeClass(scroller);
+    const { vars, self } = setupScenes(Cls);
+
+    vi.spyOn(window, 'scrollY', 'get').mockReturnValue(2500);
+    vars[0].onKill?.(self);
+    vars[1].onKill?.(self);
+    gsapRefresh();
+
+    expect(paddings()).toHaveLength(1);
+    expect(scroller.rec).toBe(2300);
+  });
+
+  // GSAP records the scroll after the browser's anchoring has already followed the kill.
+  it('doesn\'t add the browser\'s anchoring to the record it moves', () => {
     const scroller = { rec: 2500 };
     const { Cls, gsapRefresh } = makeClass(scroller);
     const { vars, self } = setupScenes(Cls);
@@ -3545,7 +3567,6 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
     vars[1].onKill?.(self);
     gsapRefresh();
 
-    expect(paddings()).toHaveLength(1);
     expect(scroller.rec).toBe(2300);
   });
 
@@ -3581,6 +3602,35 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
     expect(scroller.rec).toBe(4800);
   });
 
+  // A refreshInit listener ahead of this one can move the scroll, and GSAP still scrolls back to
+  // its record.
+  it('keeps the content at GSAP\'s record, not at the scroll during its refresh', () => {
+    const scroller = { rec: 2500 };
+    const { Cls, gsapRefresh } = makeClass(scroller);
+    const { vars, self } = setupScenes(Cls);
+
+    vi.spyOn(window, 'scrollY', 'get').mockReturnValue(2400);
+    vars[0].onKill?.(self);
+    vars[1].onKill?.(self);
+    gsapRefresh();
+
+    expect(scroller.rec).toBe(2300);
+  });
+
+  // GSAP sets the scroll itself once it has measured, record or not.
+  it('never scrolls inside GSAP\'s refresh, even with no record to move', () => {
+    const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+    const { vars, self } = setupScenes(Cls);
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+
+    vi.spyOn(window, 'scrollY', 'get').mockReturnValue(2500);
+    vars[0].onKill?.(self);
+    gsapRefresh();
+
+    expect(paddings()).toHaveLength(2);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
   // A resize changes the dwell above the viewport too, and GSAP scrolls back to its number then.
   it('leaves GSAP\'s scroll record alone in a refresh no kill started', () => {
     const scroller = { rec: 2500 };
@@ -3596,6 +3646,327 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
     expect(paddingTotal()).toBe(150);
     expect(scroller.rec).toBe(2500);
+  });
+
+  const scrollToSpy = () => vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+
+  // The scroll follows scrollTo here, as a browser's does.
+  const followScrollTo = (from: number) => {
+    let y = from;
+
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => y);
+
+    return vi.spyOn(window, 'scrollTo').mockImplementation((options) => {
+      y = (options as ScrollToOptions).top ?? y;
+    });
+  };
+
+  // GSAP's record outlives its refresh, so a stale one is left in place: only the scroll counts.
+  describe('with no GSAP refresh in the task', () => {
+    it('scrolls the batch\'s rebuild back to the content at the viewport\'s top', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      const { controller, vars, self } = setupScenes(Cls);
+      const scrollTo = scrollToSpy();
+
+      vi.spyOn(window, 'scrollY', 'get').mockReturnValue(2500);
+      vars[0].onKill?.(self);
+      vars[1].onKill?.(self);
+      expect(scrollTo).not.toHaveBeenCalled();
+
+      await Promise.resolve();
+      expect(paddings()).toHaveLength(1);
+      expect(scrollTo.mock.calls).toEqual([[{ top: 2300, behavior: 'instant' }]]);
+
+      // The batch is done: a refresh after it is a resize's and keeps the scroll.
+      dwell = 50;
+      controller.refresh();
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+    });
+
+    it('doesn\'t scroll where the browser\'s anchoring has already kept the content', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = scrollToSpy();
+
+      anchorScroll(2500);
+      vars[0].onKill?.(self);
+      vars[1].onKill?.(self);
+      await Promise.resolve();
+
+      expect(paddings()).toHaveLength(1);
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    it('scrolls the last kill\'s teardown back to the content at the viewport\'s top', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = scrollToSpy();
+
+      vi.spyOn(window, 'scrollY', 'get').mockReturnValue(2500);
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+      expect(paddings()).toHaveLength(0);
+
+      await Promise.resolve();
+      expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
+    });
+
+    it('doesn\'t scroll the last kill where the browser\'s anchoring has kept the content', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = scrollToSpy();
+
+      anchorScroll(2500);
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+      await Promise.resolve();
+
+      expect(paddings()).toHaveLength(0);
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    // A setup run again in the task puts the dwell back, and the content stays put without a
+    // scroll; keeping it would shift it by that dwell.
+    it('leaves the scroll alone when a registration follows the last kill in the task', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      const { controller, vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+      controller.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
+      controller.refresh();
+      await Promise.resolve();
+
+      expect(paddings()).toHaveLength(1);
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    // Nested instances: the outer one's layers were there all along and put nothing back.
+    it('keeps the content beside an instance on a container around it that was armed already', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+
+      document.body.innerHTML = `
+        <div class="outer"><section class="o1"></section>
+          <div class="host"><div class="root">
+            <section class="s1"></section><section class="s2"></section><section class="s3"></section>
+          </div></div>
+        </div>`;
+
+      const outer = new StickyScrollTrigger(query('.outer'));
+
+      outer.createStickyTrigger({ trigger: query('.o1'), end: '+=100' });
+
+      const controller = new StickyScrollTrigger(query('.root'));
+      const vars = ['.s1', '.s2', '.s3'].map((sel) =>
+        controller.createStickyTrigger({ trigger: query(sel), end: '+=100' }));
+      const self = Object.create(Cls.prototype) as ScrollTrigger;
+
+      controller.refresh();
+
+      const scrollTo = followScrollTo(2500);
+
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+      await Promise.resolve();
+
+      expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
+      outer.destroy();
+    });
+
+    // GSAP measures at the kept scroll, so no trigger updates at the one in between.
+    it('keeps the content before the batch refreshes GSAP', async () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+      const scrollAtGsapRefresh: number[] = [];
+
+      Cls.refresh.mockImplementation(() => scrollAtGsapRefresh.push(window.scrollY));
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(scrollAtGsapRefresh).toEqual([2200]);
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+    });
+
+    // GSAP has scrolled back and cleared its record by onRefresh and the update after it.
+    it('keeps the content for a last kill after GSAP has scrolled back in its refresh', async () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      Cls.isRefreshing = true;
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+      Cls.isRefreshing = false;
+      expect(paddings()).toHaveLength(0);
+      expect(scrollTo).not.toHaveBeenCalled();
+
+      await Promise.resolve();
+      expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
+    });
+
+    it('moves GSAP\'s record for a last kill when GSAP refreshes later in the task', () => {
+      const scroller = { rec: 2500 };
+      const { Cls, gsapRefresh } = makeClass(scroller);
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+      gsapRefresh();
+
+      expect(scroller.rec).toBe(2200);
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    // A layer killed before the first refresh() never padded anything.
+    it('leaves the scroll alone for a kill before the first build', async () => {
+      const { Cls } = makeClass({ rec: 0 });
+
+      document.body.innerHTML = `
+        <div class="host"><div class="root">
+          <section class="s1"></section><section class="s2"></section><section class="s3"></section>
+        </div></div>`;
+
+      const controller = new StickyScrollTrigger(query('.root'));
+      const vars = ['.s1', '.s2', '.s3'].map((sel) =>
+        controller.createStickyTrigger({ trigger: query(sel), end: '+=100' }));
+      const self = Object.create(Cls.prototype) as ScrollTrigger;
+      const scrollTo = followScrollTo(2500);
+
+      vars[0].onKill?.(self);
+      await Promise.resolve();
+
+      expect(paddings()).toHaveLength(2);
+      expect(scrollTo).not.toHaveBeenCalled();
+      controller.destroy();
+    });
+
+    // A scroll listener ahead of GSAP's sees the first scroll after a pause as no scroll yet.
+    it('drops the last kill\'s keep when a scroll has begun by the time it runs', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+      Cls.scrolling = true;
+      await Promise.resolve();
+
+      expect(paddings()).toHaveLength(0);
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    // A gsap.context revert and re-run with an instance per run.
+    it('leaves the scroll alone when a new instance on the container registers in the task', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+      const next = new StickyScrollTrigger(query('.host'));
+
+      next.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
+      await Promise.resolve();
+
+      expect(scrollTo).not.toHaveBeenCalled();
+      next.destroy();
+    });
+
+    it('keeps the content when only an instance elsewhere registers in the task', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+      const elsewhere = document.createElement('div');
+
+      elsewhere.innerHTML = '<section class="other"></section>';
+      document.body.append(elsewhere);
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+      const next = new StickyScrollTrigger(elsewhere);
+
+      next.createStickyTrigger({ trigger: query('.other'), end: '+=100' });
+      await Promise.resolve();
+
+      expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
+      next.destroy();
+    });
+
+    it('still batches the next kill after the batch\'s rebuild throws', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      let fail = false;
+      const { vars, self } = setupScenes(Cls, () => {
+        if (fail) throw new Error('boom');
+
+        return '+=100';
+      });
+      const uncaught: unknown[] = [];
+      const onUncaught = (error: unknown) => uncaught.push(error);
+
+      vars[0].onKill?.(self);
+      fail = true;
+      process.on('uncaughtException', onUncaught);
+
+      try {
+        await Promise.resolve();
+        await Promise.resolve();
+      } finally {
+        process.off('uncaughtException', onUncaught);
+        fail = false;
+      }
+
+      expect(uncaught).toHaveLength(1);
+
+      vars[1].onKill?.(self);
+      await Promise.resolve();
+      expect(paddings()).toHaveLength(1);
+    });
+
+    it('keeps the content for a kill after a refresh() that already used up an earlier one', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      const { controller, vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      vars[0].onKill?.(self);
+      controller.refresh();
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 2400, behavior: 'instant' });
+
+      vars[1].onKill?.(self);
+      await Promise.resolve();
+      expect(paddings()).toHaveLength(1);
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 2300, behavior: 'instant' });
+    });
+
+    it('batches a kill made during the batch\'s own rebuild', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      let killDuringRebuild = false;
+      const { vars, self } = setupScenes(Cls, () => {
+        if (killDuringRebuild) {
+          killDuringRebuild = false;
+          vars[1].onKill?.(self);
+        }
+
+        return '+=100';
+      });
+      const scrollTo = followScrollTo(2500);
+
+      vars[0].onKill?.(self);
+      killDuringRebuild = true;
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(paddings()).toHaveLength(1);
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 2300, behavior: 'instant' });
+    });
+
+    it('leaves the scroll alone in a refresh no kill started', () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      const { controller } = setupScenes(Cls);
+      const scrollTo = scrollToSpy();
+
+      vi.spyOn(window, 'scrollY', 'get').mockReturnValue(2500);
+      dwell = 50;
+      controller.refresh();
+
+      expect(paddingTotal()).toBe(150);
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
   });
 
   // The next refresh puts back what a failed one left unpadded.
@@ -3630,5 +4001,1017 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
     expect(uncaught).toHaveLength(1);
     expect(scroller.rec).toBe(2500);
+  });
+
+  // GSAP holds its own refresh for the end of a scroll; a scroll mid-fling would stop the fling.
+  describe('while GSAP reports a scroll', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('holds the batch until the scroll stops, then keeps the content and refreshes GSAP once', async () => {
+      const { Cls, listeners } = makeClass({ rec: 0 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      Cls.scrolling = true;
+      vars[0].onKill?.(self);
+      await Promise.resolve();
+      vi.advanceTimersByTime(250);
+
+      expect(paddings()).toHaveLength(3);
+      expect(scrollTo).not.toHaveBeenCalled();
+      expect(Cls.refresh).not.toHaveBeenCalled();
+
+      // No scrollEnd or other event: ScrollTrigger.killAll() drops every GSAP listener.
+      listeners.length = 0;
+      Cls.scrolling = false;
+      vi.advanceTimersByTime(100);
+
+      expect(paddings()).toHaveLength(2);
+      expect(scrollTo.mock.calls).toEqual([[{ top: 2400, behavior: 'instant' }]]);
+      expect(Cls.refresh).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('lets a GSAP refresh before the scroll stops run the held batch', async () => {
+      const scroller = { rec: 2500 };
+      const { Cls, listeners, gsapRefresh } = makeClass(scroller);
+      const { vars, self } = setupScenes(Cls);
+
+      vi.spyOn(window, 'scrollY', 'get').mockReturnValue(2500);
+      Cls.scrolling = true;
+      vars[0].onKill?.(self);
+      await Promise.resolve();
+      gsapRefresh();
+
+      expect(paddings()).toHaveLength(2);
+      expect(scroller.rec).toBe(2400);
+
+      Cls.scrolling = false;
+      vi.advanceTimersByTime(100);
+      expect(Cls.refresh).not.toHaveBeenCalled();
+      expect(listeners).toHaveLength(0);
+    });
+
+    it('drops the held batch on destroy()', async () => {
+      const { Cls, listeners } = makeClass({ rec: 0 });
+      const { controller, vars, self } = setupScenes(Cls);
+
+      Cls.scrolling = true;
+      vars[0].onKill?.(self);
+      await Promise.resolve();
+      controller.destroy();
+
+      expect(listeners).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+      Cls.scrolling = false;
+      vi.advanceTimersByTime(100);
+      expect(Cls.refresh).not.toHaveBeenCalled();
+    });
+
+    it('drops the listener of a held batch a GSAP refresh ran, when a later kill holds another', async () => {
+      const { Cls, listeners, gsapRefresh } = makeClass({ rec: 0 });
+      const { vars, self } = setupScenes(Cls);
+
+      followScrollTo(2500);
+      Cls.scrolling = true;
+      vars[0].onKill?.(self);
+      await Promise.resolve();
+      gsapRefresh();
+      vars[1].onKill?.(self);
+      await Promise.resolve();
+
+      Cls.scrolling = false;
+      vi.advanceTimersByTime(100);
+      expect(paddings()).toHaveLength(1);
+      expect(Cls.refresh).toHaveBeenCalledTimes(1);
+      expect(listeners).toHaveLength(0);
+    });
+
+    // As GSAP holds its own refresh: a finger held still keeps isScrolling() true, and so does
+    // ScrollTrigger.disable() mid-scroll.
+    it('waits as long as GSAP reports a scroll, however long the scroll stands still', async () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { vars, self } = setupScenes(Cls);
+
+      followScrollTo(2500);
+      Cls.scrolling = true;
+      vars[0].onKill?.(self);
+      await Promise.resolve();
+      vi.advanceTimersByTime(5000);
+      expect(paddings()).toHaveLength(3);
+
+      Cls.scrolling = false;
+      vi.advanceTimersByTime(100);
+      expect(paddings()).toHaveLength(2);
+    });
+
+    // A refresh() the page calls itself is no fling: kd6 skipped its scroll and the content
+    // jumped where the browser doesn't anchor.
+    it('keeps the content in a refresh() called mid-scroll', () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { controller, vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      Cls.scrolling = true;
+      vars[0].onKill?.(self);
+      controller.refresh();
+
+      expect(paddings()).toHaveLength(2);
+      expect(scrollTo.mock.calls).toEqual([[{ top: 2400, behavior: 'instant' }]]);
+    });
+
+    // That function scrolls too, which mid-fling would stop it.
+    // GSAP's scroll function: a getter that returns the cached scroll, a setter that scrolls.
+    const cachingScroller = (initial: number) => {
+      let cached = initial;
+
+      return vi.fn((value?: number) => {
+        if (value === undefined) return cached;
+
+        cached = Math.round(value);
+
+        return undefined;
+      });
+    };
+
+    it('updates GSAP\'s cached scroll after the browser\'s anchoring has moved it', async () => {
+      const scroller = cachingScroller(2500);
+      const { Cls } = makeClass(scroller as { rec?: unknown });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = scrollToSpy();
+
+      anchorScroll(2500);
+      vars[0].onKill?.(self);
+      await Promise.resolve();
+
+      expect(paddings()).toHaveLength(2);
+      expect(scrollTo).not.toHaveBeenCalled();
+      expect(scroller).toHaveBeenLastCalledWith(2400);
+    });
+
+    // That function scrolls too, which mid-fling would stop it.
+    it('leaves GSAP\'s scroll function alone when its cache already holds the scroll', async () => {
+      const scroller = cachingScroller(2400);
+      const { Cls } = makeClass(scroller as { rec?: unknown });
+      const { vars, self } = setupScenes(Cls);
+
+      scrollToSpy();
+      anchorScroll(2500);
+      vars[0].onKill?.(self);
+      await Promise.resolve();
+
+      expect(paddings()).toHaveLength(2);
+      expect(scroller.mock.calls.every((args) => args.length === 0)).toBe(true);
+    });
+
+    it('scrolls to a whole pixel, as GSAP\'s scroll function sets the cache', async () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { vars, self } = setupScenes(Cls, () => '+=100.4');
+      const scrollTo = followScrollTo(2500);
+
+      vars[0].onKill?.(self);
+      await Promise.resolve();
+
+      expect(scrollTo.mock.calls).toEqual([[{ top: 2400, behavior: 'instant' }]]);
+    });
+
+    // A trigger created before the next scroll event scrolls back up to GSAP's cached number.
+    it('tells GSAP\'s scroll function where it scrolled', async () => {
+      const scroller = vi.fn();
+      const { Cls } = makeClass(scroller as { rec?: unknown });
+      const { vars, self } = setupScenes(Cls);
+
+      followScrollTo(2500);
+      vars[0].onKill?.(self);
+      await Promise.resolve();
+
+      expect(scroller).toHaveBeenLastCalledWith(2400);
+    });
+
+    describe('the last kill', () => {
+      it('keeps the structure until the scroll stops, and refresh() leaves it alone', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { controller, vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(2500);
+
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        await Promise.resolve();
+        dwell = 50;
+        controller.refresh();
+
+        expect(paddingTotal()).toBe(300);
+        expect(scrollTo).not.toHaveBeenCalled();
+
+        Cls.scrolling = false;
+        vi.advanceTimersByTime(100);
+        await Promise.resolve();
+
+        expect(paddings()).toHaveLength(0);
+        expect(query('.root').parentElement).toBe(query('.host'));
+        expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
+        expect(Cls.refresh).toHaveBeenCalledTimes(1);
+      });
+
+      // GSAP measures in that refresh, and nothing refreshes it again once the scroll stops.
+      it('tears down in a GSAP refresh before the scroll stops', async () => {
+        const scroller = { rec: 2500 };
+        const { Cls, gsapRefresh } = makeClass(scroller);
+        const { vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(2500);
+
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        await Promise.resolve();
+        gsapRefresh();
+
+        expect(paddings()).toHaveLength(0);
+        expect(scroller.rec).toBe(2200);
+
+        Cls.scrolling = false;
+        vi.advanceTimersByTime(100);
+        expect(Cls.refresh).not.toHaveBeenCalled();
+        expect(scrollTo).not.toHaveBeenCalled();
+      });
+
+      // Inside a trigger callback, the first scroll after a pause doesn't read as scrolling yet.
+      it('waits out a GSAP update alone, and tears down before GSAP refreshes', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+        const paddingsAtGsapRefresh: number[] = [];
+
+        Cls.refresh.mockImplementation(() => paddingsAtGsapRefresh.push(paddings().length));
+        Cls.isUpdating = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        expect(paddings()).toHaveLength(3);
+
+        Cls.isUpdating = false;
+        await Promise.resolve();
+
+        expect(paddings()).toHaveLength(0);
+        expect(paddingsAtGsapRefresh).toEqual([0]);
+      });
+
+      it('tears down at once inside GSAP\'s refresh', () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+
+        Cls.scrolling = true;
+        Cls.isRefreshing = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        Cls.isRefreshing = false;
+
+        expect(paddings()).toHaveLength(0);
+      });
+
+      it('reuses the structure for a registration before the scroll stops', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { controller, vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(2500);
+
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        controller.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
+        controller.refresh();
+
+        // As at rest: the setup puts the dwell back, so the content isn't kept.
+        expect(paddings()).toHaveLength(1);
+        expect(scrollTo).not.toHaveBeenCalled();
+
+        Cls.scrolling = false;
+        await Promise.resolve();
+        vi.advanceTimersByTime(100);
+        expect(paddings()).toHaveLength(1);
+      });
+
+      it('hands the root back to a new instance that only resolves a trigger on it', () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+        const next = new StickyScrollTrigger(query('.root'));
+
+        expect(paddings()).toHaveLength(3);
+
+        next.createResolvedTrigger({ trigger: query('.s1') });
+        expect(paddings()).toHaveLength(0);
+        expect(query('.root').parentElement).toBe(query('.host'));
+        next.destroy();
+      });
+
+      // A gsap.context revert and re-run on the same instance, mid-freeze: the progress goes on.
+      it('leaves the scroll alone once the scroll stops after the same setup ran again', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { controller, vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(150);
+
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        ['.s1', '.s2', '.s3'].forEach((sel) =>
+          controller.createStickyTrigger({ trigger: query(sel), end: '+=100' }));
+        await Promise.resolve();
+
+        Cls.scrolling = false;
+        vi.advanceTimersByTime(100);
+        await Promise.resolve();
+
+        expect(paddings()).toHaveLength(3);
+        expect(Cls.refresh).toHaveBeenCalledTimes(1);
+        expect(scrollTo).not.toHaveBeenCalled();
+      });
+
+      // A pin killed before the first refresh() never wrapped anything, so it schedules no batch.
+      it('hands the page back from a last pin kill held by a GSAP update alone', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+
+        document.body.innerHTML = '<div class="root"></div><div class="pin"></div>';
+
+        const remove = vi.spyOn(window, 'removeEventListener');
+        const controller = new StickyScrollTrigger(query('.root'));
+        const vars = controller.createStickyPin({ trigger: query('.pin') });
+        const self = Object.create(Cls.prototype) as ScrollTrigger;
+
+        Cls.isUpdating = true;
+        vars.onKill?.(self);
+        expect(remove.mock.calls.some(([type]) => type === 'scroll')).toBe(false);
+
+        Cls.isUpdating = false;
+        await Promise.resolve();
+        expect(remove.mock.calls.some(([type]) => type === 'scroll')).toBe(true);
+      });
+
+      // A new instance per gsap.matchMedia setup expects the root back as it was. Mid-scroll the
+      // content isn't kept: the new setup puts the dwell back.
+      it('hands the root back to a new instance on it', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(2500);
+
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+        const next = new StickyScrollTrigger(query('.root'));
+
+        expect(paddings()).toHaveLength(3);
+
+        next.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
+        await Promise.resolve();
+        expect(paddings()).toHaveLength(0);
+        expect(query('.root').parentElement).toBe(query('.host'));
+        expect(scrollTo).not.toHaveBeenCalled();
+        next.destroy();
+      });
+
+      // Its setup puts the dwell back by registering in the task.
+      it('leaves the scroll alone for a new instance that registers, once the scroll has stopped', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(2500);
+
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        Cls.scrolling = false;
+
+        const next = new StickyScrollTrigger(query('.root'));
+
+        next.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
+        await Promise.resolve();
+        expect(paddings()).toHaveLength(0);
+        expect(scrollTo).not.toHaveBeenCalled();
+        next.destroy();
+      });
+
+      // A setup that registers nothing (effects off at this breakpoint) puts no dwell back.
+      it('keeps the content for a new instance that registers nothing, once the scroll has stopped', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(2500);
+
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        Cls.scrolling = false;
+
+        const next = new StickyScrollTrigger(query('.root'));
+
+        await Promise.resolve();
+        expect(paddings()).toHaveLength(0);
+        expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
+        next.destroy();
+      });
+
+      // Reverting GSAP's own pins mid-scroll leaves the scroll alone too, and a new setup that
+      // usually follows puts the dwell back.
+      it('gives everything back on destroy() mid-scroll, leaving the scroll alone', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { controller, vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(2500);
+
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        controller.destroy();
+        await Promise.resolve();
+
+        expect(paddings()).toHaveLength(0);
+        expect(query('.root').parentElement).toBe(query('.host'));
+        expect(vi.getTimerCount()).toBe(0);
+        expect(scrollTo).not.toHaveBeenCalled();
+      });
+
+      // As the held kill would have: the scroll has stopped, the poll just hasn't seen it yet.
+      it('keeps the content on destroy() once the scroll has stopped', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { controller, vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(2500);
+
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        Cls.scrolling = false;
+        controller.destroy();
+        await Promise.resolve();
+
+        expect(paddings()).toHaveLength(0);
+        expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
+      });
+
+      it('hands the page back to a new instance on a container around it, not elsewhere', () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+        const elsewhere = document.createElement('div');
+
+        document.body.append(elsewhere);
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+        const unrelated = new StickyScrollTrigger(elsewhere);
+        const section = document.createElement('section');
+
+        elsewhere.append(section);
+        unrelated.createStickyTrigger({ trigger: section, end: '+=100' });
+        expect(paddings()).toHaveLength(3);
+
+        const around = new StickyScrollTrigger(query('.host'));
+
+        around.createStickyTrigger({ trigger: query('.root'), end: '+=100' });
+        expect(paddings()).toHaveLength(0);
+        expect(query('.root').parentElement).toBe(query('.host'));
+        unrelated.destroy();
+        around.destroy();
+      });
+
+      // Instances made up front, one per gsap.matchMedia setup, arm only when their setup runs.
+      it('hands the page back to an existing instance that arms on a container around it', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+        const around = new StickyScrollTrigger(query('.host'));
+
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        expect(paddings()).toHaveLength(3);
+
+        around.createStickyTrigger({ trigger: query('.root'), end: '+=100' });
+        expect(paddings()).toHaveLength(0);
+
+        around.refresh();
+        Cls.scrolling = false;
+        vi.advanceTimersByTime(100);
+        await Promise.resolve();
+
+        expect(paddings()).toHaveLength(1);
+        around.destroy();
+      });
+
+      // Before the default cover is read: the held wrappers hold the container away from its
+      // sibling.
+      it('hands the page back before an overlap registration around it reads its cover', () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+        const after = document.createElement('div');
+
+        query('.host').append(after);
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+        const around = new StickyScrollTrigger(query('.host'));
+
+        expect(() => around.createOverlapScroll({ trigger: query('.root') })).not.toThrow();
+        expect(paddings()).toHaveLength(0);
+        around.destroy();
+      });
+
+      it('hands the page back to a pin registration around it', () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+        const around = new StickyScrollTrigger(query('.host'));
+
+        around.createStickyPin({ trigger: query('.root') });
+        expect(paddings()).toHaveLength(0);
+        around.destroy();
+      });
+
+      // A lazily mounted component, say: tearing down mid-scroll would jump the content.
+      it('leaves the hold to the end of the scroll for a new instance that registers nothing', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(2500);
+
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+        const next = new StickyScrollTrigger(query('.root'));
+
+        await Promise.resolve();
+        expect(paddings()).toHaveLength(3);
+
+        Cls.scrolling = false;
+        vi.advanceTimersByTime(100);
+        await Promise.resolve();
+        expect(paddings()).toHaveLength(0);
+        expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
+        next.destroy();
+      });
+
+      it('hands the page back to a new instance on a container inside it', () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+        const inside = new StickyScrollTrigger(query('.s2'));
+        const child = document.createElement('div');
+
+        query('.s2').append(child);
+        inside.createStickyTrigger({ trigger: child, end: '+=100' });
+        expect(paddings()).toHaveLength(0);
+        inside.destroy();
+      });
+
+      // Inside GSAP's update the first scroll after a pause doesn't read as scrolling yet.
+      it('leaves the scroll alone on destroy() during a GSAP update that holds the last kill', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { controller, vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(2500);
+
+        Cls.isUpdating = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        controller.destroy();
+        // GSAP marks the scroll once the update for its first event is over.
+        Cls.isUpdating = false;
+        Cls.scrolling = true;
+        await Promise.resolve();
+
+        expect(paddings()).toHaveLength(0);
+        expect(scrollTo).not.toHaveBeenCalled();
+      });
+
+      it('leaves the scroll alone for a new instance during a GSAP update that holds the last kill', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(2500);
+
+        Cls.isUpdating = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+        const next = new StickyScrollTrigger(query('.root'));
+
+        next.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
+        Cls.isUpdating = false;
+        Cls.scrolling = true;
+        await Promise.resolve();
+
+        expect(paddings()).toHaveLength(0);
+        expect(scrollTo).not.toHaveBeenCalled();
+        next.destroy();
+      });
+
+      // GSAP's 250ms sync tick runs an update at rest too.
+      it('keeps the content on destroy() during a GSAP update no scroll started', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { controller, vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(2500);
+
+        Cls.isUpdating = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        controller.destroy();
+        Cls.isUpdating = false;
+        await Promise.resolve();
+
+        expect(paddings()).toHaveLength(0);
+        expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
+      });
+
+      it('tells GSAP\'s scroll function where it scrolled after a destroy() in the task', async () => {
+        const scroller = vi.fn();
+        const { Cls } = makeClass(scroller as { rec?: unknown });
+        const { controller, vars, self } = setupScenes(Cls);
+
+        followScrollTo(2500);
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        controller.destroy();
+        await Promise.resolve();
+
+        expect(scroller).toHaveBeenLastCalledWith(2200);
+      });
+
+      it('reports both errors when the held teardown and the batch throw', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+        let fail = false;
+
+        vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => {
+          if (!fail) return 2500;
+
+          fail = false;
+          throw new Error('teardown');
+        });
+        scrollToSpy();
+        Cls.refresh.mockImplementation(() => {
+          throw new Error('batch');
+        });
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        await Promise.resolve();
+
+        const uncaught: unknown[] = [];
+        const onUncaught = (error: unknown) => uncaught.push(error);
+
+        Cls.scrolling = false;
+        fail = true;
+        process.on('uncaughtException', onUncaught);
+
+        try {
+          expect(() => vi.advanceTimersByTime(100)).toThrow('teardown');
+          await Promise.resolve();
+          await Promise.resolve();
+        } finally {
+          process.off('uncaughtException', onUncaught);
+        }
+
+        expect(uncaught).toEqual([new Error('batch')]);
+      });
+
+      it('still destroys the instance when the held teardown throws in destroy()', async () => {
+        const { Cls, listeners } = makeClass({ rec: 0 });
+        const { controller, vars, self } = setupScenes(Cls);
+        let fail = false;
+
+        vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => {
+          if (!fail) return 2500;
+
+          fail = false;
+          throw new Error('boom');
+        });
+        scrollToSpy();
+        vars[0].onKill?.(self);
+        await Promise.resolve();
+        Cls.scrolling = true;
+        vars[1].onKill?.(self);
+        vars[2].onKill?.(self);
+        await Promise.resolve();
+        Cls.scrolling = false;
+        fail = true;
+
+        expect(() => controller.destroy()).toThrow('boom');
+        expect(vi.getTimerCount()).toBe(0);
+        expect(listeners).toHaveLength(0);
+        expect(() => controller.createStickyTrigger({ trigger: query('.s1') })).toThrow();
+      });
+
+      it('leaves another instance\'s hold alone for a registration on a destroyed one', () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+        const around = new StickyScrollTrigger(query('.host'));
+
+        around.destroy();
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+        expect(() => around.createStickyTrigger({ trigger: query('.root') })).toThrow();
+        expect(paddings()).toHaveLength(3);
+      });
+
+      // A kill from a page whose cleanup throws still refreshes GSAP for the triggers left.
+      it('still runs the held batch when the held teardown throws', async () => {
+        const { Cls, listeners } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+        let fail = false;
+
+        // The teardown's first read throws.
+        vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => {
+          if (!fail) return 2500;
+
+          fail = false;
+          throw new Error('boom');
+        });
+        scrollToSpy();
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        await Promise.resolve();
+
+        Cls.scrolling = false;
+        fail = true;
+        expect(() => vi.advanceTimersByTime(100)).toThrow('boom');
+        expect(paddings()).toHaveLength(0);
+        expect(Cls.refresh).toHaveBeenCalledTimes(1);
+        expect(listeners).toHaveLength(0);
+      });
+    });
+
+    // The killed layer's padding is still in the DOM until the scroll stops. jsdom puts every
+    // section at 0, so 'top -150px' reaches the viewport's top at 150.
+    it('resolves positions against the padding still in place', async () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { controller, vars, self } = setupScenes(Cls);
+      const before = controller.resolveScrollPosition(query('.s3'), 'top -150px');
+
+      Cls.scrolling = true;
+      vars[0].onKill?.(self);
+      await Promise.resolve();
+
+      expect(before).toBe(450);
+      expect(controller.resolveScrollPosition(query('.s3'), 'top -150px')).toBe(before);
+    });
+
+    // jsdom never sticks anything, so .s3 reports a top 400px off whenever a wrapper around it
+    // carries position:sticky, standing in for the shift a stuck one causes.
+    it('resets the killed layer\'s wrappers still in place before measuring', async () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { controller, vars, self } = setupScenes(Cls);
+      const s3 = query('.s3');
+
+      Object.defineProperty(s3, 'offsetTop', {
+        configurable: true,
+        get: () => {
+          for (let el = s3.parentElement; el; el = el.parentElement) {
+            if (el.style.position === 'sticky') return 400;
+          }
+
+          return 0;
+        },
+      });
+
+      const before = controller.resolveScrollPosition(s3, 'top -150px');
+
+      Cls.scrolling = true;
+      vars[0].onKill?.(self);
+      await Promise.resolve();
+
+      expect(before).toBe(450);
+      expect(controller.resolveScrollPosition(s3, 'top -150px')).toBe(before);
+    });
+
+    it('drops every listener when an earlier held batch throws', async () => {
+      const { Cls, listeners, gsapRefresh } = makeClass({ rec: 0 });
+      let fail = false;
+      const { vars, self } = setupScenes(Cls, () => {
+        if (fail) throw new Error('boom');
+
+        return '+=100';
+      });
+
+      followScrollTo(2500);
+      Cls.scrolling = true;
+      vars[0].onKill?.(self);
+      await Promise.resolve();
+      gsapRefresh();
+      vars[1].onKill?.(self);
+      await Promise.resolve();
+
+      fail = true;
+      Cls.scrolling = false;
+
+      try {
+        expect(() => vi.advanceTimersByTime(100)).toThrow('boom');
+      } finally {
+        fail = false;
+      }
+
+      expect(listeners).toHaveLength(0);
+    });
+  });
+
+  // Windows here: s1 0-100, s2 100-200, s3 200-300, every section at 0.
+  describe('mid-freeze', () => {
+    it('keeps the scroll\'s progress through a freeze that stays', async () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(150);
+
+      vars[0].onKill?.(self);
+      await Promise.resolve();
+
+      expect(scrollTo.mock.calls).toEqual([[{ top: 50, behavior: 'instant' }]]);
+    });
+
+    it('caps that progress at the freeze\'s new dwell', async () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(150);
+
+      vars[0].onKill?.(self);
+      dwell = 30;
+      await Promise.resolve();
+
+      expect(scrollTo.mock.calls).toEqual([[{ top: 30, behavior: 'instant' }]]);
+    });
+
+    // Every section sits at 0 here, so the windows tie: the scroll in s2 had gone through all of
+    // s1, which stays counted, and s3 hadn't started.
+    it('drops the progress through a freeze that was killed, keeping the ones before it', async () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(150);
+
+      vars[1].onKill?.(self);
+      await Promise.resolve();
+
+      expect(scrollTo.mock.calls).toEqual([[{ top: 100, behavior: 'instant' }]]);
+    });
+
+    // A layer registered with the kill counts as dwellBeforeReach counts it: s4's freeze ties at
+    // the content's natural spot but starts after s2's, which the scroll hasn't reached.
+    it('counts a layer new since the kill only if the content is past it', () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { controller, vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(50);
+      const s4 = document.createElement('section');
+
+      s4.className = 's4';
+      query('.root').append(s4);
+      vars[2].onKill?.(self);
+      controller.createStickyTrigger({ trigger: s4, end: '+=100' });
+      controller.refresh();
+
+      expect(paddings()).toHaveLength(3);
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    // An inner trigger at its outer's top: s2's freeze starts where s1's natural start ties.
+    it('leaves the scroll alone when a layer after a tied freeze is killed', async () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(150);
+
+      vars[2].onKill?.(self);
+      await Promise.resolve();
+
+      expect(paddings()).toHaveLength(2);
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    it('keeps a passed freeze passed when its dwell grows', async () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(250);
+
+      vars[2].onKill?.(self);
+      dwell = 130;
+      await Promise.resolve();
+
+      expect(scrollTo.mock.calls).toEqual([[{ top: 260, behavior: 'instant' }]]);
+    });
+
+    it('keeps the progress of a freeze registered again on the same trigger in the task', async () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { controller, vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(250);
+
+      vars[2].onKill?.(self);
+      controller.createStickyTrigger({ trigger: query('.s3'), end: '+=100' });
+      await Promise.resolve();
+
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    // Every element sits at base (jsdom has no layout), so the windows run 1000-1100, 1100-1200,
+    // 1200-1300. Another instance's rebuild then takes 100px of dwell off above the container and
+    // its catch-up scrolls with it, from 1250 to 1150. The new dwells are 30 each, so s3 keeps 30
+    // of its 50.
+    describe('with the container moved since its windows were measured', () => {
+      let base = 1000;
+
+      beforeEach(() => {
+        base = 1000;
+        vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(() => base);
+      });
+
+      const rebuildAnother = () => {
+        const other = document.createElement('div');
+
+        other.innerHTML = '<section class="o1"></section><section class="o2"></section>';
+        document.body.append(other);
+
+        const instance = new StickyScrollTrigger(other);
+
+        instance.createStickyTrigger({ trigger: query('.o1'), end: '+=100' });
+        instance.refresh();
+
+        return () => {
+          instance.createStickyTrigger({ trigger: query('.o2'), end: '+=100' });
+          instance.refresh();
+        };
+      };
+
+      it('reads the scroll against the layout its windows were measured in', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+        const rebuild = rebuildAnother();
+        const scrollTo = followScrollTo(1150);
+
+        base = 900;
+        rebuild();
+        vars[0].onKill?.(self);
+        dwell = 30;
+        await Promise.resolve();
+
+        expect(scrollTo.mock.calls).toEqual([[{ top: 960, behavior: 'instant' }]]);
+      });
+
+      // As before any rebuild elsewhere: what moved it (a stuck ancestor, say) didn't move its
+      // windows' measurements for it.
+      it('reads the scroll as it is when no other structure came down since', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(1150);
+
+        base = 900;
+        vars[0].onKill?.(self);
+        dwell = 30;
+        await Promise.resolve();
+
+        expect(scrollTo.mock.calls).toEqual([[{ top: 1030, behavior: 'instant' }]]);
+      });
+
+      // A rebuild whose refresh throws before pass 1 (on a detached pin's trigger) leaves its
+      // structure unmeasured: the top the old one had says nothing about it.
+      it('reads the scroll as it is for a structure not measured yet', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { controller, vars, self } = setupScenes(Cls);
+        const rebuild = rebuildAnother();
+        const s4 = document.createElement('section');
+        const pin = document.createElement('div');
+
+        query('.root').append(s4);
+        document.body.append(pin);
+
+        controller.createStickyTrigger({ trigger: s4, end: '+=100' });
+
+        const pinVars = controller.createStickyPin({ trigger: pin });
+
+        pin.remove();
+        expect(() => controller.refresh()).toThrow();
+        pinVars.onKill?.(self);
+
+        const scrollTo = followScrollTo(1150);
+
+        base = 900;
+        rebuild();
+        vars[0].onKill?.(self);
+        dwell = 30;
+        await Promise.resolve();
+
+        expect(scrollTo.mock.calls).toEqual([[{ top: 1130, behavior: 'instant' }]]);
+      });
+    });
+
+    // .s4 goes after .s3 in the DOM, so its freeze runs 200-300, before the content at 50.
+    it('counts a freeze registered since on another trigger in full when it starts before the content', async () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { controller, vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(350);
+      const s4 = document.createElement('section');
+
+      s4.className = 's4';
+      query('.root').append(s4);
+      vars[2].onKill?.(self);
+      controller.createStickyTrigger({ trigger: s4, end: '+=100' });
+      await Promise.resolve();
+
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    // Snapping to a freeze's end lands exactly there.
+    it('keeps a scroll exactly at a freeze\'s end there', async () => {
+      const { Cls } = makeClass({ rec: 0 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(200);
+
+      vars[0].onKill?.(self);
+      await Promise.resolve();
+
+      expect(scrollTo.mock.calls).toEqual([[{ top: 100, behavior: 'instant' }]]);
+    });
   });
 });

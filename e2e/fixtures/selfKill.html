@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>selfKill fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section,
+      .tail {
+        display: block;
+        height: 400px;
+      }
+    </style>
+  </head>
+  <body>
+    <div style="height: 200px"></div>
+    <div class="root">
+      <section class="s1">S1</section>
+      <section class="s2">S2</section>
+      <section class="s3">S3</section>
+    </div>
+    <div class="tail">TAIL</div>
+    <div style="height: 4000px"></div>
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const params = new URLSearchParams(location.search);
+
+      if (params.has('noanchor')) document.documentElement.style.overflowAnchor = 'none';
+
+      const tail = document.querySelector('.tail');
+      const sticky = new StickyScrollTrigger('.root');
+      const kills = [];
+
+      ['.s1', '.s2', '.s3'].forEach((sel) =>
+        ScrollTrigger.create(
+          sticky.createStickyTrigger({
+            trigger: sel,
+            end: '+=200',
+            onLeave: (self) => {
+              kills.push(sel);
+              self.kill();
+            },
+          }),
+        ),
+      );
+
+      const frames = () =>
+        new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      ScrollTrigger.refresh();
+
+      // Relative steps, as a wheel or a fling scrolls: an absolute scrollTo() per step would put
+      // the scroll back on its number and hide a jump.
+      window.__scrollSteps = async (steps, by) => {
+        const tops = [tail.getBoundingClientRect().top];
+
+        for (let i = 0; i < steps; i += 1) {
+          window.scrollBy(0, by);
+          await frames();
+          tops.push(tail.getBoundingClientRect().top);
+        }
+
+        return { tops, kills };
+      };
+
+      window.__ready = true;
+    </script>
+  </body>
+</html>

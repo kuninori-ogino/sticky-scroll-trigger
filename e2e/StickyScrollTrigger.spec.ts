@@ -2430,15 +2430,37 @@ interface KillRefreshAnchorWindow {
     sameTask: { tailTop: number; plainStart: number | null };
     settled: { tailTop: number; scrollY: number };
   }>;
+  __kill: (killAll: boolean) => Promise<{
+    paddingsInTask: number;
+    sameTask: number;
+    settled: { tailTop: number; scrollY: number };
+  }>;
+  __killFirst: (atRest: boolean) => Promise<{
+    scrolling: boolean;
+    progress: number;
+    held: { tailTop: number; scrollY: number };
+    settled: { tailTop: number; scrollY: number; progress: number };
+  }>;
+  __recreateSecond: () => Promise<{
+    progress: number;
+    settled: { tailTop: number; scrollY: number; progress: number };
+  }>;
   __state: () => { tailTop: number; scrollY: number };
 }
 
-const openKillRefreshAnchor = async (page: Page, end?: string, optimization?: string) => {
+const openKillRefreshAnchor = async (
+  page: Page,
+  end?: string,
+  optimization?: string,
+  noAnchor = false,
+) => {
   const params = new URLSearchParams();
 
   if (end) params.set('end', end);
 
   if (optimization) params.set('optimization', optimization);
+
+  if (noAnchor) params.set('noanchor', '');
 
   const query = params.size ? `?${params}` : '';
 
@@ -2465,6 +2487,134 @@ for (const optimization of ['auto', 'always']) {
     // s1's and s2's dwell (2 x 200) are gone above the viewport.
     expect(result.settled.scrollY).toBeCloseTo(2100, 0);
   });
+}
+
+// Without the browser's anchoring, the record GSAP scrolls back to is the only thing that keeps
+// the content in place.
+test('a kill and a ScrollTrigger.refresh() in the same task keep the content in place without scroll anchoring', async ({ page }) => {
+  await openKillRefreshAnchor(page, undefined, undefined, true);
+
+  const before = await page.evaluate(
+    () => (window as never as KillRefreshAnchorWindow).__scrollTo(2500),
+  );
+  const result = await page.evaluate(
+    () => (window as never as KillRefreshAnchorWindow).__killAndRefresh(false),
+  );
+
+  expect(result.settled.tailTop).toBeCloseTo(before, 0);
+  expect(result.settled.scrollY).toBeCloseTo(2100, 0);
+});
+
+// With no GSAP refresh to scroll back, the library scrolls itself, where the browser's anchoring
+// hasn't already kept the content.
+for (const noAnchor of [false, true]) {
+  for (const killAll of [false, true]) {
+    test(`${killAll ? 'the last kill' : 'a kill'} with no GSAP refresh in the task keeps the content in place (scroll anchoring ${noAnchor ? 'off' : 'on'})`, async ({ page }) => {
+      await openKillRefreshAnchor(page, undefined, undefined, noAnchor);
+
+      const before = await page.evaluate(
+        () => (window as never as KillRefreshAnchorWindow).__scrollTo(2500),
+      );
+      const result = await page.evaluate(
+        (all) => (window as never as KillRefreshAnchorWindow).__kill(all),
+        killAll,
+      );
+
+      // At rest, the last kill tears down in its task and keeps the content by the next
+      // microtask; the others wait for the batch's microtask.
+      if (killAll) {
+        expect(result.paddingsInTask).toBe(0);
+        expect(result.sameTask).toBeCloseTo(before, 0);
+      }
+
+      expect(result.settled.tailTop).toBeCloseTo(before, 0);
+      // Two or all three 200px dwells are gone above the viewport.
+      expect(result.settled.scrollY).toBeCloseTo(killAll ? 1900 : 2100, 0);
+    });
+  }
+}
+
+// s2 freezes over 800-1000 and is halfway through at 900. Without s1's dwell above it the freeze
+// runs 600-800, so the scroll lands at 700, where the tail below the container sits as before.
+// A kill while scrolling leaves everything as it is until the scroll stops: a scroll then would
+// stop a fling.
+for (const atRest of [true, false]) {
+  for (const noAnchor of [false, true]) {
+    test(`a kill ${atRest ? 'at rest' : 'while scrolling'} mid-freeze keeps the scroll's progress through that freeze (scroll anchoring ${noAnchor ? 'off' : 'on'})`, async ({ page }) => {
+      await openKillRefreshAnchor(page, undefined, undefined, noAnchor);
+
+      const before = await page.evaluate(
+        () => (window as never as KillRefreshAnchorWindow).__scrollTo(900),
+      );
+      const result = await page.evaluate(
+        (rest) => (window as never as KillRefreshAnchorWindow).__killFirst(rest),
+        atRest,
+      );
+
+      expect(result.scrolling).toBe(!atRest);
+      expect(result.progress).toBeCloseTo(0.5, 2);
+
+      if (!atRest) {
+        expect(result.held.tailTop).toBeCloseTo(before, 0);
+        expect(result.held.scrollY).toBeCloseTo(900, 0);
+      }
+
+      expect(result.settled.tailTop).toBeCloseTo(before, 0);
+      expect(result.settled.scrollY).toBeCloseTo(700, 0);
+      expect(result.settled.progress).toBeCloseTo(0.5, 2);
+    });
+  }
+}
+
+// s2 created again on its trigger brings the same dwell back, so the scroll stays at 900, halfway
+// through its freeze, as with a GSAP pin reverted and created again.
+for (const noAnchor of [false, true]) {
+  test(`a freeze killed and created again in one task keeps its progress (scroll anchoring ${noAnchor ? 'off' : 'on'})`, async ({ page }) => {
+    await openKillRefreshAnchor(page, undefined, undefined, noAnchor);
+
+    const before = await page.evaluate(
+      () => (window as never as KillRefreshAnchorWindow).__scrollTo(900),
+    );
+    const result = await page.evaluate(
+      () => (window as never as KillRefreshAnchorWindow).__recreateSecond(),
+    );
+
+    expect(result.progress).toBeCloseTo(0.5, 2);
+    expect(result.settled.tailTop).toBeCloseTo(before, 0);
+    expect(result.settled.scrollY).toBeCloseTo(900, 0);
+    expect(result.settled.progress).toBeCloseTo(0.5, 2);
+  });
+}
+
+// twoInstanceKill.html's hooks.
+interface TwoInstanceKillWindow {
+  __ready: boolean;
+  __windows: () => [number, number][];
+  __killBoth: () => Promise<{ scrollY: number; windows: [number, number][] }>;
+}
+
+// b2 freezes over 2600-3600. Without a1's dwell above and b3's inside it, it runs 2400-3200, so a
+// scroll 850 or 950 into it keeps the 800 it has and lands at its end. a's catch-up scrolls up
+// by a1's 200 first, and b's windows are still where they were measured.
+for (const noAnchor of [false, true]) {
+  for (const y of [3450, 3550]) {
+    test(`a kill in each of two instances in one task keeps the lower one's progress (scroll ${y}, scroll anchoring ${noAnchor ? 'off' : 'on'})`, async ({ page }) => {
+      await page.goto(`/fixtures/twoInstanceKill.html${noAnchor ? '?noanchor' : ''}`);
+      await page.waitForFunction(() => (window as never as TwoInstanceKillWindow).__ready);
+
+      expect(await page.evaluate(() => (window as never as TwoInstanceKillWindow).__windows()))
+        .toEqual([[2000, 2200], [2600, 3600], [4000, 4200]]);
+
+      await page.evaluate((top) => window.scrollTo(0, top), y);
+
+      const result = await page.evaluate(
+        () => (window as never as TwoInstanceKillWindow).__killBoth(),
+      );
+
+      expect(result.windows.slice(0, 2)).toEqual([[1800, 2000], [2400, 3200]]);
+      expect(result.scrollY).toBeCloseTo(3200, 0);
+    });
+  }
 }
 
 // With no layer left, no onRefreshInit runs refresh(), so the rebuild has to come from the kill.
@@ -2494,6 +2644,90 @@ test('a resize refresh keeps GSAP\'s recorded scroll when the dwell above change
   await expect.poll(async () => (await state()).tailTop).toBeCloseTo(250, 0);
   expect((await state()).scrollY).toBeCloseTo(2500, 0);
 });
+
+// selfKill.html's hooks.
+interface SelfKillWindow {
+  __ready: boolean;
+  __scrollSteps: (steps: number, by: number) => Promise<{ tops: number[]; kills: string[] }>;
+}
+
+// Each layer kills itself in onLeave, mid-scroll. The tail below the layers moves with every
+// step and never jumps when a kill takes a dwell off above it.
+for (const noAnchor of [false, true]) {
+  test(`a layer that kills itself while scrolling leaves the content where the scroll put it (scroll anchoring ${noAnchor ? 'off' : 'on'})`, async ({ page }) => {
+    await page.goto(`/fixtures/selfKill.html${noAnchor ? '?noanchor' : ''}`);
+    await page.waitForFunction(() => (window as never as SelfKillWindow).__ready);
+
+    const { tops, kills } = await page.evaluate(
+      () => (window as never as SelfKillWindow).__scrollSteps(30, 100),
+    );
+    const steps = tops.slice(1).map((top, i) => Math.round(top - tops[i]));
+
+    expect(kills).toEqual(['.s1', '.s2', '.s3']);
+    expect(steps).toEqual(steps.map(() => -100));
+  });
+}
+
+// revertMidScroll.html's hooks.
+interface RevertMidScrollWindow {
+  __ready: boolean;
+  __scrollAndRerun: (steps: number, by: number) => Promise<{
+    moves: number[];
+    scrolling: boolean;
+    libraryScrolls: string[];
+  }>;
+  __rerunAtRest: (rerun: boolean) => Promise<number>;
+}
+
+// The revert's kills wait for the end of the scroll, and the new instance takes the old one's
+// structure down first. Keeping the content there would scroll mid-fling and shift the content by
+// the dwell the new setup puts back; left alone, as GSAP's own pins are, nothing moves.
+for (const destroy of [false, true]) {
+  for (const noAnchor of [false, true]) {
+    test(`a setup run again mid-scroll${destroy ? ' after destroy()' : ''} leaves the content and the scroll alone (scroll anchoring ${noAnchor ? 'off' : 'on'})`, async ({ page }) => {
+      const params = [destroy && 'destroy', noAnchor && 'noanchor'].filter(Boolean).join('&');
+
+      await page.goto(`/fixtures/revertMidScroll.html${params ? `?${params}` : ''}`);
+      await page.waitForFunction(() => (window as never as RevertMidScrollWindow).__ready);
+      await page.evaluate(() => window.scrollTo(0, 2500));
+      await page.waitForTimeout(500);
+
+      const { moves, scrolling, libraryScrolls } = await page.evaluate(
+        () => (window as never as RevertMidScrollWindow).__scrollAndRerun(20, 20),
+      );
+
+      expect(scrolling).toBe(true);
+      expect(moves).toEqual(moves.map(() => -20));
+      expect(libraryScrolls).toEqual([]);
+    });
+  }
+}
+
+// At rest the last kill keeps the content, unless the setup runs again in the same task and puts
+// the dwell back. Every 200px dwell is above the viewport here.
+for (const destroy of [false, true]) {
+  for (const rerun of [true, false]) {
+    if (!destroy && !rerun) continue;
+
+    for (const noAnchor of [false, true]) {
+      test(`a setup ${rerun ? 'run again' : 'reverted'} at rest${destroy ? ' with destroy()' : ''} leaves the content in place (scroll anchoring ${noAnchor ? 'off' : 'on'})`, async ({ page }) => {
+        const params = [destroy && 'destroy', noAnchor && 'noanchor'].filter(Boolean).join('&');
+
+        await page.goto(`/fixtures/revertMidScroll.html${params ? `?${params}` : ''}`);
+        await page.waitForFunction(() => (window as never as RevertMidScrollWindow).__ready);
+        await page.evaluate(() => window.scrollTo(0, 2500));
+        await page.waitForTimeout(500);
+
+        const shift = await page.evaluate(
+          (again) => (window as never as RevertMidScrollWindow).__rerunAtRest(again),
+          rerun,
+        );
+
+        expect(shift).toBe(0);
+      });
+    }
+  }
+}
 
 // matchMediaNested.html's setup and GSAP refresh counts.
 interface MatchMediaNestedWindow {
@@ -2569,7 +2803,14 @@ for (const width of [600, 1000]) {
 // layoutReads.html's hooks and its log of layout reads.
 interface LayoutReadsWindow {
   __reads: { sticky: number; caller: string }[] | undefined;
-  __layoutReads: { refreshes: () => number; refresh: () => void; killSomeAndRefresh: () => void };
+  __layoutReads: {
+    refreshes: () => number;
+    refresh: () => void;
+    killSomeAndRefresh: () => void;
+    killSome: () => boolean;
+    killAll: () => boolean;
+    isScrolling: () => boolean;
+  };
 }
 
 // A layout read while every wrapper is sticky is what nestedStickyOptimization exists to avoid:
@@ -2581,6 +2822,10 @@ for (const ramp of ['css', 'js']) {
     ['refresh', 'a refresh() call'],
     ['resize', 'a resize'],
     ['kill', 'a kill and ScrollTrigger.refresh()'],
+    ['killSome', 'a kill\'s batch'],
+    ['killAll', 'the last kill'],
+    ['killSomeScrolling', 'a kill\'s batch held for the end of a scroll'],
+    ['killAllScrolling', 'the last kill held for the end of a scroll'],
   ] as const) {
     test(`no layout read in ${label} sees every wrapper sticky (${ramp} scroll-margin ramp)`, async ({ page, browserName }) => {
       test.skip(browserName !== 'chromium', 'counts reads, which any engine would count the same');
@@ -2608,6 +2853,39 @@ for (const ramp of ['css', 'js']) {
       } else if (scenario === 'kill') {
         await page.evaluate(
           () => (window as never as LayoutReadsWindow).__layoutReads.killSomeAndRefresh(),
+        );
+      } else if (scenario === 'killSome' || scenario === 'killAll') {
+        // GSAP reports the scroll above for 200ms; a kill before then waits for it to stop.
+        await page.waitForFunction(
+          () => !(window as never as LayoutReadsWindow).__layoutReads.isScrolling(),
+        );
+
+        // Past the batch's microtask and the ScrollTrigger.refresh() it calls.
+        const held = await page.evaluate(async (all) => {
+          const w = window as never as LayoutReadsWindow;
+          const scrolling = all ? w.__layoutReads.killAll() : w.__layoutReads.killSome();
+
+          await Promise.resolve();
+
+          return scrolling;
+        }, scenario === 'killAll');
+
+        expect(held).toBe(false);
+      } else if (scenario === 'killSomeScrolling' || scenario === 'killAllScrolling') {
+        const held = await page.evaluate(
+          (all) => {
+            const w = window as never as LayoutReadsWindow;
+
+            return all ? w.__layoutReads.killAll() : w.__layoutReads.killSome();
+          },
+          scenario === 'killAllScrolling',
+        );
+
+        expect(held).toBe(true);
+        // The held batch ends in a ScrollTrigger.refresh().
+        await page.waitForFunction(
+          (before) => (window as never as LayoutReadsWindow).__layoutReads.refreshes() > before,
+          refreshes,
         );
       } else {
         await page.setViewportSize({ width: 1000, height: 720 });

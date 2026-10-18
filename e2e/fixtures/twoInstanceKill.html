@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>twoInstanceKill fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section,
+      .tail {
+        display: block;
+        height: 400px;
+      }
+    </style>
+  </head>
+  <body>
+    <div style="height: 200px"></div>
+    <div class="ra">
+      <section class="a1">A1</section>
+      <section class="a2">A2</section>
+      <section class="a3">A3</section>
+    </div>
+    <div class="rb">
+      <section class="b1">B1</section>
+      <section class="b2">B2</section>
+      <section class="b3">B3</section>
+      <section class="b4">B4</section>
+    </div>
+    <div class="tail">TAIL</div>
+    <div style="height: 4000px"></div>
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      if (new URLSearchParams(location.search).has('noanchor')) {
+        document.documentElement.style.overflowAnchor = 'none';
+      }
+
+      const a = new StickyScrollTrigger('.ra');
+      const b = new StickyScrollTrigger('.rb');
+      const ta = ['.a1', '.a2', '.a3'].map((sel) =>
+        ScrollTrigger.create(a.createStickyTrigger({ trigger: sel, end: '+=200' })),
+      );
+      // b2 freezes until b4 reaches the top, so b3's dwell is part of b2's.
+      const tb = [
+        ScrollTrigger.create(b.createStickyTrigger({ trigger: '.b1', end: '+=200' })),
+        ScrollTrigger.create(
+          b.createStickyTrigger({ trigger: '.b2', endTrigger: '.b4', end: 'top top' }),
+        ),
+        ScrollTrigger.create(b.createStickyTrigger({ trigger: '.b3', end: '+=200' })),
+      ];
+      const frames = () =>
+        new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      ScrollTrigger.refresh();
+
+      window.__windows = () => tb.map((t) => [t.start, t.end]);
+
+      // At rest, kills a1 and then b3 in one task, so a's catch-up runs first.
+      window.__killBoth = async () => {
+        while (ScrollTrigger.isScrolling()) await frames();
+
+        ta[0].kill();
+        tb[2].kill();
+        await frames();
+
+        return { scrollY: window.scrollY, windows: window.__windows() };
+      };
+
+      window.__ready = true;
+    </script>
+  </body>
+</html>
