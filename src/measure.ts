@@ -50,9 +50,9 @@ export const resolveEndSpec = (
     case 'absolute':
       return { mode: 'absolute', value: classified.value };
 
-    // A Scene layer's own dwell padding adds to the document's max scroll position, so a 'max'
-    // end would depend on itself, growing the page a little more on every refresh instead of
-    // settling. Cover layers add no padding.
+    // A Scene layer's own dwell padding adds to the document's max scroll position and is as
+    // long as the window, so lengthening the window moves 'max' by the same amount and 'max'
+    // can't settle the length. Cover layers add no padding.
     case 'max':
       if (layer.kind !== 'cover') {
         throw new Error(

@@ -103,8 +103,7 @@ const topToStartClause = (top: number | (() => number)): PositionInput => {
 //   resolveStartSpec).
 // - a position clause: where endTrigger's own side reaches the viewport's.
 // classifiedEnd excludes 'max' rather than handling it, because #refreshPinLayers rejects that
-// first: the pin's own spacer height is self-referential the same way a Scene layer's dwell
-// padding is. The exclusion makes that rejection a precondition the compiler checks. A 'max'
+// first. The exclusion makes that rejection a precondition the compiler checks. A 'max'
 // branch here would instead be dead code that starts running if the caller ever moves its throw.
 const resolvePinReleaseScroll = (
   endTrigger: HTMLElement,
@@ -868,16 +867,15 @@ export default class StickyScrollTrigger {
       const resolvedEnd = prefixSpacedRelativeEnd(resolvedStart, resolveMaybeFn(layer.end));
       const classifiedEnd = classifyPosition(resolvedEnd);
 
-      // The same self-reference measure.ts's resolveEndSpec rejects for Scene layers: the pin's
-      // own spacer (layer.inner) adds to the document's max scroll position. Rejecting it here
-      // is what lets resolvePinReleaseScroll take an end that excludes 'max'. Its place ahead of
-      // the absolute-start check below decides which error a pin with both bad values reports.
+      // A pin's range never changes the document height, so 'max' has no self-reference here; it's
+      // rejected for now so that accepting it later breaks nothing. Rejecting it here is what lets
+      // resolvePinReleaseScroll take an end that excludes 'max'. Its place ahead of the
+      // absolute-start check below decides which error a pin with both bad values reports.
       if (classifiedEnd.kind === 'max') {
         throw new Error(
           `StickyScrollTrigger: createStickyPin's end "${resolvedEnd}" uses GSAP's 'max' keyword, `
-          + 'which isn\'t supported here: the pin\'s own spacer height adds to the document\'s '
-          + 'max scroll position, so it would depend on itself. Use a position clause against '
-          + 'endTrigger, such as \'top top\'.',
+          + 'which isn\'t supported here. Use a position clause against endTrigger, such as '
+          + '\'top top\'.',
         );
       }
 

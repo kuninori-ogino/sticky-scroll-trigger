@@ -2440,13 +2440,13 @@ describe('cover z-order lift re-sync', () => {
   });
 });
 
-// GSAP's 'max' keyword (the scroller's max scroll position) is only mathematically solvable
-// where the layer itself never contributes to document height: createOverlapScroll (cover layers
-// never add padding) and resolveScrollPosition/createResolvedTrigger (they never register into
-// `layers` or add height). For createStickyTrigger (Scene layers) and createStickyPin, the
-// layer's own padding/spacer would contribute to the very document height 'max' measures, so the
-// equation never converges, so these reject it with a clear error instead of producing an unstable
-// value.
+// GSAP's 'max' keyword (the scroller's max scroll position) is accepted where the layer itself
+// never contributes to document height: createOverlapScroll (cover layers never add padding) and
+// resolveScrollPosition/createResolvedTrigger (they never register into `layers` or add height).
+// A Scene layer's own padding is part of the document height 'max' measures and as long as
+// its window, so 'max' can't settle the length and createStickyTrigger rejects it.
+// createStickyPin rejects 'max' too for now, though a pin's range never changes the document
+// height.
 // Which offset each spelling resolves to, and that a cover layer accepts them, belongs to
 // measure.test.ts: resolveEndSpec is where the keyword is read.
 describe('\'max\' end keyword', () => {
@@ -2460,7 +2460,7 @@ describe('\'max\' end keyword', () => {
     expect(() => controller.refresh()).toThrow(/end "max".*Use createOverlapScroll/s);
   });
 
-  it('createStickyPin rejects end: \'max\' (the pin\'s own spacer is self-referential)', () => {
+  it('createStickyPin rejects end: \'max\'', () => {
     const { query, controller } = setup();
 
     controller.createStickyPin({ trigger: query('.inside'), endTrigger: query('.scene'), end: 'max' });

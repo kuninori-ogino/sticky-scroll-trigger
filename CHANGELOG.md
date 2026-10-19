@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documented that selector strings, including the ones passed to this module, see the wrappers once `refresh()` has built them, and that a shared container takes one instance with layers at a time. Behavior is unchanged (see [Constraints and caveats](README.md#constraints-and-caveats))
 - Documented that options are meant to be written by the page's own code, and how to build them from a configuration other people can edit. Behavior is unchanged (see [Constraints and caveats](README.md#constraints-and-caveats))
 - Corrected the README's reason why a Scene layer's `end` rejects `'max'`. It said the page would grow on every `refresh()`; the dwell padding actually moves `'max'` along with the window's end, so `'max'` can't settle the length. Behavior is unchanged (see [End syntax](README.md#end-syntax))
+- `createStickyPin`'s error for `'max'` no longer blames the pin for changing the document height, which a pin never does (see [End syntax](README.md#end-syntax))
 
 ## [0.12.0] - 2026-10-15
 
