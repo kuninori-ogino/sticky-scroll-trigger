@@ -400,6 +400,8 @@ A killed `createOverlapScroll` layer's wrapper, which holds `trigger` and every 
 
 If surviving layers' freeze windows change after kill, GSAP's cached `start`/`end` values are synced internally.
 
+A kill keeps the content on screen where it is: the scroll position takes up the dwell that comes out. `kill(false)` and `once: true` remove a layer the same way `kill()` does, so GSAP's pin spacer isn't left behind and scrolling back up shows no gap where the dwell was.
+
 ### `destroy()`
 
 Tears down the controller, restores the original DOM layout, and reverts z-order changes from `createOverlapScroll`. This is also the only entry point that can clean up cover layers that were never passed to `ScrollTrigger.create()`.
@@ -450,6 +452,29 @@ GSAP measures every ScrollTrigger at scroll 0 inside its own refresh, so the swi
 - An element whose content runs past the page's end (a pin range reaching the end, say) stays sticky past its range: moved down as `position: relative`, that content would make the page taller
 - Content that changes size needs a `refresh()` anyway (see [Calling refresh](#calling-refresh)), and a window resize gets GSAP's own after a short delay; until then, a switched element stays at the offset measured at the last one
 - A layout read in the same task as a programmatic scroll (`window.scrollTo()` followed by `getBoundingClientRect()`, say) sees the state for the previous scroll until the `scroll` event. Same-page links and `scrollIntoView()` land the same as with `'off'`
+
+### GPU memory of stacked covers
+
+A browser can keep rendering a stuck layer after its cover has hidden it, each covered layer on screen holding about a viewport's worth of rendered pixels in GPU memory. Overlap layers in a row, each layer's `cover` being the next one's `trigger`, nest inside each other, so every earlier layer of the row stays stuck on screen until the row ends, and the memory can grow with its length. Past the GPU memory budget, parts of the viewport can go blank while scrolling.
+
+To keep it down, split a long row into short ones, each wrapped in an element of its own. A row's layers are released when its wrapper's bottom edge arrives, and scroll out together:
+
+```html
+<div class="container__inner">
+  <div>
+    <section>...</section>
+    <section>...</section>
+    <section>...</section>
+  </div>
+  <div>
+    <section>...</section>
+    <section>...</section>
+    <section>...</section>
+  </div>
+</div>
+```
+
+Between two rows the page scrolls normally instead of covering, and each row's last section needs [the room](#room-for-the-rise) its rise takes.
 
 ## Position syntax
 
@@ -556,23 +581,25 @@ sticky.createOverlapScroll({
 }); // pin until the very bottom of the page
 ```
 
-`'max'` is only supported by [`createOverlapScroll`](#createoverlapscrolloptions) and [`resolveScrollPosition`](#resolvescrollpositionelement-position)/[`createResolvedTrigger`](#createresolvedtriggeroptions). `createStickyTrigger` and `createStickyPin` throw on it, because their own dwell padding or pin spacer adds to the document height `'max'` measures: the freeze window would depend on itself, growing the page a little more on every `refresh()`. GSAP defines `'max'` for `end`, not `start`. In raw GSAP 3.15.0, `start: 'max'` silently resolves to `0` rather than the scroller's max, so this module rejects it for `start` instead of reproducing that.
+`'max'` is only supported by [`createOverlapScroll`](#createoverlapscrolloptions) and [`resolveScrollPosition`](#resolvescrollpositionelement-position)/[`createResolvedTrigger`](#createresolvedtriggeroptions). `createStickyTrigger` throws on it: a Scene layer's dwell padding is part of the document height `'max'` measures and as long as the freeze window, so lengthening the window moves `'max'` by the same amount and `'max'` can't settle the length. `createStickyPin` throws on it too. GSAP defines `'max'` for `end`, not `start`. In raw GSAP 3.15.0, `start: 'max'` silently resolves to `0` rather than the scroller's max, so this module rejects it for `start` instead of reproducing that.
 
 ## Constraints and caveats
 
 - The structure directly under the shared container changes because of the added wrapper elements. Direct-child selectors like `.container__inner > .scene`, `:nth-child()`, adjacent-sibling selectors (`+`/`~`), and flex/grid layout on the shared container itself may break across the wrapper boundary
+- The same goes for selector strings, including those you pass to this module (`trigger`, `endTrigger`, `cover`, `element`, `scrollMarginTargets`). After `refresh()`, Scene layers wrap the shared container itself, `createOverlapScroll` wraps `trigger` and the siblings before it, and `createStickyPin` wraps `trigger`. A selector that steps from parent to child or between siblings across a wrapper then stops matching (`main > .container__inner`, `.container__inner > p:first-child`, `scrollMarginTargets: ':scope > section'`), and `'div'` or `'*'` matches the wrappers too. Class and id selectors, the default `'[id]'` included, match as before
 - `position:sticky` doesn't work if any ancestor of the pinned target has `overflow:hidden`/`clip`
 - `createOverlapScroll`'s `trigger` and `cover` must be siblings sharing the same parent
 - That shared parent also caps how far `cover` can rise: it needs `end - start` worth of content below `trigger`, or the browser releases the wrapper mid-rise, at a point that shifts with the window size (see [Room for the rise](#room-for-the-rise))
 - Everything in that parent up to and including `trigger` is pinned with `trigger` until the rise runs out of room, and [`resolveScrollPosition`](#resolvescrollpositionelement-position), [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances) and same-page links don't account for that pin. A position such an element reaches before the pin starts resolves correctly. A later one is only reached after `cover` has risen over the element, so it has no uncovered scroll position: a same-page link lands while the element is pinned, below the viewport's top edge and possibly already under `cover`
 - `createStickyTrigger` and `createOverlapScroll` throw if `trigger` isn't inside the shared container. Both build their structure inside it, so a `trigger` elsewhere would wrap, move and style elements the instance doesn't own
 - `createStickyPin` works on either side of the container, and throws only for a `trigger` that encloses it (the container itself, or an ancestor). A pin makes `trigger` itself `position:sticky` inside a box holding the pin range, which would pin the container and the layers' dwell padding along with it
-- Selector strings for `trigger`/`endTrigger`/`cover`/`element` resolve against the whole document, as GSAP's own `trigger` does, rather than within the shared container; only the `trigger` rules above restrict where a match may land. Validate or scope these values yourself if they come from content you don't control
+- Selector strings for `trigger`/`endTrigger`/`cover`/`element` resolve against the whole document, as GSAP's own `trigger` does, rather than within the shared container; only the `trigger` rules above restrict where a match may land
+- Every option, including ScrollTrigger options passed through, is meant to come from the page's own code. If some come from a configuration other people can edit, build the options object from values you allow instead of passing the configuration through: selectors reach the whole document, callbacks and function-valued `start`/`end` run in the page, and `scrollMarginTargets` writes to every element it matches on each `refresh()`
 - ScrollTrigger's `pin`/`pinSpacing`/`anticipatePin` can't be used (pinning is handled by sticky; these are already excluded at the type level)
 - GSAP's `clamp()` position wrapper isn't accepted, and a function-valued `start`/`end` is called with no arguments rather than with the `ScrollTrigger` instance GSAP passes (see [Position syntax](#position-syntax))
 - A `createStickyTrigger` Scene layer can't point `endTrigger` at a registered layer later in DOM order; `createOverlapScroll`'s cover layer can (see [End syntax](#end-syntax))
 - If a Scene layer's `end` uses a position clause, don't set `endTrigger` to an element that gets pushed down by that same scene's own dwell; the value won't converge
-- `end: 'max'` throws on `createStickyTrigger` and `createStickyPin` for the same reason (their own padding/spacer would depend on itself); use `createOverlapScroll` instead
+- `end: 'max'` throws on `createStickyTrigger` and `createStickyPin` (see [End syntax](#end-syntax)). End a Scene layer on a dwell distance and a pin on a position clause against `endTrigger` instead, or use `createOverlapScroll`, which takes `'max'`
 - If Scene layers' `endTrigger`s depend on each other in a way that never settles, or only settles by counting each other's dwell or in a way no creation order gives, the layers resolve the way GSAP's pins would in one creation order (see [End syntax](#end-syntax)). `refresh()` throws only if that order doesn't settle either
 - A few rare layouts with nested Scene layers still resolve to window lengths no creation order of GSAP's pins gives; writing the affected `end` as a dwell avoids it (see [End syntax](#end-syntax))
 - Using the same element as the `trigger` of two different `createStickyTrigger`/`createOverlapScroll`/`createStickyPin` calls throws
@@ -580,6 +607,7 @@ sticky.createOverlapScroll({
 - Resizes from mobile browsers showing/hiding their address bar are absorbed automatically (see the repository's `ARCHITECTURE.md`, "Two-pass position measurement"), but other causes like `visualViewport` zoom are not handled
 - `refresh()` writes an inline `scroll-margin-top` on every element matching `scrollMarginTargets` inside the shared container, and, on engines that drive the correction's ramps in CSS, adopts one stylesheet of its own per instance. That sheet is a constructed one, so a Content Security Policy needs no `style-src` exception for it. Both are undone by `destroy()`, and when the instance's last layer or pin is killed. Pass `scrollMarginTargets: null` to opt out (see [Same-page links](#same-page-links))
 - Don't nest one `StickyScrollTrigger` instance's shared container inside another's. The inner instance's layers don't count the outer one's dwell, so their windows open too early by however much of that dwell comes before them, and a `refresh()` run while an outer layer is stuck shifts them again by a different amount. For a target inside both, [`getScrollTop`](#stickyscrolltriggergetscrolltopelement-instances)'s ownership check also picks whichever instance is listed first. Give each instance its own part of the page instead
+- Use one instance with layers per shared container at a time. Each instance counts only its own Scene layers' dwell: with two on one container, layers lower on the page open early by the other instance's dwell above them, whichever was created first, and if the two instances' layers alternate down the page, all dwell is lost. A new instance in each `gsap.matchMedia()` setup is fine when every layer and pin goes to `ScrollTrigger.create()`, since the setup's revert kills the previous instance's layers and hands the container back (see [`destroy()`](#destroy))
 
 ## License
 
