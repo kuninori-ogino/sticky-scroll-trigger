@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>coverMaxAfterShrink fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        height: 400px;
+      }
+      .pin {
+        height: 100px;
+      }
+      #shrink {
+        height: 3000px;
+      }
+      .far {
+        height: 100px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root">
+      <section></section>
+      <section class="base"></section>
+      <section class="cover"></section>
+      <section></section>
+    </div>
+    <div class="pin"></div>
+    <div id="shrink"></div>
+    <div class="far"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const sticky = new StickyScrollTrigger('.root');
+      const cover = ScrollTrigger.create(sticky.createOverlapScroll({ trigger: '.base', end: 'max' }));
+
+      // The pin's range runs to .far, near the page's end, so the shrink leaves it too long.
+      ScrollTrigger.create(sticky.createStickyPin({ trigger: '.pin', endTrigger: '.far', end: 'top top' }));
+      ScrollTrigger.refresh();
+
+      window.__shrink = () => {
+        document.getElementById('shrink').style.height = '1000px';
+        ScrollTrigger.refresh();
+      };
+      window.__coverEnd = () => cover.end;
+      window.__maxScroll = () => ScrollTrigger.maxScroll(window);
+    </script>
+  </body>
+</html>

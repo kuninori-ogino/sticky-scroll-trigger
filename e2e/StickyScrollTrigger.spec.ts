@@ -571,6 +571,28 @@ test('createOverlapScroll\'s end: \'max\' resolves to the real document max scro
   expect(result.freezeEnd).toBe(result.truth);
 });
 
+// The cover's 'max' is read before the pin pass resizes the pin's range, which the 2000px shrink
+// left running past the page's new end.
+test('createOverlapScroll\'s end: \'max\' follows a page shrink in one refresh despite a pin range sized for the longer page', async ({ page }) => {
+  await page.goto('/fixtures/coverMaxAfterShrink.html');
+
+  const result = await page.evaluate(() => {
+    const w = window as unknown as {
+      __shrink: () => void;
+      __coverEnd: () => number;
+      __maxScroll: () => number;
+    };
+
+    w.__shrink();
+
+    return { coverEnd: w.__coverEnd(), gsapMax: w.__maxScroll() };
+  });
+
+  // A 2800px page in a 720px viewport, so the resized range no longer sticks out.
+  expect(result.gsapMax).toBe(2080);
+  expect(result.coverEnd).toBe(result.gsapMax);
+});
+
 test('resolveScrollPosition(el, \'max\') matches the document\'s real max scroll position', async ({ page }) => {
   await page.goto('/fixtures/maxEnd.html');
 

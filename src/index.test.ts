@@ -2794,6 +2794,38 @@ describe('\'max\' end keyword', () => {
 
     expect(() => (vars.end as () => number)()).not.toThrow();
   });
+
+  // The pin's range, at the page's top, is the only thing that can stretch the page past 3000.
+  // 5000px stands in for a range the previous refresh sized for a longer page.
+  it('a cover\'s \'max\' leaves out a pin range left over from the previous refresh', () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="base"></section>
+        <section class="cover"></section>
+      </div>
+      <div class="pin"></div>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const vars = controller.createOverlapScroll({ trigger: query('.base'), end: 'max' });
+
+    controller.createStickyPin({ trigger: query('.pin') });
+    controller.refresh();
+
+    const range = query('.pin').parentElement!;
+
+    vi.spyOn(document.documentElement, 'scrollHeight', 'get')
+      .mockImplementation(() => Math.max(3000, parseFloat(range.style.height) || 0));
+    range.style.height = '5000px';
+
+    try {
+      controller.refresh();
+    } finally {
+      vi.restoreAllMocks();
+    }
+
+    expect((vars.end as () => number)()).toBe(3000 - window.innerHeight);
+  });
 });
 
 // GSAP's own _parsePosition treats a bare number (or a numeric-only string) as an absolute

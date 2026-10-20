@@ -1042,7 +1042,11 @@ export default class StickyScrollTrigger {
     );
     const needsMaxRemeasure = measured.some((measurement) => measurement.end.mode === 'max');
 
-    if (needsMaxRemeasure) documentMaxScroll = measureDocumentMaxScroll(viewportHeight);
+    // Pin ranges are left out: the pin pass sizes them only later, stopping each at the page's end
+    // (room in #refreshPinLayers), and one still sized for a longer page would stick out past it.
+    if (needsMaxRemeasure) {
+      documentMaxScroll = Math.max(0, measureDocumentHeightWithoutPinRanges() - viewportHeight);
+    }
 
     if (needsLiveRemeasure || needsMaxRemeasure) applyLayers();
 
@@ -1663,7 +1667,8 @@ export default class StickyScrollTrigger {
       // 'max' isn't relative to element at all: it's GSAP's scrollerMax, optionally offset. This
       // function registers no layer and adds no document height, so unlike Scene/Cover layers and
       // createStickyPin it can measure directly, with no circularity. Per this function's
-      // contract, refresh() has already finalized every Scene layer's dwell padding by now.
+      // contract, refresh() has already finalized every Scene layer's dwell padding by now. It
+      // counts pin ranges as they stand, as GSAP's 'max' does.
       case 'max':
         return measureDocumentMaxScroll(viewportHeight)
           + resolveMaxOffset(classified.value, viewportHeight);
