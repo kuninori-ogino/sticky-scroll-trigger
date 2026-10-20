@@ -2163,6 +2163,82 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
     expect(trigger.style.position).toBe('');
   });
 
+  it('a pin killed from a Scene layer\'s start function keeps its trigger\'s inline position', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+    let kill: (() => void) | null = null;
+
+    trigger.style.top = '8px';
+
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      start: () => {
+        kill?.();
+
+        return 'top top';
+      },
+      end: '+=500',
+    });
+
+    const vars = controller.createStickyPin({ trigger, endTrigger: query('.scene'), top: 39 });
+
+    controller.refresh();
+    expect(trigger.style.position).toBe('sticky');
+
+    kill = () => {
+      kill = null;
+      vars.onKill?.(fakeSelf);
+    };
+
+    controller.refresh();
+
+    expect(trigger.style.position).toBe('');
+    expect(trigger.style.top).toBe('8px');
+  });
+
+  // The rollback after the later pin's throw skips the pin the kill gave back.
+  it('a pin killed from an earlier pin\'s end function keeps its inline position when a later pin throws', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+    let kill: (() => void) | null = null;
+    let rejected = false;
+
+    trigger.style.top = '8px';
+
+    controller.createStickyPin({
+      trigger: query('.outside'),
+      endTrigger: query('.scene'),
+      end: () => {
+        kill?.();
+
+        return 'top top';
+      },
+    });
+
+    const vars = controller.createStickyPin({ trigger, endTrigger: query('.scene'), top: 39 });
+
+    controller.createStickyPin({
+      trigger: query('.scene'),
+      end: () => (rejected ? 'max' : 'bottom top'),
+    });
+    controller.refresh();
+    expect(trigger.style.position).toBe('sticky');
+
+    kill = () => {
+      kill = null;
+      vars.onKill?.(fakeSelf);
+    };
+
+    rejected = true;
+
+    expect(() => controller.refresh()).toThrow(/'max' keyword/);
+    expect(trigger.style.position).toBe('');
+    expect(trigger.style.top).toBe('8px');
+
+    // Otherwise the kill's re-measure at the end of the task throws again, off the stack.
+    rejected = false;
+  });
+
   // The ordinary teardown order is destroy(), then killing the ScrollTriggers, so onKill runs on
   // a pin destroy() has already unwrapped.
   it('onKill after destroy() leaves the trigger\'s inline position alone', () => {

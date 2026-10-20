@@ -777,9 +777,16 @@ export default class StickyScrollTrigger {
 
   // Snapshots and resets every wrapped pin's own sticky state, returning a function that puts it
   // back. A stuck pin shifts documentTop for its trigger and everything inside it, as a stuck
-  // wrapper does (see #resetSceneCoverStickyState).
+  // wrapper does (see #resetSceneCoverStickyState). A pin a start or end function kills meanwhile
+  // already has the caller's values back from its unwrap, so it's skipped.
   #resetPinStickyState(): () => void {
-    return stripStickyPositions(this.#wrappedPinTriggers());
+    const restores = this.#pinLayers
+      .filter(({ inner }) => inner)
+      .map((layer) => ({ layer, restore: stripStickyPositions([layer.trigger]) }));
+
+    return () => restores.forEach(({ layer, restore }) => {
+      if (layer.inner) restore();
+    });
   }
 
   // Both resets above, for a measurement that can land anywhere on the page.
@@ -813,11 +820,13 @@ export default class StickyScrollTrigger {
       if (layer.inner) clearHeightForRead(layer.inner);
     });
 
+    // A pin killed meanwhile is skipped, as in #resetPinStickyState.
     return () => {
       snapshots.forEach(({ layer, position, height }) => {
-        commitPosition(layer.trigger, position);
+        if (!layer.inner) return;
 
-        if (layer.inner) commitHeight(layer.inner, height);
+        commitPosition(layer.trigger, position);
+        commitHeight(layer.inner, height);
       });
     };
   }
