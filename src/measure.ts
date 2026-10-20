@@ -151,7 +151,7 @@ export const resolveStartSpec = (
 };
 
 // Measures one layer's natural absolute position and resolves its start/end, in
-// #planLayerPositions' pass 1.
+// index.ts's phase 1 (#measureLayers).
 export const measureLayer = (
   rootElement: HTMLElement,
   viewportHeight: number,

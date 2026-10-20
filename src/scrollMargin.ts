@@ -272,6 +272,11 @@ export const createScrollMarginSync = (
   };
 
   return {
+    // The elements sync() would write now, so the caller can measure them first.
+    targets: (): HTMLElement[] => (targetSelector === null
+      ? []
+      : Array.from(rootElement.querySelectorAll<HTMLElement>(targetSelector))),
+
     // measureNaturalTops returns each target's documentTop with no wrapper stuck, which only the
     // caller can arrange.
     sync(

@@ -189,24 +189,25 @@ Until the scroll stops, the killed layers keep their freeze and their padding, a
 
 ### `refresh()` pass order
 
-Each `refresh()` runs these steps in order (`#refreshLayout` holds steps 1 to 8):
+Each `refresh()` runs these steps in order (`#refreshLayout` holds steps 1 to 9):
 
 1. Build the nesting if none is built yet, or rebuild it if a layer was added or killed or a trigger moved out of DOM order.
 2. Take every cover lift off, so step 3 never mistakes a lift's value for the caller's.
 3. Wrap the pins not yet wrapped and size each pin's `outer` to `trigger`'s margin box.
 4. Put the cover lifts back over the sibling chain steps 1 and 3 left, even when step 3 throws for a detached `trigger`.
 5. Measure the viewport height once, for the Scene/Cover passes and the pins alike.
-6. Plan the Scene and Cover layers in the two passes of [Two-pass position measurement](#two-pass-position-measurement), writing each padding as its window is planned and every sticky top after the last pass.
-7. Size the pins, now that the padding between each `trigger` and `endTrigger` is final, measuring every pin before writing any.
-8. Sync the scroll margins to the settled freeze windows.
-9. Rebuild the page-level dormancy table, also after a throw in steps 1 to 8.
-10. Write the scroll-margin ramps from the current scroll, on engines that drive them from script.
-11. After a kill, when nothing threw, keep the content at the viewport's top in place: move GSAP's scroll record inside GSAP's refresh, or scroll.
-12. Rethrow the error from steps 1 to 8, if there was one.
+6. Take every wrapper and pin off sticky, then read what this refresh's padding can't move (phase 1): each Scene and Cover layer, running its start/end functions, and the scroll-margin targets, all inside the container.
+7. Plan the Scene and Cover layers as [Two-pass position measurement](#two-pass-position-measurement) describes and write the paddings.
+8. Read what the padding moves (phase 2): a cover's `endTrigger` outside the container and the document height for a cover's `'max'`, planning the covers again from them, then every pin with its range cleared, running its start/end functions.
+9. Write every sticky top and pin range, then sync the scroll margins to the settled freeze windows.
+10. Rebuild the page-level dormancy table, also after a throw in steps 1 to 9.
+11. Write the scroll-margin ramps from the current scroll, on engines that drive them from script.
+12. After a kill, when nothing threw, keep the content at the viewport's top in place: move GSAP's scroll record inside GSAP's refresh, or scroll.
+13. Rethrow the error from steps 1 to 9, if there was one.
 
-No layout read between step 6's sticky write and step 9 sees the instance's wrappers sticky. Before that write, no more of them are sticky than the last dormancy table left; after it, every level is, and a read would lay out the whole nesting, the cost the table exists to avoid (see [Why far-off sticky layers are switched to relative](#why-far-off-sticky-layers-are-switched-to-relative)). So the pin pass and the scroll-margin targets strip the wrappers before they measure, and the reads a cover's `'max'` end or an `endTrigger` outside the container needs come before the write. Both reads see the instance's pins unstuck, and the `'max'` read leaves every pin range out, since the pin pass sizes them only later. Steps 10 and 11 read the scroll, which forces a layout, so they wait for the table; the scroll step 11 starts from is read before step 1. `layoutReads.html` in the e2e suite (Chromium) logs the sticky elements at every layout read in a `refresh()`, a resize and a kill, at rest or held for the end of a scroll, and fails on a read that sees more of them than the table leaves near the scroll. The unit tests under "refresh() pass ordering" hold parts of the order.
+Every layout read in steps 6 to 8 sees the instance's wrappers and pins unstuck, and nothing goes sticky again until step 9, after the last of them. Before that write, no more of the wrappers are sticky than the last dormancy table left; after it, every level is, and a read would lay out the whole nesting, the cost the table exists to avoid (see [Why far-off sticky layers are switched to relative](#why-far-off-sticky-layers-are-switched-to-relative)). The `'max'` read leaves every pin range out, since step 9 sizes them only later. Steps 11 and 12 read the scroll, which forces a layout, so they wait for the table; the scroll step 12 starts from is read before step 1. `layoutReads.html` in the e2e suite (Chromium) logs the sticky elements at every layout read in a `refresh()`, a resize and a kill, at rest or held for the end of a scroll, and fails on a read that sees more of them than the table leaves near the scroll. The unit tests under "refresh() pass ordering" hold parts of the order.
 
-Steps 3, 6 and 7 write their values (pin reserves, paddings, sticky tops, pin ranges) through `commit.ts`, including those they clear to measure past (pin heights, position/top), which the same step writes again or rolls back on a throw. Structure and measurements that undo their own writes (sticky strips, the viewport probe, the pin-range clear) stay in `dom.ts` and `structure.ts`, and dormancy and the scroll margins write their own properties. A lint rule keeps every other module from writing styles, attributes or the element tree.
+Steps 3 and 6 to 9 write their values (pin reserves, paddings, sticky tops, pin ranges) through `commit.ts`, including those cleared to measure past (pin heights, position/top), which step 3 or 9 writes again. A throw before the pins are read puts every wrapper and pin back; a pin's throw keeps the Scene and Cover plan and puts every pin back as the last successful refresh left it. Structure and measurements that undo their own writes (sticky strips, the viewport probe, the pin-range clear) stay in `dom.ts` and `structure.ts`, and dormancy and the scroll margins write their own properties. A lint rule keeps every other module from writing styles, attributes or the element tree.
 
 ### How `refresh()` runs inside GSAP's refresh
 

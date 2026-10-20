@@ -79,7 +79,7 @@ export type { EndInput, EndValue, PositionInput } from './position';
 export type { NestedStickyOptimization } from './dormancy';
 
 // createStickyPin's `top`, converted into the clause form that everything downstream works with.
-// Why it's a separate option at all: see the rejection in #refreshPinLayers.
+// Why it's a separate option at all: see the rejection in #planPinLayers.
 const topToStartClause = (top: number | (() => number)): PositionInput => {
   const toClause = (value: number): string => {
     if (!Number.isFinite(value)) {
@@ -106,7 +106,7 @@ const topToStartClause = (top: number | (() => number)): PositionInput => {
 //   endTrigger alike. Same idea as an absolute start for Scene/Cover layers (see measure.ts's
 //   resolveStartSpec).
 // - a position clause: where endTrigger's own side reaches the viewport's.
-// classifiedEnd excludes 'max' rather than handling it, because #refreshPinLayers rejects that
+// classifiedEnd excludes 'max' rather than handling it, because #planPinLayers rejects that
 // first. The exclusion makes that rejection a precondition the compiler checks. A 'max'
 // branch here would instead be dead code that starts running if the caller ever moves its throw.
 const resolvePinReleaseScroll = (
@@ -145,6 +145,10 @@ const removeItem = <T>(list: T[], item: T): void => {
 
   if (index !== -1) list.splice(index, 1);
 };
+
+type MeasuredLayers = { structureTop: number; measured: LayerMeasurement[] };
+
+type PlannedPin = { layer: PinLayer; topPx: number; range: number };
 
 // The content at the viewport's top edge: where it sits in the unpadded layout, and how much of
 // each Scene layer's dwell the scroll has gone through to get there.
@@ -684,7 +688,7 @@ export default class StickyScrollTrigger {
     queueMicrotask(end);
   }
 
-  // Wraps any not-yet-built pin layer. Must run before #refreshScenesAndCovers measures Scene and
+  // Wraps any not-yet-built pin layer. Must run before #refreshGeometry measures Scene and
   // Cover positions: the wrappers stop trigger's margins from collapsing with its siblings', so
   // wrapping still moves whatever sits below it, even though #reservePinSpace gives the height
   // itself back.
@@ -714,8 +718,8 @@ export default class StickyScrollTrigger {
   // and the browser resolves the box at full precision, through whatever box-sizing, borders,
   // floats or line boxes trigger happens to have.
   //
-  // This has to run before #refreshScenesAndCovers measures, since the height it writes is part of
-  // the flow. Left to #refreshPinLayers, it would measure every Scene layer against the previous
+  // This has to run before #refreshGeometry measures, since the height it writes is part of
+  // the flow. Left to #planPinLayers, it would measure every Scene layer against the previous
   // refresh's height whenever a trigger's own height had changed, with no later pass to correct
   // it.
   #reservePinSpace() {
@@ -738,9 +742,9 @@ export default class StickyScrollTrigger {
     wrapped.forEach(({ outer }, index) => {
       commitHeight(outer, `${reserved[index]}px`);
     });
-    // The ranges go back rather than staying cleared, so #resetPinState still snapshots the last
+    // The ranges go back rather than staying cleared, so #refreshGeometry still snapshots the last
     // successful refresh's values and its rollback has something to restore. They're sealed inside
-    // outer either way, so #refreshScenesAndCovers measures the same layout with them present.
+    // outer either way, so phase 1 measures the same layout with them present.
     wrapped.forEach(({ inner, range }) => commitHeight(inner, range));
   }
 
@@ -800,67 +804,90 @@ export default class StickyScrollTrigger {
     };
   }
 
-  // Pass 1 of the pin refresh: snapshots and strips every pin's own sticky top and spacer height,
-  // returning a function that puts them back. #refreshPinLayers then measures a natural position
-  // rather than the previous refresh's result.
-  //
-  // outer's reserved height is left alone. It's what the page actually renders, so it's what
-  // documentTop should see, and #reservePinSpace rewrites it from a fresh measurement every
-  // refresh, so a throw in pass 2 can't strand a stale one.
-  #resetPinState(): () => void {
-    const snapshots = this.#pinLayers.map((layer) => ({
+  // Every read refresh() makes of its own layout happens with every wrapper and pin unstuck, since
+  // a stuck one shifts documentTop for everything inside it (see #resetSceneCoverStickyState).
+  // Phase 1 reads what this refresh's padding can't move: every Scene/Cover layer and the
+  // scroll-margin targets, all inside the shared container. Phase 2 follows the padding write and
+  // reads what it can move: a cover's endTrigger outside the container, the document's height for
+  // a cover's 'max', and every pin, since a pin below the container moves with it. Sticky goes back
+  // on after the last read, which also spares every read a sticky layout (the cost dormancy.ts
+  // avoids).
+  #refreshGeometry(viewportHeight: number) {
+    const active = this.#layers.filter((layer) => layer.wrapper !== null);
+    const wrappers = active.flatMap(({ wrapper }) => (wrapper ? [wrapper] : []));
+    const savedWrappers = wrappers.map(captureInlinePosition);
+    const pins = this.#pinLayers.map((layer) => ({
       layer,
       position: captureInlinePosition(layer.trigger),
-      height: layer.inner ? layer.inner.style.height : '',
+      range: layer.inner ? layer.inner.style.height : '',
     }));
 
-    snapshots.forEach(({ layer }) => {
-      clearStickyForRead(layer.trigger);
+    // Every one cleared here is written again below, or rolled back on a throw. The rollback skips
+    // a pin a start or end function killed meanwhile: its unwrap gave the caller's values back.
+    wrappers.forEach(clearStickyForRead);
+    pins.forEach(({ layer }) => clearStickyForRead(layer.trigger));
 
-      if (layer.inner) clearHeightForRead(layer.inner);
-    });
+    let stickyTops: Map<HTMLElement, number>;
+    let marginTops: Map<HTMLElement, number>;
 
-    // A pin killed meanwhile is skipped, as in #resetPinStickyState.
-    return () => {
-      snapshots.forEach(({ layer, position, height }) => {
+    try {
+      const measured = active.length ? this.#measureLayers(viewportHeight, active) : null;
+
+      marginTops = this.#measureScrollMarginTargets(active);
+      stickyTops = measured
+        ? this.#planLayerPositions(viewportHeight, active, measured)
+        : new Map<HTMLElement, number>();
+    } catch (error) {
+      // catch rather than finally: after a success the snapshots hold what the writes below
+      // replace, and restoring them would undo the lot.
+      wrappers.forEach((wrapper, i) => commitPosition(wrapper, savedWrappers[i]));
+      pins.forEach(({ layer, position }) => {
+        if (layer.inner) commitPosition(layer.trigger, position);
+      });
+
+      throw error;
+    }
+
+    let plannedPins: PlannedPin[] = [];
+
+    // A pin throws on a rejected option value (an absolute start, a 'max' end). The bad value
+    // doesn't have to be there from the start either: a function-valued option can begin
+    // returning one long after setup, on a refresh GSAP itself triggers. Scene/Cover layers keep
+    // what they planned, and every pin goes back to the last successful refresh.
+    try {
+      if (pins.length) {
+        // The ranges stay on through phase 1, so a Scene layer measures the layout the page
+        // shows. They're sealed inside outer, which #reservePinSpace has already sized.
+        pins.forEach(({ layer }) => {
+          if (layer.inner) clearHeightForRead(layer.inner);
+        });
+        plannedPins = this.#planPinLayers(viewportHeight, measureDocumentHeightWithoutPinRanges());
+      }
+    } catch (error) {
+      stickyTops.forEach((top, wrapper) => commitSticky(wrapper, top));
+      pins.forEach(({ layer, position, range }) => {
         if (!layer.inner) return;
 
         commitPosition(layer.trigger, position);
-        commitHeight(layer.inner, height);
+        commitHeight(layer.inner, range);
       });
-    };
-  }
-
-  #refreshPins(viewportHeight: number) {
-    if (!this.#pinLayers.length) return;
-
-    // #refreshScenesAndCovers already finished applying its own (possibly-stuck) sticky state by
-    // the time this runs, so trigger/endTrigger measurement below needs its own reset. This is a
-    // separate pass 1/pass 2 split from #resetPinState's, which only concerns pins' own previous
-    // sticky/spacer state.
-    const restoreSceneCoverStickyState = this.#resetSceneCoverStickyState();
-    const restorePinState = this.#resetPinState();
-
-    // Pass 2 throws on a rejected option value (an absolute start, a 'max' end) while both resets
-    // above have their CSS stripped. Without the restores below, the Scene/Cover wrappers and
-    // every pin from the throwing one onward would stay stripped until a later refresh()
-    // succeeded. The bad value doesn't have to be there from the start either: a function-valued
-    // option can begin returning one long after setup, on a refresh GSAP itself triggers.
-    try {
-      this.#refreshPinLayers(viewportHeight, measureDocumentHeightWithoutPinRanges());
-    } catch (error) {
-      // catch rather than finally (see #refreshScenesAndCovers' catch for why). The Scene/Cover
-      // reset below is measurement scaffolding that nothing rewrites, so it stays a finally.
-      restorePinState();
 
       throw error;
-    } finally {
-      restoreSceneCoverStickyState();
     }
+
+    stickyTops.forEach((top, wrapper) => commitSticky(wrapper, top));
+    // A later pin's start/end function can kill an earlier one, which unwraps it.
+    plannedPins.forEach(({ layer, topPx, range }) => {
+      if (!layer.inner) return;
+
+      commitSticky(layer.trigger, topPx);
+      commitHeight(layer.inner, `${range}px`);
+    });
+    // Last, because these values derive from the freeze windows settled above.
+    this.#syncScrollMargins(marginTops);
   }
 
-  // Pass 2 of the pin refresh, run once #resetPinState has stripped the previous values.
-  // Recomputes pin layers' sticky top and spacer height. Pinning here is plain position:sticky, so
+  // Works out pin layers' sticky top and spacer height. Pinning here is plain position:sticky, so
   // unlike Scene/Cover layers this never hands GSAP an absolute scroll position. The spacer height
   // spans from trigger's natural top to the release scroll resolvePinReleaseScroll returns, plus
   // the sticky top, trigger's own height and its bottom margin (a sticky element unpins once its
@@ -870,8 +897,8 @@ export default class StickyScrollTrigger {
   //
   // Every pin is measured before any is written: a pin inside an earlier pin's trigger would
   // otherwise be read with that pin stuck, off by its stuck offset.
-  #refreshPinLayers(viewportHeight: number, documentHeight: number) {
-    const planned = this.#pinLayers.flatMap((layer) => {
+  #planPinLayers(viewportHeight: number, documentHeight: number): PlannedPin[] {
+    return this.#pinLayers.flatMap((layer) => {
       if (!layer.inner) return [];
 
       // start comes first so a spaced '+=' end can take its element token, which is also the order
@@ -939,59 +966,10 @@ export default class StickyScrollTrigger {
 
       return [{ layer, topPx, range: Math.max(0, Math.min(height, room)) }];
     });
-
-    // A later pin's start/end function can kill an earlier one, which unwraps it.
-    planned.forEach(({ layer, topPx, range }) => {
-      if (!layer.inner) return;
-
-      commitSticky(layer.trigger, topPx);
-      commitHeight(layer.inner, `${range}px`);
-    });
   }
 
-  // Recomputes each layer's sticky top, padding height, and start/end. This disables sticky on
-  // every wrapper before the two passes below run, and puts it back if either one throws.
-  #refreshScenesAndCovers(viewportHeight: number) {
-    if (!this.#layers.length) return;
-
-    const active = this.#layers.filter((layer) => layer.wrapper !== null);
-
-    if (!active.length) return;
-
-    // Pass 2 writes the sticky state again for every wrapper cleared here.
-    const wrappers = active.flatMap(({ wrapper }) => (wrapper ? [wrapper] : []));
-    const saved = wrappers.map(captureInlinePosition);
-
-    wrappers.forEach(clearStickyForRead);
-
-    // Put back whether or not planning throws. #refreshPins rewrites pins after a success anyway,
-    // but a throw skips it and would leave every pin unstuck.
-    const restorePinStickyState = this.#resetPinStickyState();
-
-    try {
-      this.#planLayerPositions(viewportHeight, active);
-    } catch (error) {
-      // The same window and reasoning as #refreshPins' `finally`. The one difference is `catch`
-      // rather than `finally`: pass 2 writes the new sticky state itself, so after a successful
-      // pass the snapshot holds what that pass replaced, and restoring it would undo the lot.
-      wrappers.forEach((wrapper, i) => commitPosition(wrapper, saved[i]));
-
-      throw error;
-    } finally {
-      restorePinStickyState();
-    }
-  }
-
-  // Pass 1 measures every layer's natural position, then pass 2 (planLayers) works out every
-  // window and applies sticky and padding. Keeping them separate is what stops an
-  // earlier layer's applied sticky from throwing off a later layer's measurement.
-  // Forward references are resolved inside planLayers rather than by this pass ordering. An
-  // endTrigger outside the shared container isn't at the right position until padding
-  // is finalized, so pass 2 runs a second time in that case alone (cover layers only;
-  // measure.ts's resolveEndSpec rejects it for Scene layers).
-  // The arithmetic lives in freezeWindow.ts's planLayers, which touches no DOM; this function only
-  // measures and writes.
-  #planLayerPositions(viewportHeight: number, active: readonly Layer[]) {
+  // Pass 1: every layer's natural position, measured before planLayers writes any padding.
+  #measureLayers(viewportHeight: number, active: readonly Layer[]): MeasuredLayers {
     // Scene layers' wrappers line up at the start of the nested container, so every layer's
     // natural position aligns here.
     const structureTop = this.#outermostContainer ? documentTop(this.#outermostContainer) : 0;
@@ -1006,28 +984,49 @@ export default class StickyScrollTrigger {
       indexByTrigger.set(layer.trigger, index);
     });
 
-    // Pass 1: with every wrapper's sticky disabled, measure each layer's trigger/wrapper/cover
-    // natural absolute position together.
     const measured: LayerMeasurement[] = active.map((layer, ownIndex) =>
       measureLayer(this.#rootElement, viewportHeight, layer, ownIndex, indexByTrigger),
     );
-    // Pass 2: leave the arithmetic to planLayers; this only supplies measuring
-    // (measureLiveEndTriggerTop) and writing (onPlanned).
+
+    return { structureTop, measured };
+  }
+
+  // Pass 2: freezeWindow.ts's planLayers works out every window, and this writes the paddings and
+  // collects the sticky tops for #refreshGeometry to write once phase 2 is read. Forward
+  // references are resolved inside planLayers rather than by this pass ordering. An endTrigger
+  // outside the shared container isn't at the right position until padding is finalized, so pass 2
+  // runs a second time in that case alone (cover layers only; measure.ts's resolveEndSpec rejects
+  // it for Scene layers).
+  #planLayerPositions(
+    viewportHeight: number,
+    active: readonly Layer[],
+    { structureTop, measured }: MeasuredLayers,
+  ): Map<HTMLElement, number> {
+    // Only re-run pass 2 when some layer references an endTrigger outside the container (it
+    // can't be at the right position until every layer's padding has been finalized), or when
+    // some cover layer's end is 'max' (the document's true max scroll position is only known
+    // once every Scene layer's dwell padding above has actually been written).
+    const needsLiveRemeasure = measured.some(
+      (measurement) => measurement.end.mode === 'clause' && measurement.end.measureLive,
+    );
+    const needsMaxRemeasure = measured.some((measurement) => measurement.end.mode === 'max');
     // documentMaxScroll starts at 0, since no Scene layer's padding has been written yet and the
     // true value isn't known. The placeholder is harmless: only cover layers may use 'max', and a
     // cover layer's freezeEnd feeds into no other layer's measurement, so it's corrected below
     // before anything reads it a second time.
     let documentMaxScroll = 0;
-    // Sticky goes on only after the last pass: the reads below would otherwise lay out every
-    // wrapper sticky, the cost dormancy.ts avoids. What they read (the document's height, an
-    // element outside the container) doesn't depend on it.
+    // Likewise, an endTrigger outside the container reads 0 until the padding is written: the
+    // second run replaces the window the first gives that cover.
+    let measureLive = false;
     const stickyTops = new Map<HTMLElement, number>();
     const applyLayers = () =>
       planLayers(measured, {
         viewportHeight,
         structureTop,
         documentMaxScroll,
-        measureLiveEndTriggerTop: (index) => documentTop(active[index].endTrigger),
+        measureLiveEndTriggerTop: (index) => (measureLive
+          ? documentTop(active[index].endTrigger)
+          : 0),
         onPlanned: (index, plan) => {
           const layer = active[index];
 
@@ -1048,24 +1047,17 @@ export default class StickyScrollTrigger {
 
     applyLayers();
 
-    // Only re-run pass 2 when some layer references an endTrigger outside the container (it
-    // can't be at the right position until every layer's padding has been finalized), or when
-    // some cover layer's end is 'max' (the document's true max scroll position is only known
-    // once every Scene layer's dwell padding above has actually been written).
-    const needsLiveRemeasure = measured.some(
-      (measurement) => measurement.end.mode === 'clause' && measurement.end.measureLive,
-    );
-    const needsMaxRemeasure = measured.some((measurement) => measurement.end.mode === 'max');
-
     // Pin ranges are left out: the pin pass sizes them only later, stopping each at the page's end
-    // (room in #refreshPinLayers), and one still sized for a longer page would stick out past it.
+    // (room in #planPinLayers), and one still sized for a longer page would stick out past it.
     if (needsMaxRemeasure) {
       documentMaxScroll = Math.max(0, measureDocumentHeightWithoutPinRanges() - viewportHeight);
     }
 
+    measureLive = true;
+
     if (needsLiveRemeasure || needsMaxRemeasure) applyLayers();
 
-    stickyTops.forEach((top, wrapper) => commitSticky(wrapper, top));
+    return stickyTops;
   }
 
   // Public entry point. Rebuilds the nesting if triggers were added/removed, and recomputes
@@ -1229,7 +1221,7 @@ export default class StickyScrollTrigger {
     this.#restoreCoverLifts();
 
     try {
-      // Both must happen before #refreshScenesAndCovers measures Scene/Cover positions (see each
+      // Both must happen before #refreshGeometry measures Scene/Cover positions (see each
       // one's own comment for why).
       this.#wrapUnwrappedPins();
       this.#reservePinSpace();
@@ -1237,7 +1229,7 @@ export default class StickyScrollTrigger {
       // It goes back on after the build and the pin wrapping, so it walks the sibling chain those
       // leave behind rather than the elements they moved out of it. In a finally because wrapPin
       // throws for a trigger detached since registration, and the covering side would sit behind
-      // the sticky wrapper until the next successful refresh() (see #resetPinState for the same
+      // the sticky wrapper until the next successful refresh() (see #refreshGeometry for the same
       // rollback on the pin side).
       this.#liftCovers();
     }
@@ -1249,13 +1241,7 @@ export default class StickyScrollTrigger {
     const viewportHeight
       = this.#layers.length || this.#pinLayers.length ? measureViewportHeight() : 0;
 
-    this.#refreshScenesAndCovers(viewportHeight);
-    // A pin layer's spacer height spans the Scene layer dwell padding between trigger
-    // and endTrigger, so it's measured only after #refreshScenesAndCovers has finalized padding.
-    this.#refreshPins(viewportHeight);
-    // Last, because these values derive from the freeze windows the passes above settle, and
-    // nothing measures layout afterwards for the style written here to disturb.
-    this.#syncScrollMargins();
+    this.#refreshGeometry(viewportHeight);
   }
 
   #coverLayers(): CoverLayer[] {
@@ -1289,23 +1275,35 @@ export default class StickyScrollTrigger {
   // Hands the current Scene layer freeze windows to the scroll-margin bookkeeping, along with the
   // outermost container as the host for the scroll-driven ramps. That container is built by this
   // module and is an ancestor of every target, which is what lets the ramps reach them by
-  // inheritance without ever styling an element the caller owns. Targets are measured the way
-  // resolveScrollPosition measures its element, with every wrapper's sticky state reset.
-  #syncScrollMargins(): void {
+  // inheritance without ever styling an element the caller owns. tops comes from phase 1.
+  #syncScrollMargins(tops: Map<HTMLElement, number>): void {
     this.#scrollMarginSync?.sync(
       this.#engagedWindows(),
       this.#outermostContainer,
       (targets) => {
-        if (!targets.length) return [];
+        // A pin's start or end function can add a target after phase 1. It's measured the way
+        // resolveScrollPosition measures its element, with every wrapper's sticky state reset.
+        const late = targets.filter((target) => !tops.has(target));
 
-        const restoreStickyState = this.#resetStickyState();
-        const tops = targets.map((target) => documentTop(target));
+        if (late.length) {
+          const restoreStickyState = this.#resetStickyState();
 
-        restoreStickyState();
+          late.forEach((target) => tops.set(target, documentTop(target)));
+          restoreStickyState();
+        }
 
-        return tops;
+        return targets.map((target) => tops.get(target)!);
       },
     );
+  }
+
+  // Phase 1's read of the targets, skipped when no Scene layer can give the sync a window to ramp.
+  #measureScrollMarginTargets(active: readonly Layer[]): Map<HTMLElement, number> {
+    const targets = this.#scrollMarginSync && active.some(({ kind }) => kind === 'scene')
+      ? this.#scrollMarginSync.targets()
+      : [];
+
+    return new Map(targets.map((target) => [target, documentTop(target)]));
   }
 
   // PassThroughVars (types.ts) excludes these only at the TypeScript level; a plain JS/JSON

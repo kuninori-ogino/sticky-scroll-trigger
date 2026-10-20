@@ -90,6 +90,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// refresh() measures these before sync() runs, so they have to be the ones sync() writes.
+describe('targets', () => {
+  it('lists the elements sync() writes, in document order', () => {
+    expect(createSync().targets()).toEqual([query('#before'), query('#middle'), query('#after')]);
+  });
+
+  it('lists nothing when the target selector is null', () => {
+    expect(createSync(null).targets()).toEqual([]);
+  });
+});
+
 describe('sync', () => {
   // Every target carries the scroll-dependent term, which is what makes a jump started mid-page
   // land where one started from the top does, and a step per layer that decides in CSS whether

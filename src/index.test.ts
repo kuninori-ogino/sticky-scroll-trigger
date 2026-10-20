@@ -2641,7 +2641,7 @@ describe('\'max\' end keyword', () => {
   // An end that both starts with '+=' and holds a space takes the start clause's element token as
   // its base, so a start token carrying an offset of its own can't compose (see
   // prefixSpacedRelativeEnd). Both resolution paths reach it: the layer path through measureLayer,
-  // the pin path through #refreshPinLayers. What the composed value resolves to needs a real
+  // the pin path through #planPinLayers. What the composed value resolves to needs a real
   // layout, since the whole difference is the start clause's fraction of endTrigger's height, and
   // jsdom reports every height as 0, so that half is e2e's job.
   it('createStickyTrigger rejects a spaced \'+=\' end against a start clause carrying an offset', () => {
@@ -2745,10 +2745,9 @@ describe('\'max\' end keyword', () => {
     expect(trigger.parentElement!.style.height).toBe('400px');
   });
 
-  // refreshPins measures with every Scene/Cover layer's sticky state temporarily reset, and a
-  // pin's own end rejection (the 'max' case above) throws from inside that window. Restoring on the
-  // way out keeps one bad option value from stripping the sticky CSS off every layer on the page
-  // and leaving it that way.
+  // Pins are measured before any Scene/Cover wrapper goes back on sticky, and a pin's own end
+  // rejection (the 'max' case above) throws from there. Writing the planned sticky tops on the way
+  // out keeps one bad option value from leaving every layer on the page off sticky.
   it('leaves Scene layer sticky state intact when a pin option throws mid-refresh', () => {
     const { query, controller } = setup();
     const stuckWrappers = () =>
@@ -2792,6 +2791,30 @@ describe('\'max\' end keyword', () => {
     expect(() => controller.refresh()).toThrow(/'max'/);
     expect(before).toBeGreaterThan(0);
     expect(stuckWrappers()).toBe(before);
+  });
+
+  // Every pin is unstuck for reading by then too.
+  it('leaves pins stuck when a Scene option throws mid-refresh', () => {
+    const { query, controller } = setup();
+    let rejected = false;
+
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      start: 'top top',
+      end: () => (rejected ? 'max' : '+=500'),
+    });
+    controller.createStickyPin({ trigger: query('.inside'), endTrigger: query('.scene'), top: 39 });
+    controller.refresh();
+
+    const pin = query('.inside');
+
+    expect(pin.style.position).toBe('sticky');
+
+    rejected = true;
+
+    expect(() => controller.refresh()).toThrow(/'max'/);
+    expect(pin.style.position).toBe('sticky');
+    expect(pin.style.top).toBe('39px');
   });
 
   // The third case in the same family, and the one the two above leave open: the pins' own state.
@@ -3100,6 +3123,26 @@ describe('scroll-margin-top synchronization', () => {
     );
   });
 
+  // Targets are measured before the pins' start functions run, so a target added there is late.
+  it('writes a correction for a target added during refresh()', () => {
+    const { query, controller } = setupAnchors();
+    const late = document.createElement('div');
+
+    late.id = 'late';
+    placeAt(late, 100);
+    controller.createStickyPin({
+      trigger: query('#before'),
+      start: () => {
+        query('.root').append(late);
+
+        return 'top top';
+      },
+    });
+    controller.refresh();
+
+    expect(late.style.scrollMarginTop).toMatch(/\(99\.95px - var\(/);
+  });
+
   // Stays here rather than moving with the rest: it's the shared container this module hands
   // sync() that keeps the search off the whole document, and scrollMargin.test.ts builds a root of
   // its own, so a sync given document.documentElement would go unnoticed there.
@@ -3223,16 +3266,15 @@ describe('refresh() pass ordering', () => {
     expect(readsAfter).toEqual([]);
   });
 
-  // #refreshPins early-returns before it reaches #resetSceneCoverStickyState, so a controller with
-  // no pins never strips a Scene wrapper on the pin pass's behalf. Bracketing the pin pass with a
-  // Scene-side reset would leave the same DOM, having stripped and restored every wrapper on the
-  // page for nothing.
-  it('strips a Scene wrapper once per refresh when no pin is registered', () => {
+  // Every read shares one sticky-off state, so a pin or a scroll-margin target adds no strip of its
+  // own. Another would leave the same DOM, having stripped and restored every wrapper for nothing.
+  it('strips a Scene wrapper once per refresh', () => {
     const countStrips = (register: (controller: StickyScrollTrigger) => void) => {
       document.body.innerHTML = `
         <div class="root">
           <section class="scene"></section>
           <section class="pin"></section>
+          <div id="anchor"></div>
         </div>
       `;
 
@@ -3255,13 +3297,12 @@ describe('refresh() pass ordering', () => {
     };
 
     expect(countStrips(() => {})).toBe(1);
-    // The pin pass may strip again, or share the Scene pass's reset.
     expect(
       countStrips((controller) => controller.createStickyPin({ trigger: query('.pin') })),
-    ).toBeLessThanOrEqual(2);
+    ).toBe(1);
   });
 
-  // Why those reads come first: see #planLayerPositions.
+  // Why those reads come first: see #refreshGeometry.
   for (const [label, end, readOf, property] of [
     ['\'max\' end', { end: 'max' }, () => document.documentElement, 'scrollHeight'],
     ['outside endTrigger', { end: 'top top', endTrigger: '.out' }, () => query('.out'), 'offsetTop'],
