@@ -50,7 +50,16 @@
 
       ScrollTrigger.refresh();
 
-      window.__scrollTo = async (y) => {
+      // With hold, a pointer stays down until __killFirst: GSAP ends no scroll while one is down,
+      // so slow frames can't end it early.
+      let pressed = false;
+
+      window.__scrollTo = async (y, hold = false) => {
+        if (hold) {
+          pressed = true;
+          document.dispatchEvent(new Event('pointerdown'));
+        }
+
         window.scrollTo(0, y);
         await frames();
 
@@ -106,6 +115,11 @@
         await frames();
 
         const held = { tailTop: tailTop(), scrollY: window.scrollY };
+
+        if (pressed) {
+          pressed = false;
+          document.dispatchEvent(new Event('pointerup'));
+        }
 
         while (ScrollTrigger.isScrolling()) await frames();
         // Past the poll for the end of the scroll.

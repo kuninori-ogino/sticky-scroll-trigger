@@ -86,6 +86,10 @@
       // Runs the setup again at rest, or with ?destroy only reverts it, and reports how far the
       // tail moved.
       window.__rerunAtRest = async (rerun) => {
+        // The caller's scroll event lands within a frame; GSAP ends that scroll 200-450ms later.
+        await frame();
+        while (ScrollTrigger.isScrolling()) await frame();
+
         const top = tail.getBoundingClientRect().top;
 
         ctx.revert();

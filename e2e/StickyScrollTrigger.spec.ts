@@ -2425,7 +2425,7 @@ test('a matchMedia switch with a new instance per setup keeps the layout of the 
 // killRefreshAnchor.html's hooks.
 interface KillRefreshAnchorWindow {
   __ready: boolean;
-  __scrollTo: (y: number) => Promise<number>;
+  __scrollTo: (y: number, hold?: boolean) => Promise<number>;
   __killAndRefresh: (killAll: boolean) => Promise<{
     sameTask: { tailTop: number; plainStart: number | null };
     settled: { tailTop: number; scrollY: number };
@@ -2544,7 +2544,8 @@ for (const atRest of [true, false]) {
       await openKillRefreshAnchor(page, undefined, undefined, noAnchor);
 
       const before = await page.evaluate(
-        () => (window as never as KillRefreshAnchorWindow).__scrollTo(900),
+        (hold) => (window as never as KillRefreshAnchorWindow).__scrollTo(900, hold),
+        !atRest,
       );
       const result = await page.evaluate(
         (rest) => (window as never as KillRefreshAnchorWindow).__killFirst(rest),
@@ -2716,7 +2717,6 @@ for (const destroy of [false, true]) {
         await page.goto(`/fixtures/revertMidScroll.html${params ? `?${params}` : ''}`);
         await page.waitForFunction(() => (window as never as RevertMidScrollWindow).__ready);
         await page.evaluate(() => window.scrollTo(0, 2500));
-        await page.waitForTimeout(500);
 
         const shift = await page.evaluate(
           (again) => (window as never as RevertMidScrollWindow).__rerunAtRest(again),
