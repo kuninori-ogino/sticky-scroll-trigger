@@ -186,6 +186,31 @@ test('createStickyPin computes the same spacer height whether refresh() runs at 
   expect(whileStuck).toBe(baseline);
 });
 
+// #innerPin sits 150px down #outerPin's trigger, at 350; its range runs to .tail's top at 2100,
+// plus its own 50px. At scroll 600 #outerPin has been stuck for 400px. Registered first, the
+// inner pin is measured before the outer one is written in either pass order.
+for (const reverse of [false, true]) {
+  test(`a pin inside another pin's trigger keeps its range through a refresh() while that pin is stuck (${reverse ? 'inner' : 'outer'} pin registered first)`, async ({ page }) => {
+    await page.goto(`/fixtures/pinInsidePin.html${reverse ? '?reverse' : ''}`);
+
+    type FixtureWindow = Window & { __refresh: () => void; __innerRange: () => number };
+
+    const rangeAfterRefresh = () => page.evaluate(() => {
+      const w = window as unknown as FixtureWindow;
+
+      w.__refresh();
+
+      return w.__innerRange();
+    });
+
+    expect(await rangeAfterRefresh()).toBe(1800);
+
+    await page.evaluate(() => window.scrollTo(0, 600));
+
+    expect(await rangeAfterRefresh()).toBe(1800);
+  });
+}
+
 // resolveScrollPosition is meant to return a fixed absolute scroll position for a given
 // element/clause, independent of when it's called. Once refresh() has applied a Scene
 // wrapper's position:sticky CSS, the browser keeps engaging and disengaging it natively as

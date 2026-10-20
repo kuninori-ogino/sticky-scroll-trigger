@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinInsidePin fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .head {
+        height: 200px;
+      }
+      #outerPin {
+        height: 400px;
+      }
+      .lead {
+        height: 150px;
+      }
+      /* Inside #outerPin's trigger, so it rides along while that pin is stuck. */
+      #innerPin {
+        height: 50px;
+      }
+      .gap {
+        height: 1500px;
+      }
+      .tail {
+        height: 3300px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="head"></div>
+    <div id="outerPin">
+      <div class="lead"></div>
+      <div id="innerPin"></div>
+    </div>
+    <div class="gap"></div>
+    <div class="tail"></div>
+    <div class="root"><section></section></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const sticky = new StickyScrollTrigger('.root');
+      const pins = ['#outerPin', '#innerPin'];
+
+      // ?reverse registers the inner pin first.
+      if (new URLSearchParams(location.search).has('reverse')) pins.reverse();
+
+      pins.forEach((trigger) =>
+        sticky.createStickyPin({ trigger, endTrigger: '.tail', end: 'top top' }),
+      );
+
+      // No GSAP: the spec calls refresh() at the scroll positions it picks.
+      window.__refresh = () => sticky.refresh();
+      window.__innerRange = () => document.getElementById('innerPin').parentElement.offsetHeight;
+    </script>
+  </body>
+</html>

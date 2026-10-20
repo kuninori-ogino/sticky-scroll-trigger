@@ -1535,6 +1535,48 @@ describe('measuring while a pin is stuck', () => {
     expect(query('#child').style.scrollMarginTop).toContain('(299.95px - var(');
     expect(pin.style.position).toBe('sticky');
   });
+
+  // The outer pin is registered first, so it's written first.
+  const setupNestedPins = () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <div class="pin"><div id="child"></div></div>
+        <div class="other"></div>
+      </div>
+      <div class="end"></div>
+    `;
+    placeAt(query('.end'), 2000);
+
+    return new StickyScrollTrigger(query('.root'));
+  };
+
+  const range = (trigger: HTMLElement) => trigger.parentElement!.style.height;
+
+  it('refresh() measures a pin inside an earlier pin\'s trigger with that pin reset', () => {
+    const controller = setupNestedPins();
+    const end = { endTrigger: query('.end'), end: 'top top' };
+
+    shiftWhileSticky(query('#child'), query('.pin'), 300);
+    controller.createStickyPin({ trigger: query('.pin'), ...end });
+    controller.createStickyPin({ trigger: query('#child'), ...end });
+    controller.refresh();
+
+    expect(range(query('#child'))).toBe('1700px');
+    expect(range(query('.pin'))).toBe('2000px');
+    expect(query('.pin').style.position).toBe('sticky');
+  });
+
+  it('refresh() measures an endTrigger inside an earlier pin\'s trigger with that pin reset', () => {
+    const controller = setupNestedPins();
+
+    placeAt(query('.other'), 100);
+    shiftWhileSticky(query('#child'), query('.pin'), 1000);
+    controller.createStickyPin({ trigger: query('.pin'), endTrigger: query('.end'), end: 'top top' });
+    controller.createStickyPin({ trigger: query('.other'), endTrigger: query('#child'), end: 'top top' });
+    controller.refresh();
+
+    expect(range(query('.other'))).toBe('900px');
+  });
 });
 
 // createResolvedTrigger is a thin wrapper that calls resolveScrollPosition once for trigger/start
@@ -2089,6 +2131,28 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
 
     expect(trigger.style.position).toBe('relative');
     expect(trigger.style.top).toBe('8px');
+  });
+
+  it('a pin killed from a later pin\'s end function keeps its trigger\'s inline position', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+    const vars = controller.createStickyPin({ trigger, endTrigger: query('.scene') });
+    let killed = false;
+
+    controller.createStickyPin({
+      trigger: query('.outside'),
+      endTrigger: query('.scene'),
+      end: () => {
+        if (!killed) vars.onKill?.(fakeSelf);
+
+        killed = true;
+
+        return 'top top';
+      },
+    });
+    controller.refresh();
+
+    expect(trigger.style.position).toBe('');
   });
 
   // The ordinary teardown order is destroy(), then killing the ScrollTriggers, so onKill runs on

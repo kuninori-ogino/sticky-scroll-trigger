@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A `createStickyPin` with its `trigger` or `endTrigger` inside the `trigger` of a pin registered earlier on the same instance now keeps its range when `refresh()` runs while that earlier pin is stuck. The element was measured where the stuck pin had carried it
+
 ## [0.13.0] - 2026-10-20
 
 - Killing a `createOverlapScroll` layer now puts `trigger` and the elements before it back in place at once rather than in a microtask. A `gsap.matchMedia()` setup that runs right after a breakpoint's kill found them still inside the old wrapper, so `createOverlapScroll` on the same `trigger` threw: the default `cover` (`trigger.nextElementSibling`) was missing, and an explicit `cover` was no longer `trigger`'s sibling (see [`refresh()`](README.md#refresh))

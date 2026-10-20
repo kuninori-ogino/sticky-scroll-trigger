@@ -197,7 +197,7 @@ Each `refresh()` runs these steps in order (`#refreshLayout` holds steps 1 to 8)
 4. Put the cover lifts back over the sibling chain steps 1 and 3 left, even when step 3 throws for a detached `trigger`.
 5. Measure the viewport height once, for the Scene/Cover passes and the pins alike.
 6. Plan the Scene and Cover layers in the two passes of [Two-pass position measurement](#two-pass-position-measurement), writing each padding as its window is planned and every sticky top after the last pass.
-7. Size the pins, now that the padding between each `trigger` and `endTrigger` is final.
+7. Size the pins, now that the padding between each `trigger` and `endTrigger` is final, measuring every pin before writing any.
 8. Sync the scroll margins to the settled freeze windows.
 9. Rebuild the page-level dormancy table, also after a throw in steps 1 to 8.
 10. Write the scroll-margin ramps from the current scroll, on engines that drive them from script.

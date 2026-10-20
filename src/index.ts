@@ -857,9 +857,12 @@ export default class StickyScrollTrigger {
   // margin box catches up to the bottom of its containing block). A pin inside the shared
   // container stands still with it through every freeze, so its range, measured in the
   // container's own coordinates, leaves out the dwell gone by at release.
+  //
+  // Every pin is measured before any is written: a pin inside an earlier pin's trigger would
+  // otherwise be read with that pin stuck, off by its stuck offset.
   #refreshPinLayers(viewportHeight: number, documentHeight: number) {
-    this.#pinLayers.forEach((layer) => {
-      if (!layer.inner) return;
+    const planned = this.#pinLayers.flatMap((layer) => {
+      if (!layer.inner) return [];
 
       // start comes first so a spaced '+=' end can take its element token, which is also the order
       // GSAP resolves the two in (ScrollTrigger.js:1384-1391).
@@ -924,8 +927,15 @@ export default class StickyScrollTrigger {
       // sticky offsets out of the scrollable area. jsdom reports no height, so there's no end.
       const room = documentHeight > 0 ? documentHeight - triggerTop : Infinity;
 
+      return [{ layer, topPx, range: Math.max(0, Math.min(height, room)) }];
+    });
+
+    // A later pin's start/end function can kill an earlier one, which unwraps it.
+    planned.forEach(({ layer, topPx, range }) => {
+      if (!layer.inner) return;
+
       applyStickyPosition(layer.trigger, topPx);
-      layer.inner.style.height = `${Math.max(0, Math.min(height, room))}px`;
+      layer.inner.style.height = `${range}px`;
     });
   }
 
