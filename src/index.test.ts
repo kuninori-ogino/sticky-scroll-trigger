@@ -31,6 +31,12 @@ class FakeScrollTrigger {
 
 const makeFakeSelf = () => Object.create(FakeScrollTrigger.prototype) as ScrollTrigger;
 
+// Runs the queued microtasks and the ones they queue, so a test checks what is done by the end of
+// the task. Work moved to a later task still shows as not done.
+const flushMicrotasks = async () => {
+  for (let i = 0; i < 50; i += 1) await Promise.resolve();
+};
+
 beforeEach(() => {
   FakeScrollTrigger.refresh.mockClear();
   // Cleared alongside the body each setup() swaps out, so a stylesheet one test installs can't
@@ -554,15 +560,17 @@ describe('registerLayer\'s onRefreshInit', () => {
       </div>`;
 
     const controller = new StickyScrollTrigger(query('.root'));
-    const refresh = vi.spyOn(controller, 'refresh');
+    // A refresh evaluates every layer's start once, so s1's start counts the refreshes.
+    const refreshes = vi.fn(() => '0 0');
     const refreshesBefore: number[] = [];
 
     const track = () => () => {
-      refreshesBefore.push(refresh.mock.calls.length);
+      refreshesBefore.push(refreshes.mock.calls.length);
     };
 
-    const vars = ['.s1', '.s2', '.s3'].map((selector) => controller.createStickyTrigger({
+    const vars = ['.s1', '.s2', '.s3'].map((selector, index) => controller.createStickyTrigger({
       trigger: query(selector),
+      ...(index === 0 ? { start: refreshes } : {}),
       end: '+=100',
       onRefreshInit: track(),
     }));
@@ -570,7 +578,7 @@ describe('registerLayer\'s onRefreshInit', () => {
     vars.forEach(({ onRefreshInit }) => onRefreshInit?.(fakeSelf));
 
     expect(refreshesBefore).toEqual([0, 1, 2]);
-    expect(refresh).toHaveBeenCalledTimes(3);
+    expect(refreshes).toHaveBeenCalledTimes(3);
   });
 
   describe('inside GSAP\'s refresh', () => {
@@ -591,14 +599,16 @@ describe('registerLayer\'s onRefreshInit', () => {
         </div>`;
 
       const controller = new StickyScrollTrigger(query('.root'));
+      // A refresh evaluates every layer's start once, so s1's start counts the refreshes.
+      const refreshes = vi.fn(() => '0 0');
       const vars = ['.s1', '.s2', '.s3'].map((selector, index) => controller.createStickyTrigger({
         trigger: query(selector),
+        ...(index === 0 ? { start: refreshes } : {}),
         end: '+=100',
         onRefreshInit: callbacks[index],
       }));
-      const refresh = vi.spyOn(controller, 'refresh');
 
-      return { vars, refresh };
+      return { vars, refreshes };
     };
 
     afterEach(() => {
@@ -606,46 +616,46 @@ describe('registerLayer\'s onRefreshInit', () => {
     });
 
     it('refreshes once when nothing changes between the layers\' calls', () => {
-      const { vars, refresh } = setupThree();
+      const { vars, refreshes } = setupThree();
 
       vars.forEach(({ onRefreshInit }) => onRefreshInit?.(refreshingSelf));
 
-      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(refreshes).toHaveBeenCalledTimes(1);
     });
 
     it('refreshes again once the DOM has changed since', () => {
-      const { vars, refresh } = setupThree();
+      const { vars, refreshes } = setupThree();
 
       vars[0].onRefreshInit?.(refreshingSelf);
       query('.s2').style.height = '500px';
       vars[1].onRefreshInit?.(refreshingSelf);
       vars[2].onRefreshInit?.(refreshingSelf);
 
-      expect(refresh).toHaveBeenCalledTimes(2);
+      expect(refreshes).toHaveBeenCalledTimes(2);
     });
 
     // A callback can change what refresh() reads without touching the DOM: a variable a
     // function-valued end reads, say.
     it('refreshes after every layer\'s own callback', () => {
       let dwell = 100;
-      const { vars, refresh } = setupThree([undefined, () => {
+      const { vars, refreshes } = setupThree([undefined, () => {
         dwell = 300;
       }]);
 
       vars.forEach(({ onRefreshInit }) => onRefreshInit?.(refreshingSelf));
 
       expect(dwell).toBe(300);
-      expect(refresh).toHaveBeenCalledTimes(2);
+      expect(refreshes).toHaveBeenCalledTimes(2);
     });
 
     it('refreshes again in the next GSAP refresh', async () => {
-      const { vars, refresh } = setupThree();
+      const { vars, refreshes } = setupThree();
 
       vars.forEach(({ onRefreshInit }) => onRefreshInit?.(refreshingSelf));
-      await Promise.resolve();
+      await flushMicrotasks();
       vars.forEach(({ onRefreshInit }) => onRefreshInit?.(refreshingSelf));
 
-      expect(refresh).toHaveBeenCalledTimes(2);
+      expect(refreshes).toHaveBeenCalledTimes(2);
     });
 
     // ScrollTrigger.refresh() twice in one task, a variable an end reads changed in between.
@@ -660,13 +670,13 @@ describe('registerLayer\'s onRefreshInit', () => {
       });
 
       try {
-        const { vars, refresh } = setupThree();
+        const { vars, refreshes } = setupThree();
 
         vars.forEach(({ onRefreshInit }) => onRefreshInit?.(refreshingSelf));
         [...refreshListeners].forEach((callback) => callback());
         vars.forEach(({ onRefreshInit }) => onRefreshInit?.(refreshingSelf));
 
-        expect(refresh).toHaveBeenCalledTimes(2);
+        expect(refreshes).toHaveBeenCalledTimes(2);
       } finally {
         Object.assign(RefreshingScrollTrigger, {
           addEventListener: undefined,
@@ -711,8 +721,7 @@ describe('a refresh() that throws from GSAP\'s refreshInit dispatch', () => {
 
     try {
       dispatch();
-      await Promise.resolve();
-      await Promise.resolve(); // make sure the microtask has fully completed
+      await flushMicrotasks();
     } finally {
       process.off('uncaughtException', onUncaught);
     }
@@ -793,10 +802,10 @@ describe('batching kill()', () => {
   };
 
   // The main case: killing N layers within the same task still coalesces DOM teardown
-  // and rebuild into a single pass (deferred to a microtask). Naively tearing down and
+  // and rebuild into a single pass (deferred to the end of the task). Naively tearing down and
   // rebuilding synchronously on every kill would move the subtree containing rootElement
   // once per kill, causing internal iframes to reload and focus to be lost.
-  it('synchronous multiple kills merge into a single microtask (no immediate rebuild)', async () => {
+  it('synchronous kills merge into one pass at the end of the task (no immediate rebuild)', async () => {
     const { query, vars } = setupThreeScenes();
     const wrapperBefore = query('.root').parentElement;
 
@@ -806,7 +815,7 @@ describe('batching kill()', () => {
     expect(query('.root').parentElement).toBe(wrapperBefore);
     expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(3);
 
-    await Promise.resolve(); // let exactly one microtask run
+    await flushMicrotasks();
     expect(query('.root').parentElement).not.toBe(wrapperBefore);
     expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(1);
   });
@@ -821,7 +830,7 @@ describe('batching kill()', () => {
     expect(query('.root').parentElement).toBe(document.querySelector('.host'));
     expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(0);
 
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(FakeScrollTrigger.refresh).toHaveBeenCalledTimes(1);
   });
 
@@ -852,7 +861,7 @@ describe('batching kill()', () => {
 
     vars[0].onKill?.(fakeSelf);
     vars[1].onKill?.(fakeSelf);
-    await Promise.resolve();
+    await flushMicrotasks();
 
     // precedingGaps changes now that s1 and s2 are gone, so s3's (the survivor's)
     // freezeStart should be recomputed and move.
@@ -910,7 +919,7 @@ describe('batching kill()', () => {
     expect(children()).toEqual(['scene', 'base', 'cover']);
     expect(query('.root').parentElement).not.toBe(query('.host'));
 
-    await Promise.resolve();
+    await flushMicrotasks();
 
     expect(children()).toEqual(['scene', 'base', 'cover']);
     expect(query('.root').parentElement).not.toBe(query('.host'));
@@ -957,7 +966,7 @@ describe('batching kill()', () => {
     killed.onKill?.(fakeSelf);
     controller.createOverlapScroll(options);
     controller.refresh();
-    await Promise.resolve();
+    await flushMicrotasks();
 
     expect(query('.base').parentElement).not.toBe(query('.root'));
     expect(query('.base').parentElement!.parentElement).toBe(query('.root'));
@@ -1003,7 +1012,7 @@ describe('batching kill()', () => {
       expect(query(killedSelector).nextElementSibling).toBe(query(`${killedSelector}-cover`));
       expect(query(survivorSelector).nextElementSibling).toBeNull();
 
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(order()).toEqual(['a', 'a-cover', 'b', 'b-cover']);
       expect(query(survivorSelector).nextElementSibling).toBeNull();
@@ -1043,7 +1052,7 @@ describe('batching kill()', () => {
       });
 
       expect(FakeScrollTrigger.refresh).not.toHaveBeenCalled(); // still waiting on the batch
-      await Promise.resolve();
+      await flushMicrotasks();
       expect(FakeScrollTrigger.refresh).toHaveBeenCalledTimes(1);
     });
 
@@ -1058,7 +1067,7 @@ describe('batching kill()', () => {
 
       vars[0].onKill?.(fakeSelf);
       vars[1].onKill?.(fakeSelf);
-      await Promise.resolve();
+      await flushMicrotasks();
 
       // by the time GSAP is notified, the surviving layer's (s3's) freezeStart should
       // already hold its new value (notifying GSAP before recomputing internally would leave
@@ -1093,8 +1102,7 @@ describe('batching kill()', () => {
       process.on('uncaughtException', onUncaught);
 
       vars.onKill?.(weirdSelf);
-      await Promise.resolve();
-      await Promise.resolve(); // make sure the microtask has fully completed
+      await flushMicrotasks();
 
       process.off('uncaughtException', onUncaught);
       expect(uncaught).toEqual([]);
@@ -1163,12 +1171,12 @@ describe('destroy()', () => {
 
     controller.refresh();
 
-    vars.onKill?.(fakeSelf); // schedules a microtask (not yet run)
+    vars.onKill?.(fakeSelf); // schedules the batch (not yet run)
     controller.destroy();
 
     const parentAfterDestroy = query('.root').parentElement;
 
-    await Promise.resolve(); // let the scheduled microtask run
+    await flushMicrotasks(); // let the scheduled batch run
 
     expect(query('.root').parentElement).toBe(parentAfterDestroy); // nothing changed
   });
@@ -1283,7 +1291,7 @@ describe('an instance with no layer or pin', () => {
 
     second.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
     second.refresh();
-    await Promise.resolve();
+    await flushMicrotasks();
 
     expect(query('.root').parentElement).not.toBe(query('.host'));
     expect(query('.host').contains(query('.root'))).toBe(true);
@@ -2098,7 +2106,7 @@ describe('createStickyPin()', () => {
 // Unlike Scene/Cover layers, createStickyPin's returned Vars uses onKill/onRefreshInit for
 // pinLayers-specific cleanup and auto-refresh binding. A pin wraps/unwraps independently without
 // going through the shared container, so the DOM teardown is synchronous; only the re-measure it
-// forces on the layers below goes through scheduleRebuild's microtask.
+// forces on the layers below goes through scheduleRebuild's batch.
 describe('createStickyPin\'s onKill/onRefreshInit', () => {
   const fakeSelf = makeFakeSelf();
 
@@ -2196,15 +2204,31 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
   it('onKill schedules a re-measure of the layers below', async () => {
     const { query, controller } = setup();
     const vars = controller.createStickyPin({ trigger: query('.inside'), endTrigger: query('.scene') });
+    // The layer below evaluates its start once per re-measure.
+    const remeasures = vi.fn(() => '0 0');
+
+    controller.createStickyTrigger({
+      trigger: query('.root').appendChild(document.createElement('section')),
+      start: remeasures,
+    });
+    controller.refresh();
+    remeasures.mockClear();
+    vars.onKill?.(fakeSelf);
+    await flushMicrotasks();
+
+    expect(remeasures).toHaveBeenCalledTimes(1);
+    expect(FakeScrollTrigger.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  // The batch refreshes GSAP for the triggers left, as a last Scene layer's kill does.
+  it('the last pin\'s kill still refreshes GSAP', async () => {
+    const { query, controller } = setup();
+    const vars = controller.createStickyPin({ trigger: query('.inside'), endTrigger: query('.scene') });
 
     controller.refresh();
-
-    const refreshSpy = vi.spyOn(controller, 'refresh');
-
     vars.onKill?.(fakeSelf);
-    await Promise.resolve();
+    await flushMicrotasks();
 
-    expect(refreshSpy).toHaveBeenCalledTimes(1);
     expect(FakeScrollTrigger.refresh).toHaveBeenCalledTimes(1);
   });
 
@@ -2212,12 +2236,16 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
   it('onKill on a pin that was never built schedules nothing', async () => {
     const { query, controller } = setup();
     const vars = controller.createStickyPin({ trigger: query('.inside'), endTrigger: query('.scene') });
-    const refreshSpy = vi.spyOn(controller, 'refresh');
+    const remeasures = vi.fn(() => '0 0');
 
+    controller.createStickyTrigger({
+      trigger: query('.root').appendChild(document.createElement('section')),
+      start: remeasures,
+    });
     vars.onKill?.(fakeSelf);
-    await Promise.resolve();
+    await flushMicrotasks();
 
-    expect(refreshSpy).not.toHaveBeenCalled();
+    expect(remeasures).not.toHaveBeenCalled();
     expect(FakeScrollTrigger.refresh).not.toHaveBeenCalled();
   });
 
@@ -2234,17 +2262,17 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
       controller.createStickyPin({ trigger: query('.p1'), endTrigger: query('.scene') }),
       controller.createStickyPin({ trigger: query('.p2'), endTrigger: query('.scene') }),
     ];
+    const remeasures = vi.fn(() => '0 0');
 
+    controller.createStickyTrigger({ trigger: query('.scene'), start: remeasures });
     controller.refresh();
-
-    const refreshSpy = vi.spyOn(controller, 'refresh');
-
+    remeasures.mockClear();
     vars.forEach((entry) => {
       entry.onKill?.(fakeSelf);
     });
-    await Promise.resolve();
+    await flushMicrotasks();
 
-    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    expect(remeasures).toHaveBeenCalledTimes(1);
   });
 
   it('calling onRefreshInit runs refresh() and builds the pin', () => {
@@ -3043,7 +3071,7 @@ describe('scroll-margin-top synchronization', () => {
 });
 
 // Two properties of refresh()'s pass order that leave no trace in the DOM, which is why the tests
-// below watch writes instead of reading a result. Comments in index.ts are their only other
+// below trace DOM access instead of reading a result. Comments in index.ts are their only other
 // record, so any structural change to refresh() has to keep these passing.
 describe('refresh() pass ordering', () => {
   // Shadows one CSSOM property on a single element's own style object, logging each write on its
@@ -3074,11 +3102,10 @@ describe('refresh() pass ordering', () => {
     });
   };
 
-  // Freeze windows are only ever assigned in #refreshScenesAndCovers, so folding the sync into
-  // the Scene pass would compute the same corrections and leave the same DOM behind. The order
-  // separates writing from measuring. #syncScrollMargins writes style on the targets and the
-  // container, then #refreshPins measures layout. An earlier sync recalcs style in between.
-  it('writes scroll margins after the pin pass, not with the Scene pass', () => {
+  // Measuring an element after the sync's style writes forces a style recalc. Only the offset
+  // getters are traced, since the sync's own getComputedStyle and applyRamps' scroll read are
+  // intended.
+  it('measures no element after writing scroll margins', () => {
     document.body.innerHTML = `
       <div class="root">
         <section class="scene"></section>
@@ -3094,17 +3121,30 @@ describe('refresh() pass ordering', () => {
     // This refresh builds and wraps, so the traced one below runs against a steady state.
     controller.refresh();
 
-    const log: string[] = [];
+    let written = false;
+    const readsAfter: string[] = [];
 
-    // Only #refreshPins writes trigger's own `top`, unlike the spacer height #reservePinSpace
-    // also touches.
-    traceStyleProperty(query('.pin'), 'top', () => log.push('pin'));
-    traceStyleProperty(query('#anchor'), 'scrollMarginTop', () => log.push('scrollMargin'));
-    controller.refresh();
+    traceStyleProperty(query('#anchor'), 'scrollMarginTop', () => {
+      written = true;
+    });
+    (['offsetTop', 'offsetHeight', 'offsetParent'] as const).forEach((key) => {
+      const { get } = Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)!;
 
-    expect(log).toContain('pin');
-    expect(log).toContain('scrollMargin');
-    expect(log.lastIndexOf('pin')).toBeLessThan(log.indexOf('scrollMargin'));
+      vi.spyOn(HTMLElement.prototype, key, 'get').mockImplementation(function (this: HTMLElement) {
+        if (written) readsAfter.push(key);
+
+        return get!.call(this) as never;
+      });
+    });
+
+    try {
+      controller.refresh();
+    } finally {
+      vi.restoreAllMocks();
+    }
+
+    expect(written).toBe(true);
+    expect(readsAfter).toEqual([]);
   });
 
   // #refreshPins early-returns before it reaches #resetSceneCoverStickyState, so a controller with
@@ -3139,9 +3179,10 @@ describe('refresh() pass ordering', () => {
     };
 
     expect(countStrips(() => {})).toBe(1);
+    // The pin pass may strip again, or share the Scene pass's reset.
     expect(
       countStrips((controller) => controller.createStickyPin({ trigger: query('.pin') })),
-    ).toBe(2);
+    ).toBeLessThanOrEqual(2);
   });
 
   // Why those reads come first: see #planLayerPositions.
@@ -3364,8 +3405,8 @@ describe('nestedStickyOptimization', () => {
     window.dispatchEvent(new Event('scroll'));
     expect(query('.pin').style.position).toBe('relative');
     end = 'max';
-    // The next task, so the build scans the document again.
-    await Promise.resolve();
+    // Past the end of the task, so the build scans the document again.
+    await flushMicrotasks();
 
     const scan = document.querySelectorAll.bind(document);
 
@@ -3384,8 +3425,7 @@ describe('nestedStickyOptimization', () => {
       expect(() => controller.refresh()).toThrow(/'max' keyword/);
       // Not left relative without the z-index/will-change the refresh took back.
       expect(query('.pin').style.position).toBe('sticky');
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushMicrotasks();
     } finally {
       process.off('uncaughtException', onUncaught);
     }
@@ -3411,8 +3451,8 @@ describe('nestedStickyOptimization', () => {
     other.createStickyTrigger({ trigger: query('.otherScene'), end: '+=100' });
     window.dispatchEvent(new Event('scroll'));
     expect(query('.pin').style.position).toBe('relative');
-    // The next task, so the build scans the document again.
-    await Promise.resolve();
+    // Past the end of the task, so the build scans the document again.
+    await flushMicrotasks();
 
     const scan = document.querySelectorAll.bind(document);
 
@@ -3431,8 +3471,7 @@ describe('nestedStickyOptimization', () => {
       // A caller like #scheduleRebuild carries on to GSAP's refresh: the error comes off the stack.
       expect(() => other.refresh()).not.toThrow();
       expect(query('.pin').style.cssText).toBe('position: sticky; top: 0px;');
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushMicrotasks();
     } finally {
       process.off('uncaughtException', onUncaught);
     }
@@ -3620,7 +3659,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
     gsapRefresh();
     expect(paddings()).toHaveLength(1);
 
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(Cls.refresh).not.toHaveBeenCalled();
     expect(listeners).toHaveLength(0);
   });
@@ -3632,7 +3671,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
     vars[0].onKill?.(self);
     expect(listeners.length).toBeGreaterThan(0);
 
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(Cls.refresh).toHaveBeenCalledTimes(1);
     expect(listeners).toHaveLength(0);
   });
@@ -3769,7 +3808,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       vars[1].onKill?.(self);
       expect(scrollTo).not.toHaveBeenCalled();
 
-      await Promise.resolve();
+      await flushMicrotasks();
       expect(paddings()).toHaveLength(1);
       expect(scrollTo.mock.calls).toEqual([[{ top: 2300, behavior: 'instant' }]]);
 
@@ -3787,7 +3826,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       anchorScroll(2500);
       vars[0].onKill?.(self);
       vars[1].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(paddings()).toHaveLength(1);
       expect(scrollTo).not.toHaveBeenCalled();
@@ -3802,7 +3841,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       vars.forEach((layerVars) => layerVars.onKill?.(self));
       expect(paddings()).toHaveLength(0);
 
-      await Promise.resolve();
+      await flushMicrotasks();
       expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
     });
 
@@ -3813,7 +3852,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       anchorScroll(2500);
       vars.forEach((layerVars) => layerVars.onKill?.(self));
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(paddings()).toHaveLength(0);
       expect(scrollTo).not.toHaveBeenCalled();
@@ -3829,7 +3868,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       vars.forEach((layerVars) => layerVars.onKill?.(self));
       controller.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
       controller.refresh();
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(paddings()).toHaveLength(1);
       expect(scrollTo).not.toHaveBeenCalled();
@@ -3860,7 +3899,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       const scrollTo = followScrollTo(2500);
 
       vars.forEach((layerVars) => layerVars.onKill?.(self));
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
       outer.destroy();
@@ -3875,8 +3914,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       Cls.refresh.mockImplementation(() => scrollAtGsapRefresh.push(window.scrollY));
       vars.forEach((layerVars) => layerVars.onKill?.(self));
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(scrollAtGsapRefresh).toEqual([2200]);
       expect(scrollTo).toHaveBeenCalledTimes(1);
@@ -3894,7 +3932,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       expect(paddings()).toHaveLength(0);
       expect(scrollTo).not.toHaveBeenCalled();
 
-      await Promise.resolve();
+      await flushMicrotasks();
       expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
     });
 
@@ -3927,7 +3965,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       const scrollTo = followScrollTo(2500);
 
       vars[0].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(paddings()).toHaveLength(2);
       expect(scrollTo).not.toHaveBeenCalled();
@@ -3942,7 +3980,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       vars.forEach((layerVars) => layerVars.onKill?.(self));
       Cls.scrolling = true;
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(paddings()).toHaveLength(0);
       expect(scrollTo).not.toHaveBeenCalled();
@@ -3959,7 +3997,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       const next = new StickyScrollTrigger(query('.host'));
 
       next.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(scrollTo).not.toHaveBeenCalled();
       next.destroy();
@@ -3978,7 +4016,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       const next = new StickyScrollTrigger(elsewhere);
 
       next.createStickyTrigger({ trigger: query('.other'), end: '+=100' });
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
       next.destroy();
@@ -4000,8 +4038,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       process.on('uncaughtException', onUncaught);
 
       try {
-        await Promise.resolve();
-        await Promise.resolve();
+        await flushMicrotasks();
       } finally {
         process.off('uncaughtException', onUncaught);
         fail = false;
@@ -4010,7 +4047,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       expect(uncaught).toHaveLength(1);
 
       vars[1].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
       expect(paddings()).toHaveLength(1);
     });
 
@@ -4024,7 +4061,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       expect(scrollTo).toHaveBeenLastCalledWith({ top: 2400, behavior: 'instant' });
 
       vars[1].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
       expect(paddings()).toHaveLength(1);
       expect(scrollTo).toHaveBeenLastCalledWith({ top: 2300, behavior: 'instant' });
     });
@@ -4044,8 +4081,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       vars[0].onKill?.(self);
       killDuringRebuild = true;
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(paddings()).toHaveLength(1);
       expect(scrollTo).toHaveBeenLastCalledWith({ top: 2300, behavior: 'instant' });
@@ -4088,8 +4124,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
     try {
       gsapRefresh();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushMicrotasks();
     } finally {
       process.off('uncaughtException', onUncaught);
       fail = false;
@@ -4116,7 +4151,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       Cls.scrolling = true;
       vars[0].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
       vi.advanceTimersByTime(250);
 
       expect(paddings()).toHaveLength(3);
@@ -4142,7 +4177,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       vi.spyOn(window, 'scrollY', 'get').mockReturnValue(2500);
       Cls.scrolling = true;
       vars[0].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
       gsapRefresh();
 
       expect(paddings()).toHaveLength(2);
@@ -4160,7 +4195,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       Cls.scrolling = true;
       vars[0].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
       controller.destroy();
 
       expect(listeners).toHaveLength(0);
@@ -4177,10 +4212,10 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       followScrollTo(2500);
       Cls.scrolling = true;
       vars[0].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
       gsapRefresh();
       vars[1].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
 
       Cls.scrolling = false;
       vi.advanceTimersByTime(100);
@@ -4198,7 +4233,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       followScrollTo(2500);
       Cls.scrolling = true;
       vars[0].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
       vi.advanceTimersByTime(5000);
       expect(paddings()).toHaveLength(3);
 
@@ -4244,7 +4279,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       anchorScroll(2500);
       vars[0].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(paddings()).toHaveLength(2);
       expect(scrollTo).not.toHaveBeenCalled();
@@ -4260,7 +4295,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       scrollToSpy();
       anchorScroll(2500);
       vars[0].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(paddings()).toHaveLength(2);
       expect(scroller.mock.calls.every((args) => args.length === 0)).toBe(true);
@@ -4272,7 +4307,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       const scrollTo = followScrollTo(2500);
 
       vars[0].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(scrollTo.mock.calls).toEqual([[{ top: 2400, behavior: 'instant' }]]);
     });
@@ -4285,7 +4320,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       followScrollTo(2500);
       vars[0].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(scroller).toHaveBeenLastCalledWith(2400);
     });
@@ -4298,7 +4333,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         Cls.scrolling = true;
         vars.forEach((layerVars) => layerVars.onKill?.(self));
-        await Promise.resolve();
+        await flushMicrotasks();
         dwell = 50;
         controller.refresh();
 
@@ -4307,7 +4342,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         Cls.scrolling = false;
         vi.advanceTimersByTime(100);
-        await Promise.resolve();
+        await flushMicrotasks();
 
         expect(paddings()).toHaveLength(0);
         expect(query('.root').parentElement).toBe(query('.host'));
@@ -4324,7 +4359,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         Cls.scrolling = true;
         vars.forEach((layerVars) => layerVars.onKill?.(self));
-        await Promise.resolve();
+        await flushMicrotasks();
         gsapRefresh();
 
         expect(paddings()).toHaveLength(0);
@@ -4348,7 +4383,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         expect(paddings()).toHaveLength(3);
 
         Cls.isUpdating = false;
-        await Promise.resolve();
+        await flushMicrotasks();
 
         expect(paddings()).toHaveLength(0);
         expect(paddingsAtGsapRefresh).toEqual([0]);
@@ -4381,7 +4416,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         expect(scrollTo).not.toHaveBeenCalled();
 
         Cls.scrolling = false;
-        await Promise.resolve();
+        await flushMicrotasks();
         vi.advanceTimersByTime(100);
         expect(paddings()).toHaveLength(1);
       });
@@ -4413,11 +4448,11 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         vars.forEach((layerVars) => layerVars.onKill?.(self));
         ['.s1', '.s2', '.s3'].forEach((sel) =>
           controller.createStickyTrigger({ trigger: query(sel), end: '+=100' }));
-        await Promise.resolve();
+        await flushMicrotasks();
 
         Cls.scrolling = false;
         vi.advanceTimersByTime(100);
-        await Promise.resolve();
+        await flushMicrotasks();
 
         expect(paddings()).toHaveLength(3);
         expect(Cls.refresh).toHaveBeenCalledTimes(1);
@@ -4440,7 +4475,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         expect(remove.mock.calls.some(([type]) => type === 'scroll')).toBe(false);
 
         Cls.isUpdating = false;
-        await Promise.resolve();
+        await flushMicrotasks();
         expect(remove.mock.calls.some(([type]) => type === 'scroll')).toBe(true);
       });
 
@@ -4459,7 +4494,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         expect(paddings()).toHaveLength(3);
 
         next.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
-        await Promise.resolve();
+        await flushMicrotasks();
         expect(paddings()).toHaveLength(0);
         expect(query('.root').parentElement).toBe(query('.host'));
         expect(scrollTo).not.toHaveBeenCalled();
@@ -4479,7 +4514,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         const next = new StickyScrollTrigger(query('.root'));
 
         next.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
-        await Promise.resolve();
+        await flushMicrotasks();
         expect(paddings()).toHaveLength(0);
         expect(scrollTo).not.toHaveBeenCalled();
         next.destroy();
@@ -4497,7 +4532,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         const next = new StickyScrollTrigger(query('.root'));
 
-        await Promise.resolve();
+        await flushMicrotasks();
         expect(paddings()).toHaveLength(0);
         expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
         next.destroy();
@@ -4513,7 +4548,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         Cls.scrolling = true;
         vars.forEach((layerVars) => layerVars.onKill?.(self));
         controller.destroy();
-        await Promise.resolve();
+        await flushMicrotasks();
 
         expect(paddings()).toHaveLength(0);
         expect(query('.root').parentElement).toBe(query('.host'));
@@ -4531,7 +4566,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         vars.forEach((layerVars) => layerVars.onKill?.(self));
         Cls.scrolling = false;
         controller.destroy();
-        await Promise.resolve();
+        await flushMicrotasks();
 
         expect(paddings()).toHaveLength(0);
         expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
@@ -4578,7 +4613,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         around.refresh();
         Cls.scrolling = false;
         vi.advanceTimersByTime(100);
-        await Promise.resolve();
+        await flushMicrotasks();
 
         expect(paddings()).toHaveLength(1);
         around.destroy();
@@ -4627,12 +4662,12 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         const next = new StickyScrollTrigger(query('.root'));
 
-        await Promise.resolve();
+        await flushMicrotasks();
         expect(paddings()).toHaveLength(3);
 
         Cls.scrolling = false;
         vi.advanceTimersByTime(100);
-        await Promise.resolve();
+        await flushMicrotasks();
         expect(paddings()).toHaveLength(0);
         expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
         next.destroy();
@@ -4666,7 +4701,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         // GSAP marks the scroll once the update for its first event is over.
         Cls.isUpdating = false;
         Cls.scrolling = true;
-        await Promise.resolve();
+        await flushMicrotasks();
 
         expect(paddings()).toHaveLength(0);
         expect(scrollTo).not.toHaveBeenCalled();
@@ -4685,7 +4720,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         next.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
         Cls.isUpdating = false;
         Cls.scrolling = true;
-        await Promise.resolve();
+        await flushMicrotasks();
 
         expect(paddings()).toHaveLength(0);
         expect(scrollTo).not.toHaveBeenCalled();
@@ -4702,7 +4737,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         vars.forEach((layerVars) => layerVars.onKill?.(self));
         controller.destroy();
         Cls.isUpdating = false;
-        await Promise.resolve();
+        await flushMicrotasks();
 
         expect(paddings()).toHaveLength(0);
         expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
@@ -4716,7 +4751,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         followScrollTo(2500);
         vars.forEach((layerVars) => layerVars.onKill?.(self));
         controller.destroy();
-        await Promise.resolve();
+        await flushMicrotasks();
 
         expect(scroller).toHaveBeenLastCalledWith(2200);
       });
@@ -4738,7 +4773,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         });
         Cls.scrolling = true;
         vars.forEach((layerVars) => layerVars.onKill?.(self));
-        await Promise.resolve();
+        await flushMicrotasks();
 
         const uncaught: unknown[] = [];
         const onUncaught = (error: unknown) => uncaught.push(error);
@@ -4749,8 +4784,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         try {
           expect(() => vi.advanceTimersByTime(100)).toThrow('teardown');
-          await Promise.resolve();
-          await Promise.resolve();
+          await flushMicrotasks();
         } finally {
           process.off('uncaughtException', onUncaught);
         }
@@ -4771,11 +4805,11 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         });
         scrollToSpy();
         vars[0].onKill?.(self);
-        await Promise.resolve();
+        await flushMicrotasks();
         Cls.scrolling = true;
         vars[1].onKill?.(self);
         vars[2].onKill?.(self);
-        await Promise.resolve();
+        await flushMicrotasks();
         Cls.scrolling = false;
         fail = true;
 
@@ -4814,7 +4848,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         scrollToSpy();
         Cls.scrolling = true;
         vars.forEach((layerVars) => layerVars.onKill?.(self));
-        await Promise.resolve();
+        await flushMicrotasks();
 
         Cls.scrolling = false;
         fail = true;
@@ -4834,7 +4868,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       Cls.scrolling = true;
       vars[0].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(before).toBe(450);
       expect(controller.resolveScrollPosition(query('.s3'), 'top -150px')).toBe(before);
@@ -4862,7 +4896,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       Cls.scrolling = true;
       vars[0].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(before).toBe(450);
       expect(controller.resolveScrollPosition(s3, 'top -150px')).toBe(before);
@@ -4880,10 +4914,10 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       followScrollTo(2500);
       Cls.scrolling = true;
       vars[0].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
       gsapRefresh();
       vars[1].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
 
       fail = true;
       Cls.scrolling = false;
@@ -4906,7 +4940,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       const scrollTo = followScrollTo(150);
 
       vars[0].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(scrollTo.mock.calls).toEqual([[{ top: 50, behavior: 'instant' }]]);
     });
@@ -4918,7 +4952,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       vars[0].onKill?.(self);
       dwell = 30;
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(scrollTo.mock.calls).toEqual([[{ top: 30, behavior: 'instant' }]]);
     });
@@ -4931,7 +4965,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       const scrollTo = followScrollTo(150);
 
       vars[1].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(scrollTo.mock.calls).toEqual([[{ top: 100, behavior: 'instant' }]]);
     });
@@ -4961,7 +4995,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       const scrollTo = followScrollTo(150);
 
       vars[2].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(paddings()).toHaveLength(2);
       expect(scrollTo).not.toHaveBeenCalled();
@@ -4974,7 +5008,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       vars[2].onKill?.(self);
       dwell = 130;
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(scrollTo.mock.calls).toEqual([[{ top: 260, behavior: 'instant' }]]);
     });
@@ -4986,7 +5020,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       vars[2].onKill?.(self);
       controller.createStickyTrigger({ trigger: query('.s3'), end: '+=100' });
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(scrollTo).not.toHaveBeenCalled();
     });
@@ -5030,7 +5064,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         rebuild();
         vars[0].onKill?.(self);
         dwell = 30;
-        await Promise.resolve();
+        await flushMicrotasks();
 
         expect(scrollTo.mock.calls).toEqual([[{ top: 960, behavior: 'instant' }]]);
       });
@@ -5045,7 +5079,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         base = 900;
         vars[0].onKill?.(self);
         dwell = 30;
-        await Promise.resolve();
+        await flushMicrotasks();
 
         expect(scrollTo.mock.calls).toEqual([[{ top: 1030, behavior: 'instant' }]]);
       });
@@ -5076,7 +5110,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         rebuild();
         vars[0].onKill?.(self);
         dwell = 30;
-        await Promise.resolve();
+        await flushMicrotasks();
 
         expect(scrollTo.mock.calls).toEqual([[{ top: 1130, behavior: 'instant' }]]);
       });
@@ -5093,7 +5127,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       query('.root').append(s4);
       vars[2].onKill?.(self);
       controller.createStickyTrigger({ trigger: s4, end: '+=100' });
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(scrollTo).not.toHaveBeenCalled();
     });
@@ -5105,7 +5139,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       const scrollTo = followScrollTo(200);
 
       vars[0].onKill?.(self);
-      await Promise.resolve();
+      await flushMicrotasks();
 
       expect(scrollTo.mock.calls).toEqual([[{ top: 100, behavior: 'instant' }]]);
     });

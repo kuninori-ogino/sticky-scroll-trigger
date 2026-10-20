@@ -12,6 +12,12 @@ import {
 } from './dormancy';
 import type { DormancyClient } from './dormancy';
 
+// Runs the queued microtasks and the ones they queue, so a test checks what is done by the end of
+// the task.
+const flushMicrotasks = async () => {
+  for (let i = 0; i < 50; i += 1) await Promise.resolve();
+};
+
 describe('mergeIntervals', () => {
   it('merges overlapping and touching intervals and drops empty ones', () => {
     expect(mergeIntervals([[50, 60], [0, 10], [10, 20], [55, 70], [30, 30]])).toEqual([
@@ -474,7 +480,7 @@ describe('rebuildDormancy', () => {
     observer.observe(byId('header'), { attributes: true });
     addClient([byId('el')]);
     rebuildDormancy(gsap);
-    await Promise.resolve();
+    await flushMicrotasks();
     observer.disconnect();
 
     expect(byId('el').style.position).toBe('relative');
@@ -497,7 +503,7 @@ describe('rebuildDormancy', () => {
     observer.observe(byId('inner'), { attributes: true });
     addClient([byId('el')]);
     rebuildDormancy(gsap);
-    await Promise.resolve();
+    await flushMicrotasks();
     observer.disconnect();
 
     expect(byId('el').style.position).toBe('relative');
@@ -666,7 +672,7 @@ describe('rebuildDormancy', () => {
     scrollTo(3300);
     expect(el.style.position).toBe('sticky');
 
-    await Promise.resolve();
+    await flushMicrotasks();
     rebuildDormancy(gsap);
     expect(scan.mock.calls.filter(([selector]) => selector === '*')).toHaveLength(2);
   });
@@ -817,7 +823,7 @@ describe('rebuildDormancy', () => {
     takeGsapRefreshRestore();
     expect(el.style.top).toBe('0px');
 
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(el.style.top).toBe('500px');
   });
 
@@ -1036,7 +1042,7 @@ describe('rebuildDormancy after a teardown', () => {
     byId('outer').style.position = '';
     // Once at the end of the task.
     expect(byId('inner').style.position).toBe('relative');
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(byId('inner').style.position).toBe('sticky');
   });
 
@@ -1056,7 +1062,7 @@ describe('rebuildDormancy after a teardown', () => {
     expect(refreshing.addEventListener).toHaveBeenCalledWith('refreshInit', expect.any(Function));
     goneElement.remove();
     unregisterDormancyClient(clients.pop()!);
-    await Promise.resolve();
+    await flushMicrotasks();
 
     expect(refreshing.removeEventListener).toHaveBeenCalledWith('refreshInit', expect.any(Function));
   });
@@ -1090,7 +1096,7 @@ describe('rebuildDormancy after a teardown', () => {
     listeners.map((f) => f());
 
     expect(later).toHaveBeenCalled();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(listeners).toEqual([expect.any(Function), later]);
   });
 

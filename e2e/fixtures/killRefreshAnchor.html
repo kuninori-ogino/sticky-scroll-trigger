@@ -84,8 +84,8 @@
         return { sameTask, settled: { tailTop: tailTop(), scrollY: window.scrollY } };
       };
 
-      // Kills with no GSAP refresh in the task: the batch's microtask, or the last kill at once.
-      // Reports the padding left in the kill's task and the tail after one microtask.
+      // Kills with no GSAP refresh in the task: the batch, or the last kill at once. Reports the
+      // padding left in the kill's task and the tail at the end of that task.
       window.__kill = async (killAll) => {
         // A kill while scrolling waits for the scroll to stop; this one runs at rest.
         while (ScrollTrigger.isScrolling()) await frames();
@@ -94,7 +94,7 @@
 
         const paddingsInTask = document.querySelectorAll('div[aria-hidden="true"]').length;
 
-        await Promise.resolve();
+        for (let i = 0; i < 50; i += 1) await Promise.resolve();
 
         const sameTask = tailTop();
 

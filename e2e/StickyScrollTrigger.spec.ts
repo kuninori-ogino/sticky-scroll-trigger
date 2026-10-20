@@ -2567,8 +2567,8 @@ for (const noAnchor of [false, true]) {
         killAll,
       );
 
-      // At rest, the last kill tears down in its task and keeps the content by the next
-      // microtask; the others wait for the batch's microtask.
+      // At rest, the last kill tears down and keeps the content within its task; the others wait
+      // for the batch.
       if (killAll) {
         expect(result.paddingsInTask).toBe(0);
         expect(result.sameTask).toBeCloseTo(before, 0);
@@ -2907,12 +2907,12 @@ for (const ramp of ['css', 'js']) {
           () => !(window as never as LayoutReadsWindow).__layoutReads.isScrolling(),
         );
 
-        // Past the batch's microtask and the ScrollTrigger.refresh() it calls.
+        // Past the batch and the ScrollTrigger.refresh() it calls.
         const held = await page.evaluate(async (all) => {
           const w = window as never as LayoutReadsWindow;
           const scrolling = all ? w.__layoutReads.killAll() : w.__layoutReads.killSome();
 
-          await Promise.resolve();
+          for (let i = 0; i < 50; i += 1) await Promise.resolve();
 
           return scrolling;
         }, scenario === 'killAll');
