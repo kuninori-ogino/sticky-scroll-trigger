@@ -59,6 +59,34 @@ export default tseslint.config(
     },
   },
   {
+    // Only the modules ignored here write styles, attributes or the element tree; refresh()'s
+    // values go through commit.ts.
+    files: ['src/**/*.ts'],
+    ignores: [
+      'src/**/*.test.ts',
+      'src/commit.ts',
+      'src/dom.ts',
+      'src/structure.ts',
+      'src/dormancy.ts',
+      'src/scrollMargin.ts',
+    ],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        ...[
+          'AssignmentExpression[left.object.property.name="style"]',
+          'VariableDeclarator[init.property.name="style"]',
+          'ObjectPattern > Property[key.name="style"]',
+          'CallExpression[callee.property.name=/^(setProperty|removeProperty|setAttribute|removeAttribute|toggleAttribute)$/]',
+          'CallExpression[callee.property.name=/^(appendChild|insertBefore|removeChild|replaceChild|append|prepend|before|after|replaceWith|remove)$/]',
+        ].map((selector) => ({
+          selector,
+          message: 'Write to the DOM through commit.ts, dom.ts or structure.ts.',
+        })),
+      ],
+    },
+  },
+  {
     files: ['**/*.test.ts', 'e2e/**/*.ts'],
     rules: {
       '@typescript-eslint/no-non-null-assertion': 'off',

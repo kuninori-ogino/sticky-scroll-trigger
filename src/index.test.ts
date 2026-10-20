@@ -1878,7 +1878,7 @@ describe('createStickyPin()', () => {
   });
 
   // Unlike the pin's natural top/height (which depends on layout, unavailable in jsdom),
-  // the `top` option is a plain passthrough to applyStickyPosition via resolveMaybeFn,
+  // the `top` option is a plain passthrough to commitSticky via resolveMaybeFn,
   // so the exact CSS value it writes can be verified here without layout. A negative one pins
   // above the viewport's top edge.
   it('writes the top option as trigger.style.top once refresh() runs', () => {

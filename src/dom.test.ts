@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import {
-  applyStickyPosition,
   captureInlinePosition,
   compareDocumentOrder,
   describeElement,
@@ -207,7 +206,8 @@ describe('wrapPin', () => {
     const trigger = document.getElementById('trigger')!;
     const { outer } = wrapPin(trigger);
 
-    applyStickyPosition(trigger, 39);
+    trigger.style.position = 'sticky';
+    trigger.style.top = '39px';
     unwrapPin(outer, trigger, { position: 'relative', top: '8px' });
 
     expect(trigger.style.position).toBe('relative');

@@ -168,19 +168,12 @@ export const compareDocumentOrder = (a: HTMLElement, b: HTMLElement): number => 
   return 0;
 };
 
-export const resetStickyPosition = (el: HTMLElement): void => {
+const resetStickyPosition = (el: HTMLElement): void => {
   el.style.position = '';
   el.style.top = '';
 };
 
-export const applyStickyPosition = (el: HTMLElement, topPx: number): void => {
-  el.style.position = 'sticky';
-  el.style.top = `${topPx}px`;
-};
-
-// An element's own inline position/top, captured before a pin overwrites them. Only
-// createStickyPin needs this: everything else this module positions is a wrapper it created,
-// so clearing back to '' is already correct.
+// An element's inline position/top, captured to put back after a clear or overwrite.
 export interface InlinePosition {
   position: string;
   top: string;
@@ -191,7 +184,7 @@ export const captureInlinePosition = (el: HTMLElement): InlinePosition => ({
   top: el.style.top,
 });
 
-export const restoreInlinePosition = (el: HTMLElement, saved: InlinePosition): void => {
+const restoreInlinePosition = (el: HTMLElement, saved: InlinePosition): void => {
   el.style.position = saved.position;
   el.style.top = saved.top;
 };

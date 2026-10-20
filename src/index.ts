@@ -5,7 +5,6 @@
  */
 
 import {
-  applyStickyPosition,
   captureInlinePosition,
   describeElement,
   documentTop,
@@ -14,11 +13,9 @@ import {
   measureDocumentMaxScroll,
   measureUsedHeight,
   measureViewportHeight,
-  resetStickyPosition,
   resolveElement,
   resolveEndTrigger,
   resolveRoot,
-  restoreInlinePosition,
   stripStickyPositions,
   unwrapPin,
   wrapPin,
@@ -33,6 +30,13 @@ import {
   unregisterDormancyClient,
 } from './dormancy';
 import type { DormancyClient, ScrollTriggerClassLike } from './dormancy';
+import {
+  clearHeightForRead,
+  clearStickyForRead,
+  commitHeight,
+  commitPosition,
+  commitSticky,
+} from './commit';
 import { createScrollMarginSync } from './scrollMargin';
 import { buildStructure, isDomOrderStale, unbuildCover, unbuildStructure } from './structure';
 import {
@@ -723,8 +727,8 @@ export default class StickyScrollTrigger {
     // doesn't hold that trigger open at the range it's about to replace. Clearing inner as well
     // keeps a percentage-height trigger resolving against its natural container.
     wrapped.forEach(({ outer, inner }) => {
-      outer.style.height = '';
-      inner.style.height = '';
+      clearHeightForRead(outer);
+      clearHeightForRead(inner);
     });
 
     // Read in full before anything is written back, so all the writes share one reflow instead of
@@ -732,14 +736,12 @@ export default class StickyScrollTrigger {
     const reserved = wrapped.map(({ outer }) => measureUsedHeight(outer));
 
     wrapped.forEach(({ outer }, index) => {
-      outer.style.height = `${reserved[index]}px`;
+      commitHeight(outer, `${reserved[index]}px`);
     });
     // The ranges go back rather than staying cleared, so #resetPinState still snapshots the last
     // successful refresh's values and its rollback has something to restore. They're sealed inside
     // outer either way, so #refreshScenesAndCovers measures the same layout with them present.
-    wrapped.forEach(({ inner, range }) => {
-      inner.style.height = range;
-    });
+    wrapped.forEach(({ inner, range }) => commitHeight(inner, range));
   }
 
   // #wrapUnwrappedPins's counterpart. Nulling outer keeps it idempotent: destroy() and a kill
@@ -765,9 +767,8 @@ export default class StickyScrollTrigger {
   // Scene layer's own dwell is a difference of two documentTop calls sharing the same stuck
   // ancestors, so the shift cancels out there; measuring an arbitrary element (a pin's
   // trigger/endTrigger, or resolveScrollPosition's element) has no such guarantee.
-  // #refreshScenesAndCovers shares this helper for its own pass 1, but restores only on the
-  // throwing path (see the catch there for why). The wrappers the DOM holds, as #engagedWindows
-  // counts them: a killed layer's stay until its catch-up runs.
+  // The wrappers the DOM holds, as #engagedWindows counts them: a killed layer's stay until its
+  // catch-up runs.
   #resetSceneCoverStickyState(): () => void {
     return stripStickyPositions(
       this.#builtLayers.flatMap(({ wrapper }) => (wrapper ? [wrapper] : [])),
@@ -807,16 +808,16 @@ export default class StickyScrollTrigger {
     }));
 
     snapshots.forEach(({ layer }) => {
-      resetStickyPosition(layer.trigger);
+      clearStickyForRead(layer.trigger);
 
-      if (layer.inner) layer.inner.style.height = '';
+      if (layer.inner) clearHeightForRead(layer.inner);
     });
 
     return () => {
       snapshots.forEach(({ layer, position, height }) => {
-        restoreInlinePosition(layer.trigger, position);
+        commitPosition(layer.trigger, position);
 
-        if (layer.inner) layer.inner.style.height = height;
+        if (layer.inner) commitHeight(layer.inner, height);
       });
     };
   }
@@ -934,8 +935,8 @@ export default class StickyScrollTrigger {
     planned.forEach(({ layer, topPx, range }) => {
       if (!layer.inner) return;
 
-      applyStickyPosition(layer.trigger, topPx);
-      layer.inner.style.height = `${range}px`;
+      commitSticky(layer.trigger, topPx);
+      commitHeight(layer.inner, `${range}px`);
     });
   }
 
@@ -948,7 +949,12 @@ export default class StickyScrollTrigger {
 
     if (!active.length) return;
 
-    const restoreStickyState = this.#resetSceneCoverStickyState();
+    // Pass 2 writes the sticky state again for every wrapper cleared here.
+    const wrappers = active.flatMap(({ wrapper }) => (wrapper ? [wrapper] : []));
+    const saved = wrappers.map(captureInlinePosition);
+
+    wrappers.forEach(clearStickyForRead);
+
     // Put back whether or not planning throws. #refreshPins rewrites pins after a success anyway,
     // but a throw skips it and would leave every pin unstuck.
     const restorePinStickyState = this.#resetPinStickyState();
@@ -959,7 +965,7 @@ export default class StickyScrollTrigger {
       // The same window and reasoning as #refreshPins' `finally`. The one difference is `catch`
       // rather than `finally`: pass 2 writes the new sticky state itself, so after a successful
       // pass the snapshot holds what that pass replaced, and restoring it would undo the lot.
-      restoreStickyState();
+      wrappers.forEach((wrapper, i) => commitPosition(wrapper, saved[i]));
 
       throw error;
     } finally {
@@ -1026,7 +1032,7 @@ export default class StickyScrollTrigger {
           stickyTops.set(layer.wrapper, plan.stickyTop);
 
           if (layer.kind === 'scene' && layer.padding && plan.paddingHeight !== null) {
-            layer.padding.style.height = `${plan.paddingHeight}px`;
+            commitHeight(layer.padding, `${plan.paddingHeight}px`);
           }
         },
       });
@@ -1050,7 +1056,7 @@ export default class StickyScrollTrigger {
 
     if (needsLiveRemeasure || needsMaxRemeasure) applyLayers();
 
-    stickyTops.forEach((top, wrapper) => applyStickyPosition(wrapper, top));
+    stickyTops.forEach((top, wrapper) => commitSticky(wrapper, top));
   }
 
   // Public entry point. Rebuilds the nesting if triggers were added/removed, and recomputes
