@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-20
+
 - Killing a `createOverlapScroll` layer now puts `trigger` and the elements before it back in place at once rather than in a microtask. A `gsap.matchMedia()` setup that runs right after a breakpoint's kill found them still inside the old wrapper, so `createOverlapScroll` on the same `trigger` threw: the default `cover` (`trigger.nextElementSibling`) was missing, and an explicit `cover` was no longer `trigger`'s sibling (see [`refresh()`](README.md#refresh))
 - A `ScrollTrigger.refresh()` in the same task as a `kill()`, including the one `gsap.matchMedia()` runs after a breakpoint switch, now measures the layout without the killed Scene layers and follows the browser's scroll anchoring, as plain GSAP pins do. With no layer left, that refresh measured the layout still padded for the killed layers, which only came off a microtask later; with some left, the content jumped by the killed layers' dwell
 - Safari before 26 no longer freezes on a refresh (a resize, say) far down a page with deeply nested Scene layers. Without scroll-driven animations, the scroll-margin ramp read the scroll position before `nestedStickyOptimization` demoted the far layers again, and with 20 nested layers WebKit froze for over 25 seconds (see [Nested sticky performance](README.md#nested-sticky-performance))
