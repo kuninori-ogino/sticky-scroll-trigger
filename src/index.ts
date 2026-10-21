@@ -1453,6 +1453,14 @@ export default class StickyScrollTrigger {
       onKill: (self) => {
         this.#captureScrollTriggerClass(self);
 
+        // Already off: a repeated kill() (GSAP calls onKill on each, ScrollTrigger.js:1926) or a
+        // kill after destroy().
+        if (!this.#layers.includes(layer)) {
+          onKill?.(self);
+
+          return;
+        }
+
         removeItem(this.#layers, layer);
         this.#dirty = true;
         this.#scheduleRebuild();

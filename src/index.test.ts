@@ -1084,6 +1084,32 @@ describe('batching kill()', () => {
       expect(FakeScrollTrigger.refresh).toHaveBeenCalledTimes(1);
     });
 
+    // GSAP calls onKill on every kill().
+    it.each(['scene', 'cover'])('a repeated kill of a %s layer only calls the caller\'s onKill', async (kind) => {
+      document.body.innerHTML = `
+        <div class="root">
+          <section class="s1"></section><section class="s2"></section><section class="s3"></section>
+        </div>`;
+
+      const controller = new StickyScrollTrigger(query('.root'));
+      const onKill = vi.fn();
+      const vars = kind === 'scene'
+        ? controller.createStickyTrigger({ trigger: query('.s1'), end: '+=100', onKill })
+        : controller.createOverlapScroll({ trigger: query('.s1'), onKill });
+
+      controller.createStickyTrigger({ trigger: query('.s3'), end: '+=100' });
+      controller.refresh();
+      vars.onKill?.(fakeSelf);
+      await flushMicrotasks();
+      FakeScrollTrigger.refresh.mockClear();
+      vars.onKill?.(fakeSelf);
+      await flushMicrotasks();
+
+      expect(onKill).toHaveBeenCalledTimes(2);
+      expect(FakeScrollTrigger.refresh).not.toHaveBeenCalled();
+      controller.destroy();
+    });
+
     it('notifies GSAP only after the internal refresh() (recomputing freezeStart/End) has finished', async () => {
       const { vars } = setupThreeScenes();
       const survivorStartBefore = (vars[2].start as () => number)();
