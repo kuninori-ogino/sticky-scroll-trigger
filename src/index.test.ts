@@ -608,7 +608,7 @@ describe('registerLayer\'s onRefreshInit', () => {
         onRefreshInit: callbacks[index],
       }));
 
-      return { vars, refreshes };
+      return { controller, vars, refreshes };
     };
 
     afterEach(() => {
@@ -632,6 +632,34 @@ describe('registerLayer\'s onRefreshInit', () => {
       vars[2].onRefreshInit?.(refreshingSelf);
 
       expect(refreshes).toHaveBeenCalledTimes(2);
+    });
+
+    // A registration changes no DOM until the rebuild, and a layer created during GSAP's dispatch
+    // gets no call of its own in it.
+    it('refreshes again once a layer has been registered since', () => {
+      const { controller, vars, refreshes } = setupThree();
+      const added = document.createElement('section');
+
+      query('.root').append(added);
+      vars[0].onRefreshInit?.(refreshingSelf);
+      controller.createStickyTrigger({ trigger: added, end: '+=100' });
+      vars[1].onRefreshInit?.(refreshingSelf);
+
+      expect(refreshes).toHaveBeenCalledTimes(2);
+      expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(4);
+    });
+
+    // A kill from a start function, say: its rebuild waits for the batch, which GSAP would only
+    // run after every layer's call.
+    it('refreshes again once a layer has been killed since', () => {
+      const { vars, refreshes } = setupThree();
+
+      vars[0].onRefreshInit?.(refreshingSelf);
+      vars[2].onKill?.(refreshingSelf);
+      vars[1].onRefreshInit?.(refreshingSelf);
+
+      expect(refreshes).toHaveBeenCalledTimes(2);
+      expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(2);
     });
 
     // A callback can change what refresh() reads without touching the DOM: a variable a
@@ -3764,6 +3792,84 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
     return { Cls, listeners, gsapRefresh };
   };
+
+  it('refreshes once for a batch a layer\'s refreshInit runs', () => {
+    const { Cls, listeners } = makeClass({ rec: 0 });
+    const end = vi.fn(() => `+=${dwell}`);
+    const { vars, self } = setupScenes(Cls, end);
+
+    vars[0].onKill?.(self);
+    end.mockClear();
+    Cls.isRefreshing = true;
+    vars[1].onRefreshInit?.(self);
+    vars[2].onRefreshInit?.(self);
+    [...listeners].forEach((callback) => callback());
+    Cls.isRefreshing = false;
+
+    // One refresh() reads each of the two layers left once.
+    expect(end).toHaveBeenCalledTimes(2);
+  });
+
+  // The batch is gone by its own listener, so nothing else builds the new layer in this refresh.
+  it('refreshes again for a layer registered during the batch it ran', () => {
+    const { Cls, listeners } = makeClass({ rec: 0 });
+    let register = false;
+    const { controller, vars, self } = setupScenes(Cls, () => {
+      if (register) {
+        register = false;
+        controller.createStickyTrigger({ trigger: query('.s4'), end: '+=100' });
+      }
+
+      return `+=${dwell}`;
+    });
+
+    query('.root').append(Object.assign(document.createElement('section'), { className: 's4' }));
+    vars[0].onKill?.(self);
+    register = true;
+    Cls.isRefreshing = true;
+    vars[2].onRefreshInit?.(self);
+    [...listeners].forEach((callback) => callback());
+    Cls.isRefreshing = false;
+
+    expect(paddings()).toHaveLength(3);
+  });
+
+  // The instance created first is dispatched first, before the batch's listener.
+  it('rebuilds before an instance created earlier measures in that refresh', () => {
+    const { Cls, listeners } = makeClass({ rec: 0 });
+
+    document.body.innerHTML = `
+      <div class="first"><section class="f1"></section></div>
+      <div class="root"><section class="s1"></section><section class="s2"></section></div>`;
+
+    const paddingsSeen: number[] = [];
+    const first = new StickyScrollTrigger(query('.first'));
+    const firstVars = first.createStickyTrigger({
+      trigger: query('.f1'),
+      start: () => {
+        paddingsSeen.push(paddings().length);
+
+        return 'top top';
+      },
+      end: '+=100',
+    });
+    const controller = new StickyScrollTrigger(query('.root'));
+    const vars = ['.s1', '.s2'].map((sel) =>
+      controller.createStickyTrigger({ trigger: query(sel), end: '+=100' }));
+    const self = Object.create(Cls.prototype) as ScrollTrigger;
+
+    first.refresh();
+    controller.refresh();
+    paddingsSeen.length = 0;
+    vars[1].onKill?.(self);
+    Cls.isRefreshing = true;
+    firstVars.onRefreshInit?.(self);
+    vars[0].onRefreshInit?.(self);
+    [...listeners].forEach((callback) => callback());
+    Cls.isRefreshing = false;
+
+    expect(paddingsSeen).toEqual([2]);
+  });
 
   it('rebuilds in that refresh\'s refreshInit, and skips the batch', async () => {
     const { Cls, listeners, gsapRefresh } = makeClass({ rec: 0 });

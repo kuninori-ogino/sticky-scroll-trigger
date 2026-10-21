@@ -178,6 +178,9 @@ type PendingKeep = {
 };
 
 const pendingKeeps = new Set<PendingKeep>();
+// Kill batches waiting for a GSAP refresh. A batch's own refreshInit listener comes after those of
+// the layers registered before the kill, so every layer's handler runs them all first.
+const pendingCatchUps = new Map<StickyScrollTrigger, () => boolean>();
 // Counts structures taken down by any instance. Only such a rebuild moves a container under
 // windows measured before it; a change with none (in a stuck ancestor's offset, say) isn't one.
 let unbuildCount = 0;
@@ -535,8 +538,11 @@ export default class StickyScrollTrigger {
     // refresh() from its own onRefreshInit.
     const cls = this.#scrollTriggerClass;
 
-    const onRefreshInit = () => {
-      if (!this.#rebuildScheduled || this.#destroyed) return undefined;
+    // True if it caught up.
+    const catchUpNow = () => {
+      pendingCatchUps.delete(this);
+
+      if (!this.#rebuildScheduled || this.#destroyed) return false;
 
       try {
         this.#catchUp();
@@ -548,6 +554,14 @@ export default class StickyScrollTrigger {
         this.#rebuildScheduled = false;
       }
 
+      return true;
+    };
+
+    pendingCatchUps.set(this, catchUpNow);
+
+    const onRefreshInit = () => {
+      if (!catchUpNow()) return undefined;
+
       const restoreDormancy = takeGsapRefreshRestore();
 
       return restoreDormancy ? { render: () => restoreDormancy() } : undefined;
@@ -558,6 +572,7 @@ export default class StickyScrollTrigger {
     const run = () => {
       // Off the stack: GSAP's dispatch maps over its live listener array.
       cls?.removeEventListener?.('refreshInit', onRefreshInit);
+      pendingCatchUps.delete(this);
 
       if (!this.#rebuildScheduled) return;
 
@@ -618,13 +633,24 @@ export default class StickyScrollTrigger {
       // place to be measured expects to run before refresh() too. This call stays outside the
       // guard below: a plain ScrollTrigger's onRefreshInit gets the same unguarded dispatch.
       const result = userOnRefreshInit?.(self);
+      const inGsapRefresh = this.#scrollTriggerClass?.isRefreshing === true;
+      // Other instances' batches first, so this one measures after them; its own is its refresh().
+      let caughtUp = false;
+
+      if (inGsapRefresh) {
+        [...pendingCatchUps].forEach(([owner, catchUpNow]) => owner !== this && catchUpNow());
+        caughtUp = pendingCatchUps.get(this)?.() === true;
+
+        if (caughtUp) this.#dispatchObserver?.takeRecords();
+      }
+
       // GSAP's refresh calls this once per layer before it measures anything. A call after the
       // first refreshes again only if this layer's own callback ran (it may have changed anything,
-      // a variable a function-valued end reads included) or the DOM has changed since: otherwise
-      // it would compute the same thing, at a cost that grows with the depth on every call.
-      const inGsapRefresh = this.#scrollTriggerClass?.isRefreshing === true;
-      const unchanged = inGsapRefresh && !userOnRefreshInit && this.#dispatchObserver !== null
-        && this.#dispatchObserver.takeRecords().length === 0;
+      // a variable a function-valued end reads included), a layer has been added or killed, or the
+      // DOM has changed since: otherwise it would compute the same thing, at a cost that grows with
+      // the depth on every call.
+      const unchanged = inGsapRefresh && !userOnRefreshInit && !this.#dirty && (caughtUp
+        || (this.#dispatchObserver !== null && this.#dispatchObserver.takeRecords().length === 0));
 
       // GSAP's dispatch is `_listeners[type].map(f => f())` with no try/catch, so an error escaping
       // here would stop every later listener and every trigger's own refresh. The catch rethrows
