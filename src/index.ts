@@ -230,6 +230,12 @@ export default class StickyScrollTrigger {
   #outermostContainer: HTMLDivElement | null = null;
   #destroyed = false;
   #rebuildScheduled = false;
+  // #runRefresh frames on the stack: a start or end function's refresh() comes in at 1 or more.
+  #depth = 0;
+  // The one nested run for a GSAP refresh a function starts is spent until the outermost run ends.
+  #refreshInitNestedUsed = false;
+  // The outermost run measures again: a function asked for a refresh, or a nested one ran.
+  #measureAgain = false;
   // Set by a kill whose catch-up hasn't run: the next refresh() keeps the content in place.
   #keepContentPending = false;
   // The batch held for the end of the scroll, and the timer that polls for it.
@@ -506,10 +512,11 @@ export default class StickyScrollTrigger {
   }
 
   // A kill's catch-up before GSAP measures: a held last kill's teardown (GSAP measures now, so it
-  // goes now), the rebuild, and a last kill's content keep.
+  // goes now), the rebuild, and a last kill's content keep. It runs even once a function has spent
+  // the nested run: another one nested in it needs a new kill's batch, so it ends.
   #catchUp(): void {
     this.#flushPendingDisarm();
-    this.refresh();
+    this.#runRefresh();
     this.#applyPendingKeep();
   }
 
@@ -544,14 +551,15 @@ export default class StickyScrollTrigger {
 
       if (!this.#rebuildScheduled || this.#destroyed) return false;
 
+      // Before the catch-up: a GSAP refresh a function starts in it comes back here.
+      this.#rebuildScheduled = false;
+
       try {
         this.#catchUp();
       } catch (error) {
         queueMicrotask(() => {
           throw error;
         });
-      } finally {
-        this.#rebuildScheduled = false;
       }
 
       return true;
@@ -656,7 +664,7 @@ export default class StickyScrollTrigger {
       // here would stop every later listener and every trigger's own refresh. The catch rethrows
       // off the stack instead of swallowing, since a stale freeze window with no signal is worse.
       try {
-        if (!unchanged) this.refresh();
+        if (!unchanged) this.#refreshFrom(true);
       } catch (error) {
         queueMicrotask(() => {
           throw error;
@@ -1089,6 +1097,33 @@ export default class StickyScrollTrigger {
   // Public entry point. Rebuilds the nesting if triggers were added/removed, and recomputes
   // both the Scene/Cover layers and the pin layers.
   refresh(): void {
+    // A start or end function's refresh() leaves the measuring to the outermost run, which goes
+    // again once, so a function that calls it on every evaluation can't recurse.
+    this.#refreshFrom(false);
+  }
+
+  // A GSAP refresh a function starts measures right after its refreshInit, so the refresh() for
+  // it runs nested, once per outermost run. A kill or create still owed its rebuild runs
+  // regardless: the next GSAP measurement needs it.
+  #refreshFrom(refreshInit: boolean): void {
+    if (this.#depth > 0 && !this.#dirty) {
+      if (!refreshInit) {
+        this.#measureAgain = true;
+
+        return;
+      }
+
+      if (this.#refreshInitNestedUsed) return;
+
+      this.#refreshInitNestedUsed = true;
+    }
+
+    this.#runRefresh();
+  }
+
+  #runRefresh(): void {
+    if (this.#depth > 0) this.#measureAgain = true;
+
     // A last kill's structure waits for the scroll to stop, not for a rebuild with no layers.
     if (this.#destroyed || !this.#armed || pendingDisarms.has(this)) return;
 
@@ -1098,10 +1133,23 @@ export default class StickyScrollTrigger {
 
     this.#keepContentPending = false;
 
+    this.#depth += 1;
+
     try {
       this.#refreshLayout();
+
+      // The first pass read part of the layout before a function or a nested run changed it.
+      if (this.#depth === 1 && this.#measureAgain && !this.#destroyed && this.#armed
+        && !pendingDisarms.has(this)) this.#refreshLayout();
     } catch (error) {
       failure = { error };
+    } finally {
+      this.#depth -= 1;
+
+      if (this.#depth === 0) {
+        this.#refreshInitNestedUsed = false;
+        this.#measureAgain = false;
+      }
     }
 
     // After every sticky value is written, and on a throw too: the restores there put back

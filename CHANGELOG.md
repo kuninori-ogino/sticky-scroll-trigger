@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `createStickyPin` killed from a `createStickyTrigger` or `createOverlapScroll` start or end function now gets its `trigger`'s own inline `position` and `top` back, as does one killed from another pin's function before a later pin's option throws. It was left `position: sticky`
 - With more than one instance on a page, a `ScrollTrigger.refresh()` in the same task as a Scene layer's `kill()` now measures the instances created before the killing one without the killed layer's dwell, and a GSAP refresh in which a start or end function kills the layer does the same for those created after it. Their windows sat late by that dwell until the next refresh. A `ScrollTrigger.refresh()` in the same task as a kill also runs `refresh()` once instead of twice
 - A repeated `kill()` of a `createStickyTrigger` or `createOverlapScroll` trigger now only calls its `onKill`. Unless a GSAP refresh followed in the same task, it ran `refresh()` and a `ScrollTrigger.refresh()` again
+- A `createStickyTrigger`, `createOverlapScroll` or `createStickyPin` start or end function that calls `refresh()` or `ScrollTrigger.refresh()` on every evaluation no longer recurses without end, and one that changes the layout before calling `refresh()` gets the new layout's values
 
 ## [0.13.0] - 2026-10-20
 

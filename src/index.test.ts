@@ -3396,6 +3396,186 @@ describe('refresh() pass ordering', () => {
   }
 });
 
+describe('a refresh() from a start or end function', () => {
+  const setupScenes = (start: () => string, end: () => string) => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="s1"></section>
+        <section class="s2"></section>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const vars = [
+      controller.createStickyTrigger({ trigger: query('.s1'), end }),
+      controller.createStickyTrigger({ trigger: query('.s2'), start, end: '+=100' }),
+    ];
+
+    return { controller, vars };
+  };
+
+  const paddingHeights = () => Array.from(
+    document.querySelectorAll<HTMLElement>('div[aria-hidden="true"]'),
+    (el) => el.style.height,
+  );
+
+  it('measures once more when a function calls refresh()', () => {
+    let controller: StickyScrollTrigger | null = null;
+    const start = vi.fn(() => {
+      controller?.refresh();
+
+      return 'top top';
+    });
+
+    ({ controller } = setupScenes(start, () => '+=100'));
+
+    expect(() => controller.refresh()).not.toThrow();
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  // The first pass read part of the layout before the function changed the dwell.
+  it('measures again after a function changes the layout and calls refresh()', () => {
+    let dwell = 100;
+    let controller: StickyScrollTrigger | null = null;
+    let changeDwell = false;
+
+    ({ controller } = setupScenes(() => {
+      if (changeDwell) {
+        changeDwell = false;
+        dwell = 300;
+        controller?.refresh();
+      }
+
+      return 'top top';
+    }, () => `+=${dwell}`));
+    controller.refresh();
+    changeDwell = true;
+    controller.refresh();
+
+    expect(paddingHeights()).toEqual(['300px', '100px']);
+  });
+
+  // GSAP measures that refresh after its refreshInit, so its refreshInit runs nested.
+  it('refreshes in a GSAP refresh the function starts after its own refresh()', () => {
+    let dwell = 100;
+    let act: (() => void) | null = null;
+    let paddingsAtGsapRefresh: string[] = [];
+    const { controller, vars } = setupScenes(() => {
+      act?.();
+
+      return 'top top';
+    }, () => `+=${dwell}`);
+
+    controller.refresh();
+
+    act = () => {
+      act = null;
+      controller.refresh();
+      dwell = 300;
+      vars[0].onRefreshInit?.(makeFakeSelf());
+      paddingsAtGsapRefresh = paddingHeights();
+    };
+
+    controller.refresh();
+
+    expect(paddingsAtGsapRefresh).toEqual(['300px', '100px']);
+  });
+
+  it('runs one nested refresh for a function that starts a GSAP refresh on every evaluation', () => {
+    let gsapRefresh: (() => void) | null = null;
+    const start = vi.fn(() => {
+      gsapRefresh?.();
+
+      return 'top top';
+    });
+    const { controller, vars } = setupScenes(start, () => '+=100');
+
+    gsapRefresh = () => vars[0].onRefreshInit?.(makeFakeSelf());
+    start.mockClear();
+
+    expect(() => controller.refresh()).not.toThrow();
+    expect(start).toHaveBeenCalledTimes(3);
+  });
+
+  it('gives each refresh() its own nested run for a GSAP refresh a function starts', () => {
+    let dwell = 100;
+    let act: (() => void) | null = null;
+    let paddingsAtGsapRefresh: string[] = [];
+    const { controller, vars } = setupScenes(() => {
+      act?.();
+
+      return 'top top';
+    }, () => `+=${dwell}`);
+
+    const changeDwellAndRefresh = (next: number) => () => {
+      act = null;
+      dwell = next;
+      vars[0].onRefreshInit?.(makeFakeSelf());
+      paddingsAtGsapRefresh = paddingHeights();
+    };
+
+    controller.refresh();
+    act = changeDwellAndRefresh(300);
+    controller.refresh();
+    act = changeDwellAndRefresh(500);
+    controller.refresh();
+
+    expect(paddingsAtGsapRefresh).toEqual(['500px', '100px']);
+  });
+
+  it('measures once more when a pin\'s function calls refresh()', () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="pin"></section>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const start = vi.fn(() => {
+      // Stops a recursion short of the stack's end.
+      if (start.mock.calls.length < 50) controller.refresh();
+
+      return 'top top';
+    });
+
+    controller.createStickyPin({ trigger: query('.pin'), start, end: '+=100' });
+    controller.refresh();
+
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  it('measures again after a pin\'s function changes the layout and calls refresh()', () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="p1"></section>
+        <section class="p2"></section>
+      </div>`;
+
+    let dwell = 100;
+    let changeDwell = false;
+    const controller = new StickyScrollTrigger(query('.root'));
+
+    controller.createStickyPin({ trigger: query('.p1'), end: () => `+=${dwell}` });
+    controller.createStickyPin({
+      trigger: query('.p2'),
+      start: () => {
+        if (changeDwell) {
+          changeDwell = false;
+          dwell = 300;
+          controller.refresh();
+        }
+
+        return 'top top';
+      },
+      end: '+=100',
+    });
+    controller.refresh();
+    changeDwell = true;
+    controller.refresh();
+
+    expect([query('.p1'), query('.p2')].map((pin) => pin.parentElement!.style.height))
+      .toEqual(['300px', '100px']);
+  });
+});
+
 // dormancy.test.ts owns the table and its windows. What's checked here is that each instance
 // reaches it: the option, its refresh(), a pin's unwrap and destroy(). jsdom puts everything at 0,
 // so a scroll far past 0 is past every range.
@@ -3818,6 +3998,128 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
     return { Cls, listeners, gsapRefresh };
   };
+
+  // A start function's refresh() waits for the second pass, but a kill's rebuild can't.
+  it('measures without a layer a function kills after its refresh()', () => {
+    const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+    let act: (() => void) | null = null;
+    const { controller, vars, self } = setupScenes(Cls, () => {
+      act?.();
+
+      return `+=${dwell}`;
+    });
+    let paddingsAtGsapRefresh: number | null = null;
+
+    act = () => {
+      act = null;
+      controller.refresh();
+      vars[0].onKill?.(self);
+      gsapRefresh();
+      paddingsAtGsapRefresh = paddings().length;
+    };
+
+    controller.refresh();
+
+    expect(paddingsAtGsapRefresh).toBe(2);
+  });
+
+  // The first refreshInit spends the nested run, but the kill's rebuild still gets one.
+  it('measures without a layer a function kills after its GSAP refresh', () => {
+    const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+    let act: (() => void) | null = null;
+    const { controller, vars, self } = setupScenes(Cls, () => {
+      act?.();
+
+      return `+=${dwell}`;
+    });
+    let paddingsAtGsapRefresh: number | null = null;
+
+    act = () => {
+      act = null;
+      vars[1].onRefreshInit?.(self);
+      vars[0].onKill?.(self);
+      gsapRefresh();
+      paddingsAtGsapRefresh = paddings().length;
+    };
+
+    controller.refresh();
+
+    expect(paddingsAtGsapRefresh).toBe(2);
+  });
+
+  // The function's refresh() has already rebuilt without the layer, but GSAP measures the change.
+  it('measures a change a function makes after a kill and its refresh() in its GSAP refresh', () => {
+    const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+    let act: (() => void) | null = null;
+    const { controller, vars, self } = setupScenes(Cls, () => {
+      act?.();
+
+      return `+=${dwell}`;
+    });
+    let paddingsAtGsapRefresh: string[] = [];
+
+    act = () => {
+      act = null;
+      vars[0].onKill?.(self);
+      controller.refresh();
+      dwell = 300;
+      gsapRefresh();
+      paddingsAtGsapRefresh = Array.from(paddings(), (el) => el.style.height);
+    };
+
+    controller.refresh();
+
+    expect(paddingsAtGsapRefresh).toEqual(['300px', '300px']);
+  });
+
+  // An earlier GSAP refresh has spent the nested run, but the kill's catch-up still runs.
+  it('measures a change a function makes after a GSAP refresh, a kill and its refresh()', () => {
+    const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+    let act: (() => void) | null = null;
+    const { controller, vars, self } = setupScenes(Cls, () => {
+      act?.();
+
+      return `+=${dwell}`;
+    });
+    let paddingsAtGsapRefresh: string[] = [];
+
+    act = () => {
+      act = null;
+      vars[1].onRefreshInit?.(self);
+      vars[0].onKill?.(self);
+      controller.refresh();
+      dwell = 300;
+      gsapRefresh();
+      paddingsAtGsapRefresh = Array.from(paddings(), (el) => el.style.height);
+    };
+
+    controller.refresh();
+
+    expect(paddingsAtGsapRefresh).toEqual(['300px', '300px']);
+  });
+
+  // The GSAP refresh comes back to the catch-up it starts from.
+  it('stops catching up for a function that kills and starts a GSAP refresh on every evaluation', () => {
+    const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+    let act: (() => void) | null = null;
+    const end = vi.fn(() => {
+      // Stops a recursion short of the stack's end.
+      if (end.mock.calls.length < 50) act?.();
+
+      return `+=${dwell}`;
+    });
+    const { controller, vars, self } = setupScenes(Cls, end);
+
+    act = () => {
+      vars[0].onKill?.(self);
+      gsapRefresh();
+    };
+
+    end.mockClear();
+    controller.refresh();
+
+    expect(end.mock.calls.length).toBeLessThan(50);
+  });
 
   it('refreshes once for a batch a layer\'s refreshInit runs', () => {
     const { Cls, listeners } = makeClass({ rec: 0 });
@@ -4597,6 +4899,30 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         expect(query('.root').parentElement).toBe(query('.host'));
         expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
         expect(Cls.refresh).toHaveBeenCalledTimes(1);
+      });
+
+      it('keeps the structure when a function kills every layer and calls refresh()', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        let act: (() => void) | null = null;
+        const { controller, vars, self } = setupScenes(Cls, () => {
+          act?.();
+
+          return `+=${dwell}`;
+        });
+        const scrollTo = followScrollTo(2500);
+
+        act = () => {
+          act = null;
+          vars.forEach((layerVars) => layerVars.onKill?.(self));
+          controller.refresh();
+        };
+
+        Cls.scrolling = true;
+        controller.refresh();
+        await flushMicrotasks();
+
+        expect(paddings()).toHaveLength(3);
+        expect(scrollTo).not.toHaveBeenCalled();
       });
 
       // GSAP measures in that refresh, and nothing refreshes it again once the scroll stops.
