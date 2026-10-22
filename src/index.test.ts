@@ -3574,6 +3574,64 @@ describe('a refresh() from a start or end function', () => {
     expect([query('.p1'), query('.p2')].map((pin) => pin.parentElement!.style.height))
       .toEqual(['300px', '100px']);
   });
+
+  // With no later handler on the instance, only the outermost run can build the new layer before
+  // GSAP measures.
+  describe('a layer a function registers during a GSAP refresh', () => {
+    const inGsapRefresh = (run: () => void) => {
+      Object.assign(FakeScrollTrigger, { isRefreshing: true });
+
+      try {
+        run();
+      } finally {
+        Object.assign(FakeScrollTrigger, { isRefreshing: false });
+      }
+    };
+
+    const setupRegistering = (register: (controller: StickyScrollTrigger) => void) => {
+      document.body.innerHTML = `
+        <div class="root">
+          <section class="s1"></section>
+          <section class="s2"></section>
+        </div>
+        <div class="pin"></div>`;
+
+      const controller = new StickyScrollTrigger(query('.root'));
+      let armed = false;
+      const vars = controller.createStickyTrigger({
+        trigger: query('.s1'),
+        start: () => {
+          if (armed) {
+            armed = false;
+            register(controller);
+          }
+
+          return 'top top';
+        },
+        end: '+=100',
+      });
+
+      controller.refresh();
+      armed = true;
+      inGsapRefresh(() => vars.onRefreshInit?.(makeFakeSelf()));
+    };
+
+    it('builds a Scene layer before the handler returns', () => {
+      setupRegistering((controller) => {
+        controller.createStickyTrigger({ trigger: query('.s2'), end: '+=200' });
+      });
+
+      expect(paddingHeights()).toEqual(['100px', '200px']);
+    });
+
+    it('builds a pin before the handler returns', () => {
+      setupRegistering((controller) => {
+        controller.createStickyPin({ trigger: query('.pin'), end: '+=200' });
+      });
+
+      expect(query('.pin').style.position).toBe('sticky');
+    });
+  });
 });
 
 // dormancy.test.ts owns the table and its windows. What's checked here is that each instance

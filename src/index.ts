@@ -234,7 +234,8 @@ export default class StickyScrollTrigger {
   #depth = 0;
   // The one nested run for a GSAP refresh a function starts is spent until the outermost run ends.
   #refreshInitNestedUsed = false;
-  // The outermost run measures again: a function asked for a refresh, or a nested one ran.
+  // The outermost run measures again: a function asked for a refresh or registered a layer, or a
+  // nested one ran.
   #measureAgain = false;
   // Set by a kill whose catch-up hasn't run: the next refresh() keeps the content in place.
   #keepContentPending = false;
@@ -1482,6 +1483,10 @@ export default class StickyScrollTrigger {
     this.#layers.push(layer);
     this.#dirty = true;
 
+    // Registered inside a run: GSAP doesn't call onRefreshInit for a trigger created during its
+    // refresh, so the outermost run builds it before GSAP measures.
+    if (this.#depth > 0) this.#measureAgain = true;
+
     return {
       ...rest,
       trigger: layer.trigger,
@@ -1721,6 +1726,9 @@ export default class StickyScrollTrigger {
 
     this.#arm();
     this.#pinLayers.push(layer);
+
+    // See #registerLayer.
+    if (this.#depth > 0) this.#measureAgain = true;
 
     return {
       ...rest,
