@@ -10,6 +10,13 @@
  */
 
 import { compareDocumentOrder, measureDocumentHeight } from './dom';
+import {
+  addGsapListener,
+  isRefreshing,
+  removeGsapListener,
+  revertAfterMeasure,
+} from './gsap';
+import type { ScrollTriggerClassLike } from './gsap';
 
 export type NestedStickyOptimization = 'auto' | 'always' | 'off';
 
@@ -38,13 +45,6 @@ export interface DormancyClient {
 interface LiveClient {
   client: DormancyClient;
   owned: readonly HTMLElement[];
-}
-
-// The ScrollTrigger class, captured the way index.ts captures it (gsap is never imported).
-export interface ScrollTriggerClassLike {
-  isRefreshing?: boolean;
-  addEventListener?(type: 'refresh' | 'refreshInit', callback: () => unknown): void;
-  removeEventListener?(type: 'refresh' | 'refreshInit', callback: () => unknown): void;
 }
 
 interface StickyRecord {
@@ -225,7 +225,7 @@ let scannedThisTask: HTMLElement[] | null = null;
 // against the layout for the wrong scroll.
 const gsapClasses = new Set<ScrollTriggerClassLike>();
 const gsapRefreshing = (): boolean =>
-  Array.from(gsapClasses).some((cls) => cls.isRefreshing === true);
+  Array.from(gsapClasses).some((cls) => isRefreshing(cls));
 
 const stateAt = (record: StickyRecord, scroll: number): State => {
   if (!record.demotable) return 'in';
@@ -361,17 +361,17 @@ const onGsapRefreshInit = () => {
     if (records.length) update(0);
   }
 
-  return { render: restoreAfterGsapMeasure };
+  return revertAfterMeasure(restoreAfterGsapMeasure);
 };
 
 const adoptGsapClass = (cls: ScrollTriggerClassLike): void => {
   if (gsapClasses.has(cls)) return;
 
-  if (cls.isRefreshing === true) adoptedMidRefresh = true;
+  if (isRefreshing(cls)) adoptedMidRefresh = true;
 
   gsapClasses.add(cls);
-  cls.addEventListener?.('refresh', onGsapRefreshDone);
-  cls.addEventListener?.('refreshInit', onGsapRefreshInit);
+  addGsapListener(cls, 'refresh', onGsapRefreshDone);
+  addGsapListener(cls, 'refreshInit', onGsapRefreshInit);
 };
 
 // Off the stack: GSAP's dispatch maps over its listener array, so removing one from inside it
@@ -385,8 +385,8 @@ const dropGsapClassesLater = (): void => {
     if (liveClients().length) return;
 
     gsapClasses.forEach((cls) => {
-      cls.removeEventListener?.('refresh', onGsapRefreshDone);
-      cls.removeEventListener?.('refreshInit', onGsapRefreshInit);
+      removeGsapListener(cls, 'refresh', onGsapRefreshDone);
+      removeGsapListener(cls, 'refreshInit', onGsapRefreshInit);
     });
     gsapClasses.clear();
   });
@@ -790,8 +790,13 @@ export const rebuildDormancy = (scrollTriggerClass: ScrollTriggerClassLike | nul
 // listener missed and returns the restore, for the instance's own refreshInit result. Only that
 // handler calls this, so a refresh() from onRefresh (isRefreshing still set) never starts a phase
 // no render(-1) would end. Null when the listener covers it.
-export const takeGsapRefreshRestore = (): (() => void) | null =>
-  (adoptedMidRefresh && gsapRefreshing() ? onGsapRefreshInit().render : null);
+export const takeGsapRefreshRestore = (): (() => void) | null => {
+  if (!adoptedMidRefresh || !gsapRefreshing()) return null;
+
+  onGsapRefreshInit();
+
+  return restoreAfterGsapMeasure;
+};
 
 // Promotes every demoted element and empties the table, for a refresh() that couldn't rebuild it.
 export const clearDormancy = clearTable;

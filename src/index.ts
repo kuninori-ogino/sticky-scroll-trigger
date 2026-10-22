@@ -29,7 +29,20 @@ import {
   releaseDormant,
   unregisterDormancyClient,
 } from './dormancy';
-import type { DormancyClient, ScrollTriggerClassLike } from './dormancy';
+import type { DormancyClient } from './dormancy';
+import {
+  addGsapListener,
+  classOf,
+  isRefreshing,
+  isScrolling,
+  isScrollingOrUpdating,
+  removeGsapListener,
+  refreshAll,
+  revertAfterMeasure,
+  scrollRecord,
+  syncScrollCache,
+} from './gsap';
+import type { ScrollTriggerClass } from './gsap';
 import {
   clearHeightForRead,
   clearStickyForRead,
@@ -131,14 +144,6 @@ const resolvePinReleaseScroll = (
       );
   }
 };
-
-// What this module reads off the captured ScrollTrigger class.
-type ScrollTriggerClass = {
-  refresh(safe?: boolean): void;
-  getScrollFunc?(element: Window): unknown;
-  isScrolling?(): boolean;
-  isUpdating?: unknown;
-} & ScrollTriggerClassLike;
 
 const removeItem = <T>(list: T[], item: T): void => {
   const index = list.indexOf(item);
@@ -245,7 +250,7 @@ export default class StickyScrollTrigger {
   // A last kill's content to keep, until #applyPendingKeep.
   #pendingKeep: PendingKeep | null = null;
   // The ScrollTrigger class, read at runtime off the `self` GSAP passes to its callbacks, so gsap
-  // is never imported (see #scheduleRebuild). Null until the first onKill/onRefreshInit, and
+  // is never imported (see gsap.ts). Null until the first onKill/onRefreshInit, and
   // again after destroy().
   #scrollTriggerClass: ScrollTriggerClass | null = null;
   // Independent of Scene/Cover layers, implemented with plain position:sticky alone.
@@ -334,9 +339,11 @@ export default class StickyScrollTrigger {
     if (this.#armed && !this.#destroyed && !this.#layers.length && !this.#pinLayers.length) {
       if (pendingDisarms.has(this)) return;
 
+      const cls = this.#scrollTriggerClass;
+
       // Mid-scroll, the structure stays until the scroll stops, so the content keeps its place
       // without a scroll mid-fling (see #scheduleRebuild).
-      if (!this.#scrollTriggerClass?.isRefreshing && this.#scrolling()) {
+      if (!isRefreshing(cls) && isScrollingOrUpdating(cls)) {
         pendingDisarms.add(this);
         // An update no scroll started (ScrollTrigger.update(), say) is over by the microtask.
         queueMicrotask(() => this.#settleWhenAtRest());
@@ -368,14 +375,6 @@ export default class StickyScrollTrigger {
     });
   }
 
-  // A kill from a trigger callback runs inside GSAP's update, where the first scroll after a pause
-  // still reads as not scrolling. isUpdating is undocumented, so a missing one reads as false.
-  #scrolling(): boolean {
-    const cls = this.#scrollTriggerClass;
-
-    return Boolean(cls?.isScrolling?.() || cls?.isUpdating === true);
-  }
-
   // Tears down and, with keepContent, keeps the content at the viewport's top in place once the
   // task is over, unless an instance on an overlapping container has armed since: a setup run
   // again (a gsap.context revert and re-run, say) puts the dwell back, as with GSAP's own pins,
@@ -394,7 +393,7 @@ export default class StickyScrollTrigger {
     // GSAP clears the record once it has scrolled back (ScrollTrigger.js:551-562), and a kill
     // from onRefresh or the update after it comes later: then the keep waits for the end of the
     // refresh like any other.
-    if (this.#gsapScrollRecord()) {
+    if (scrollRecord(this.#scrollTriggerClass)) {
       this.#keepContent(position);
 
       return;
@@ -423,7 +422,7 @@ export default class StickyScrollTrigger {
     this.#pendingKeep = null;
     pendingKeeps.delete(keep);
 
-    if (keep.cancelled || (keep.onlyAtRest && keep.cls?.isScrolling?.())) return;
+    if (keep.cancelled || (keep.onlyAtRest && isScrolling(keep.cls))) return;
 
     this.#keepContent(keep.position, keep.cls);
   }
@@ -438,7 +437,7 @@ export default class StickyScrollTrigger {
   #settleWhenAtRest(): void {
     if (this.#destroyed || this.#restTimer !== null) return;
 
-    if (this.#scrollTriggerClass?.isScrolling?.()) {
+    if (isScrolling(this.#scrollTriggerClass)) {
       this.#restTimer = setTimeout(() => {
         this.#restTimer = null;
         this.#settleWhenAtRest();
@@ -465,7 +464,7 @@ export default class StickyScrollTrigger {
   // setup follows is the usual case. Inside GSAP's update alone, whether a scroll has begun shows
   // only once the update is over.
   #flushPendingDisarmForRevert(): void {
-    this.#flushPendingDisarm(!this.#scrollTriggerClass?.isScrolling?.(), true);
+    this.#flushPendingDisarm(!isScrolling(this.#scrollTriggerClass), true);
   }
 
   #disarm(): void {
@@ -573,14 +572,14 @@ export default class StickyScrollTrigger {
 
       const restoreDormancy = takeGsapRefreshRestore();
 
-      return restoreDormancy ? { render: () => restoreDormancy() } : undefined;
+      return restoreDormancy ? revertAfterMeasure(restoreDormancy) : undefined;
     };
 
-    cls?.addEventListener?.('refreshInit', onRefreshInit);
+    addGsapListener(cls, 'refreshInit', onRefreshInit);
 
     const run = () => {
       // Off the stack: GSAP's dispatch maps over its live listener array.
-      cls?.removeEventListener?.('refreshInit', onRefreshInit);
+      removeGsapListener(cls, 'refreshInit', onRefreshInit);
       pendingCatchUps.delete(this);
 
       if (!this.#rebuildScheduled) return;
@@ -590,16 +589,13 @@ export default class StickyScrollTrigger {
       if (this.#destroyed) return;
 
       this.#catchUp();
-
-      // self.constructor is an undocumented GSAP implementation detail, so this skips silently
-      // in case it ever changes.
-      if (typeof this.#scrollTriggerClass?.refresh === 'function') this.#scrollTriggerClass.refresh();
+      refreshAll(this.#scrollTriggerClass);
     };
 
     queueMicrotask(() => {
       // While the page scrolls, the killed layers' padding stays until the scroll stops, as GSAP
       // holds its own refresh: keeping the content in place then needs no scroll mid-fling.
-      if (this.#rebuildScheduled && !this.#destroyed && cls?.isScrolling?.()) {
+      if (this.#rebuildScheduled && !this.#destroyed && isScrolling(cls)) {
         const earlier = this.#deferredRun;
 
         // An earlier batch a GSAP refresh ran still has its listener to drop.
@@ -616,7 +612,7 @@ export default class StickyScrollTrigger {
   }
 
   // Reads the ScrollTrigger class off the `self` that onKill/onRefreshInit pass in, so gsap is
-  // never imported (see #scheduleRebuild). Shared by #registerLayer's and createStickyPin's
+  // never imported (see gsap.ts). Shared by #registerLayer's and createStickyPin's
   // handlers.
   //
   // Does nothing once destroyed: destroy() leaves these handlers registered, and a later kill()
@@ -624,7 +620,7 @@ export default class StickyScrollTrigger {
   #captureScrollTriggerClass(self: ScrollTrigger) {
     if (this.#destroyed) return;
 
-    this.#scrollTriggerClass = self.constructor as unknown as ScrollTriggerClass;
+    this.#scrollTriggerClass = classOf(self);
   }
 
   // Binds refresh() to the refreshInit GSAP itself fires (resize/load), so callers get the right
@@ -642,7 +638,7 @@ export default class StickyScrollTrigger {
       // place to be measured expects to run before refresh() too. This call stays outside the
       // guard below: a plain ScrollTrigger's onRefreshInit gets the same unguarded dispatch.
       const result = userOnRefreshInit?.(self);
-      const inGsapRefresh = this.#scrollTriggerClass?.isRefreshing === true;
+      const inGsapRefresh = isRefreshing(this.#scrollTriggerClass);
       // Other instances' batches first, so this one measures after them; its own is its refresh().
       let caughtUp = false;
 
@@ -674,19 +670,11 @@ export default class StickyScrollTrigger {
 
       if (inGsapRefresh) this.#watchGsapRefresh();
 
-      // GSAP reverts an animation a refreshInit listener returns, once the refresh is done
-      // (ScrollTrigger.js's `refreshInits.forEach(...render(-1))`). The same call puts back the
+      // The render(-1) GSAP calls on the result once it has measured also puts back the
       // nested-sticky state when the table took GSAP's class too late to listen itself.
       const restoreDormancy = takeGsapRefreshRestore();
 
-      if (!restoreDormancy) return result;
-
-      return {
-        render: (time: number) => {
-          (result as { render?: (time: number) => unknown } | undefined)?.render?.(time);
-          restoreDormancy();
-        },
-      };
+      return restoreDormancy ? revertAfterMeasure(restoreDormancy, result) : result;
     };
   }
 
@@ -709,7 +697,7 @@ export default class StickyScrollTrigger {
       if (this.#dispatchObserver === observer) this.#dispatchObserver = null;
 
       // Off the stack: GSAP's dispatch maps over its live listener array.
-      queueMicrotask(() => cls?.removeEventListener?.('refresh', end));
+      queueMicrotask(() => removeGsapListener(cls, 'refresh', end));
     };
 
     observer.observe(document, {
@@ -719,7 +707,7 @@ export default class StickyScrollTrigger {
       characterData: true,
     });
     this.#dispatchObserver = observer;
-    cls?.addEventListener?.('refresh', end);
+    addGsapListener(cls, 'refresh', end);
     queueMicrotask(end);
   }
 
@@ -1176,19 +1164,6 @@ export default class StickyScrollTrigger {
     if (failure) throw failure.error;
   }
 
-  // GSAP's record of the scroll it returns to after measuring, while one of its refreshes runs.
-  // rec is undocumented, so this skips silently if it ever changes.
-  #gsapScrollRecord(): { rec: number } | null {
-    if (!this.#scrollTriggerClass?.isRefreshing) return null;
-
-    const scrollFunc = this.#scrollTriggerClass.getScrollFunc?.(window) as
-      { rec?: unknown } | undefined;
-
-    return scrollFunc && typeof scrollFunc.rec === 'number' && scrollFunc.rec
-      ? scrollFunc as { rec: number }
-      : null;
-  }
-
   // Where the content at the viewport's top edge sits in the unpadded layout, given the layers
   // the DOM holds, and how far into each Scene layer's freeze the scroll is. The scroll is read in
   // the layout the windows were measured in: another instance's catch-up earlier in the task may
@@ -1198,7 +1173,7 @@ export default class StickyScrollTrigger {
     const moved = measured && this.#outermostContainer && measured.unbuilds !== unbuildCount
       ? documentTop(this.#outermostContainer) - measured.top
       : 0;
-    const scroll = (this.#gsapScrollRecord()?.rec ?? window.scrollY) - moved;
+    const scroll = (scrollRecord(this.#scrollTriggerClass)?.read() ?? window.scrollY) - moved;
     const consumed = new Map<HTMLElement, number>();
 
     layers.forEach((layer) => {
@@ -1223,35 +1198,23 @@ export default class StickyScrollTrigger {
     cls: ScrollTriggerClass | null = this.#scrollTriggerClass,
   ): void {
     const target = this.#keptScrollTop(position);
-    const record = this.#gsapScrollRecord();
+    const record = scrollRecord(this.#scrollTriggerClass);
 
     if (record) {
-      record.rec = target;
+      record.write(target);
 
       return;
     }
 
     // With no record to move (rec 0 at the top), GSAP still sets the scroll once it has measured.
-    if (cls?.isRefreshing) return;
+    if (isRefreshing(cls)) return;
 
     // Whole pixels: GSAP's scroll function below rounds what it is given and scrolls there too.
     if (Math.abs(window.scrollY - target) >= 0.5) {
       window.scrollTo({ top: Math.round(target), behavior: 'instant' });
     }
 
-    // GSAP caches the scroll until the scroll event, and a trigger created before then scrolls
-    // back to the cached number once it has measured (ScrollTrigger.js:1265, 1565). GSAP's scroll
-    // function updates the cache but also scrolls, so it runs only when the cache is off.
-    // Undocumented, so skipped if absent.
-    const scrollFunc = cls?.getScrollFunc?.(window) as ((value?: number) => unknown) | undefined;
-
-    if (typeof scrollFunc !== 'function') return;
-
-    const cached = scrollFunc();
-
-    if (typeof cached !== 'number' || Math.abs(cached - window.scrollY) >= 0.5) {
-      scrollFunc(window.scrollY);
-    }
+    syncScrollCache(cls);
   }
 
   // Each Scene layer still built keeps the dwell the scroll had gone through, capped at its new
