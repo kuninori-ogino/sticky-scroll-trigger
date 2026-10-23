@@ -31,6 +31,45 @@ class FakeScrollTrigger {
 
 const makeFakeSelf = () => Object.create(FakeScrollTrigger.prototype) as ScrollTrigger;
 
+// A ScrollTrigger class whose refreshInit dispatch the test runs. getScrollFunc() holds GSAP's
+// scroll record.
+const makeClass = (scroller: { rec?: unknown }) => {
+  const listeners: (() => unknown)[] = [];
+
+  class Cls {
+    static refresh = vi.fn();
+
+    static isRefreshing = false;
+
+    static scrolling = false;
+
+    static isScrolling = () => Cls.scrolling;
+
+    static isUpdating = false;
+
+    static getScrollFunc = () => scroller;
+
+    static addEventListener = (type: string, callback: () => unknown) => {
+      if (type === 'refreshInit') listeners.push(callback);
+    };
+
+    static removeEventListener = (type: string, callback: () => unknown) => {
+      if (type === 'refreshInit' && listeners.includes(callback)) {
+        listeners.splice(listeners.indexOf(callback), 1);
+      }
+    };
+  }
+
+  // GSAP's refreshInit dispatch, with isRefreshing set. GSAP measures right after it.
+  const gsapRefresh = () => {
+    Cls.isRefreshing = true;
+    [...listeners].forEach((callback) => callback());
+    Cls.isRefreshing = false;
+  };
+
+  return { Cls, listeners, gsapRefresh };
+};
+
 // Runs the queued microtasks and the ones they queue, so a test checks what is done by the end of
 // the task. Work moved to a later task still shows as not done.
 const flushMicrotasks = async () => {
@@ -1110,23 +1149,24 @@ describe('batching kill()', () => {
       controller.destroy();
     });
 
-    it('notifies GSAP only after the internal refresh() (recomputing freezeStart/End) has finished', async () => {
+    it('has recomputed freezeStart/End by the time GSAP measures', async () => {
       const { vars } = setupThreeScenes();
+      const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+      const self = Object.create(Cls.prototype) as ScrollTrigger;
       const survivorStartBefore = (vars[2].start as () => number)();
-      let survivorStartWhenNotified: number | undefined;
+      let survivorStartWhenMeasured: number | undefined;
 
-      FakeScrollTrigger.refresh.mockImplementationOnce(() => {
-        survivorStartWhenNotified = (vars[2].start as () => number)();
+      Cls.refresh.mockImplementationOnce(() => {
+        gsapRefresh();
+        survivorStartWhenMeasured = (vars[2].start as () => number)();
       });
 
-      vars[0].onKill?.(fakeSelf);
-      vars[1].onKill?.(fakeSelf);
+      vars[0].onKill?.(self);
+      vars[1].onKill?.(self);
       await flushMicrotasks();
 
-      // by the time GSAP is notified, the surviving layer's (s3's) freezeStart should
-      // already hold its new value (notifying GSAP before recomputing internally would leave
-      // it reading a stale value).
-      expect(survivorStartWhenNotified).not.toBe(survivorStartBefore);
+      // GSAP measuring before the batch's refresh() would read s3's stale freezeStart.
+      expect(survivorStartWhenMeasured).not.toBe(survivorStartBefore);
     });
 
     it('never notifies GSAP for an ordinary refresh() call (no kill involved)', () => {
@@ -4020,43 +4060,6 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
     dwell = 100;
   });
 
-  const makeClass = (scroller: { rec?: unknown }) => {
-    const listeners: (() => unknown)[] = [];
-
-    class Cls {
-      static refresh = vi.fn();
-
-      static isRefreshing = false;
-
-      static scrolling = false;
-
-      static isScrolling = () => Cls.scrolling;
-
-      static isUpdating = false;
-
-      static getScrollFunc = () => scroller;
-
-      static addEventListener = (type: string, callback: () => unknown) => {
-        if (type === 'refreshInit') listeners.push(callback);
-      };
-
-      static removeEventListener = (type: string, callback: () => unknown) => {
-        if (type === 'refreshInit' && listeners.includes(callback)) {
-          listeners.splice(listeners.indexOf(callback), 1);
-        }
-      };
-    }
-
-    // GSAP's refresh: refreshInit runs while isRefreshing is set.
-    const gsapRefresh = () => {
-      Cls.isRefreshing = true;
-      [...listeners].forEach((callback) => callback());
-      Cls.isRefreshing = false;
-    };
-
-    return { Cls, listeners, gsapRefresh };
-  };
-
   // A start function's refresh() waits for the second pass, but a kill's rebuild can't.
   it('measures without a layer a function kills after its refresh()', () => {
     const { Cls, gsapRefresh } = makeClass({ rec: 0 });
@@ -4514,19 +4517,29 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       outer.destroy();
     });
 
-    // GSAP measures at the kept scroll, so no trigger updates at the one in between.
-    it('keeps the content before the batch refreshes GSAP', async () => {
-      const { Cls } = makeClass({ rec: 0 });
+    // No trigger updates at a scroll in between.
+    it('keeps the content with one move around the batch\'s GSAP refresh', async () => {
+      const scroller = { rec: 0 };
+      const { Cls, gsapRefresh } = makeClass(scroller);
       const { vars, self } = setupScenes(Cls);
       const scrollTo = followScrollTo(2500);
-      const scrollAtGsapRefresh: number[] = [];
+      const scrollAfterGsapRefresh: number[] = [];
 
-      Cls.refresh.mockImplementation(() => scrollAtGsapRefresh.push(window.scrollY));
+      // GSAP's refresh records the scroll, dispatches refreshInit, measures, then scrolls back to
+      // its record and clears it.
+      Cls.refresh.mockImplementation(() => {
+        scroller.rec = window.scrollY;
+        gsapRefresh();
+        window.scrollTo({ top: scroller.rec, behavior: 'instant' });
+        scroller.rec = 0;
+        scrollAfterGsapRefresh.push(window.scrollY);
+      });
       vars.forEach((layerVars) => layerVars.onKill?.(self));
       await flushMicrotasks();
 
-      expect(scrollAtGsapRefresh).toEqual([2200]);
-      expect(scrollTo).toHaveBeenCalledTimes(1);
+      expect(scrollAfterGsapRefresh).toEqual([2200]);
+      expect(new Set(scrollTo.mock.calls.map(([options]) => (options as ScrollToOptions).top)))
+        .toEqual(new Set([2200]));
     });
 
     // GSAP has scrolled back and cleared its record by onRefresh and the update after it.
@@ -5005,12 +5018,15 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       });
 
       // Inside a trigger callback, the first scroll after a pause doesn't read as scrolling yet.
-      it('waits out a GSAP update alone, and tears down before GSAP refreshes', async () => {
-        const { Cls } = makeClass({ rec: 0 });
+      it('waits out a GSAP update alone, and tears down before GSAP measures', async () => {
+        const { Cls, gsapRefresh } = makeClass({ rec: 0 });
         const { vars, self } = setupScenes(Cls);
         const paddingsAtGsapRefresh: number[] = [];
 
-        Cls.refresh.mockImplementation(() => paddingsAtGsapRefresh.push(paddings().length));
+        Cls.refresh.mockImplementation(() => {
+          gsapRefresh();
+          paddingsAtGsapRefresh.push(paddings().length);
+        });
         Cls.isUpdating = true;
         vars.forEach((layerVars) => layerVars.onKill?.(self));
         expect(paddings()).toHaveLength(3);
