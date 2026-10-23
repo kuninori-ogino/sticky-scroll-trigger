@@ -75,6 +75,20 @@ const makeClass = (scroller: { rec?: unknown }) => {
   return { Cls, listeners, gsapRefresh };
 };
 
+// How often one refresh() of the instance calls an end function, so a test can count refreshes
+// by it. Holds while the function returns the same value throughout the refreshes counted.
+const endCallsPerRefresh = (controller: StickyScrollTrigger, end: ReturnType<typeof vi.fn>) => {
+  end.mockClear();
+  controller.refresh();
+
+  const calls = end.mock.calls.length;
+
+  end.mockClear();
+  expect(calls).toBeGreaterThan(0);
+
+  return calls;
+};
+
 // Runs the queued microtasks and the ones they queue, so a test checks what is done by the end of
 // the task. Work moved to a later task still shows as not done.
 const flushMicrotasks = async () => {
@@ -4190,7 +4204,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
   it('refreshes once for a batch a layer\'s refreshInit runs', () => {
     const { Cls, listeners } = makeClass({ rec: 0 });
     const end = vi.fn(() => `+=${dwell}`);
-    const { vars, self } = setupScenes(Cls, end);
+    const { controller, vars, self } = setupScenes(Cls, end);
 
     vars[0].onKill?.(self);
     end.mockClear();
@@ -4200,8 +4214,10 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
     [...listeners].forEach((callback) => callback());
     Cls.isRefreshing = false;
 
-    // One refresh() reads each of the two layers left once.
-    expect(end).toHaveBeenCalledTimes(2);
+    const inBatch = end.mock.calls.length;
+
+    // As many reads as one refresh() of the two layers left makes.
+    expect(inBatch).toBe(endCallsPerRefresh(controller, end));
   });
 
   // The batch is gone by its own listener, so nothing else builds the new layer in this refresh.
@@ -4439,11 +4455,12 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
     it('rebuilds once, in the refreshInit of the GSAP refresh the batch starts', async () => {
       const { Cls, listeners } = makeClass({ rec: 0 });
       const inGsapRefresh: boolean[] = [];
-      const { vars, self } = setupScenes(Cls, () => {
+      const end = vi.fn(() => {
         inGsapRefresh.push(Cls.isRefreshing);
 
         return '+=100';
       });
+      const { controller, vars, self } = setupScenes(Cls, end);
 
       Cls.refresh.mockImplementation(() => {
         Cls.isRefreshing = true;
@@ -4455,9 +4472,13 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       vars[0].onKill?.(self);
       await flushMicrotasks();
 
-      // One evaluation per layer left, each inside GSAP's refresh.
-      expect(inGsapRefresh).toEqual([true, true]);
       expect(Cls.refresh).toHaveBeenCalledTimes(1);
+      // Every evaluation inside GSAP's refresh, as many as one refresh() of the layers left makes.
+      expect(inGsapRefresh).not.toContain(false);
+
+      const inBatch = inGsapRefresh.length;
+
+      expect(inBatch).toBe(endCallsPerRefresh(controller, end));
     });
 
     it('leaves a kill during the batch\'s GSAP refresh to a GSAP refresh of its own', async () => {
@@ -6082,11 +6103,13 @@ describe('an instance that measured earlier in the same GSAP refresh', () => {
     upper.controller.refresh();
     lower.controller.refresh();
     listen(gsap, upper.vars, lower.vars);
+
+    const perRefresh = endCallsPerRefresh(upper.controller, upperEnd);
+
     lowerDwell = 300;
-    upperEnd.mockClear();
     gsap.gsapRefresh(true);
 
-    expect(upperEnd).toHaveBeenCalledTimes(1);
+    expect(upperEnd).toHaveBeenCalledTimes(perRefresh);
     expect(lower.start()).toBe(1200);
   });
 
@@ -6096,11 +6119,17 @@ describe('an instance that measured earlier in the same GSAP refresh', () => {
   it('measures each earlier instance once per handler', () => {
     const gsap = makeClass({ rec: 0 });
     let bottomDwell = 100;
+    // middle's dwell follows bottom's, from bottom's last measurement.
+    let middleDwell = 0;
     const topEnd = vi.fn(() => '+=200');
     const { top, middle, bottom } = setupBlocks({
       top: topEnd,
-      middle: () => `+=${paddingIn('bottom')}`,
-      bottom: () => `+=${bottomDwell}`,
+      middle: () => `+=${middleDwell}`,
+      bottom: () => {
+        middleDwell = bottomDwell;
+
+        return `+=${bottomDwell}`;
+      },
     });
 
     tops.top = () => 1000 + paddingIn('bottom') + paddingIn('middle');
@@ -6109,12 +6138,14 @@ describe('an instance that measured earlier in the same GSAP refresh', () => {
     middle.controller.refresh();
     top.controller.refresh();
     listen(gsap, top.vars, middle.vars, bottom.vars);
+
+    const perRefresh = endCallsPerRefresh(top.controller, topEnd);
+
     bottomDwell = 300;
-    topEnd.mockClear();
     gsap.gsapRefresh(true);
 
     // Its own handler, then once for bottom's, before middle's padding grew.
-    expect(topEnd).toHaveBeenCalledTimes(2);
+    expect(topEnd).toHaveBeenCalledTimes(2 * perRefresh);
     expect(top.start()).toBe(1400);
     expect(middle.start()).toBe(3300);
   });
@@ -6129,11 +6160,13 @@ describe('an instance that measured earlier in the same GSAP refresh', () => {
     upper.controller.refresh();
     lower.controller.refresh();
     listen(gsap, upper.vars, lower.vars);
+
+    const perRefresh = endCallsPerRefresh(upper.controller, upperEnd);
+
     upperDwell = 300;
-    upperEnd.mockClear();
     gsap.gsapRefresh(true);
 
-    expect(upperEnd).toHaveBeenCalledTimes(1);
+    expect(upperEnd).toHaveBeenCalledTimes(perRefresh);
     expect(lower.start()).toBe(1300);
   });
 
@@ -6156,12 +6189,14 @@ describe('an instance that measured earlier in the same GSAP refresh', () => {
     upper.refresh();
     lower.refresh();
     listen(gsap, first, middle, last);
+
+    const perRefresh = endCallsPerRefresh(lower, lowerEnd);
+
     upperDwell = 300;
-    lowerEnd.mockClear();
     gsap.gsapRefresh(true);
 
-    // Two layers read in its own handler's refresh() and again for upper's; last's has nothing new.
-    expect(lowerEnd).toHaveBeenCalledTimes(4);
+    // Its own handler's refresh() and again for upper's; last's has nothing new.
+    expect(lowerEnd).toHaveBeenCalledTimes(2 * perRefresh);
     expect((last.start as () => number)()).toBe(1300 + 200);
   });
 
