@@ -190,6 +190,9 @@ const pendingCatchUps = new Map<StickyScrollTrigger, () => boolean>();
 // Counts structures taken down by any instance. Only such a rebuild moves a container under
 // windows measured before it; a change with none (in a stuck ancestor's offset, say) isn't one.
 let unbuildCount = 0;
+// The instances that have refreshed in the GSAP refresh under way, each with what it read outside
+// its own structure (see #outsideReads). Two GSAP refreshes in one task share it.
+let refreshedInGsapRefresh: Map<StickyScrollTrigger, string> | null = null;
 // How often held work checks isScrolling(), the condition GSAP holds its own refresh on, so it
 // waits as long (a finger held down, or ScrollTrigger.disable() mid-scroll). A poll, not
 // scrollEnd: ScrollTrigger.killAll() drops every listener, and GSAP also fires scrollEnd from the
@@ -265,6 +268,9 @@ export default class StickyScrollTrigger {
   // Watches the DOM through one GSAP refresh, from this instance's last refresh() on (see
   // #createAutoRefreshHandler).
   #dispatchObserver: MutationObserver | null = null;
+  // Whether the last refresh() to get through planning read the page's height (a cover's 'max', a
+  // pin's room), which another instance can move (see #outsideReads).
+  #readsPageHeight = false;
   // This instance's share of the page-level dormancy table, or null where it stays off (see
   // dormancy.ts).
   #dormancyClient: DormancyClient | null = null;
@@ -637,6 +643,8 @@ export default class StickyScrollTrigger {
       const inGsapRefresh = isRefreshing(this.#scrollTriggerClass);
       // Other instances' batches first, so this one measures after them; its own is its refresh().
       let caughtUp = false;
+      // Whether this handler's refresh() ran, which may move what another instance read.
+      let refreshed = false;
 
       if (inGsapRefresh) {
         [...pendingCatchUps].forEach(([owner, catchUpNow]) => owner !== this && catchUpNow());
@@ -657,14 +665,21 @@ export default class StickyScrollTrigger {
       // here would stop every later listener and every trigger's own refresh. The catch rethrows
       // off the stack instead of swallowing, since a stale freeze window with no signal is worse.
       try {
-        if (!unchanged) this.#refreshFrom(true);
+        if (!unchanged) {
+          refreshed = true;
+          this.#refreshFrom(true);
+        }
       } catch (error) {
         queueMicrotask(() => {
           throw error;
         });
       }
 
-      if (inGsapRefresh) this.#watchGsapRefresh();
+      if (inGsapRefresh) {
+        this.#watchGsapRefresh();
+
+        if (refreshed || caughtUp) this.#remeasureEarlierInGsapRefresh();
+      }
 
       // The render(-1) GSAP calls on the result once it has measured also puts back the
       // nested-sticky state when the table took GSAP's class too late to listen itself.
@@ -705,6 +720,54 @@ export default class StickyScrollTrigger {
     this.#dispatchObserver = observer;
     addGsapListener(cls, 'refresh', end);
     queueMicrotask(end);
+  }
+
+  // GSAP runs the handlers in creation order, not page order, so an instance that refreshed earlier
+  // in this GSAP refresh may have read what this one just moved: its container (this one sits
+  // above it), or the page's end or an endTrigger (this one sits below). Each such instance
+  // measures again, once per handler: one whose measurement moves another's reads leaves that one
+  // to the next refresh, so reads that keep moving each other can't multiply the cost.
+  #remeasureEarlierInGsapRefresh(): void {
+    const refreshed = refreshedInGsapRefresh ?? new Map<StickyScrollTrigger, string>();
+
+    if (!refreshedInGsapRefresh) {
+      refreshedInGsapRefresh = refreshed;
+      queueMicrotask(() => {
+        if (refreshedInGsapRefresh === refreshed) refreshedInGsapRefresh = null;
+      });
+    }
+
+    refreshed.set(this, this.#outsideReads());
+    refreshed.forEach((reads, other) => {
+      if (other.#destroyed || reads === other.#outsideReads()) return;
+
+      // As in #createAutoRefreshHandler: one instance's error must not stop the others.
+      try {
+        other.#refreshFrom(true);
+      } catch (error) {
+        queueMicrotask(() => {
+          throw error;
+        });
+      }
+
+      // Its own writes aren't a change for its handlers still to come.
+      other.#dispatchObserver?.takeRecords();
+      refreshed.set(other, other.#outsideReads());
+    });
+  }
+
+  // What refresh() reads outside this instance's own structure: where its container starts, the
+  // page's height when it read that, and every endTrigger outside the root.
+  #outsideReads(): string {
+    const reads = [documentTop(this.#rootElement)];
+
+    if (this.#readsPageHeight) reads.push(measureDocumentHeightWithoutPinRanges());
+
+    [...this.#layers, ...this.#pinLayers].forEach(({ endTrigger }) => {
+      if (!this.#rootElement.contains(endTrigger)) reads.push(documentTop(endTrigger));
+    });
+
+    return reads.join(',');
   }
 
   // Wraps any not-yet-built pin layer. Must run before #refreshGeometry measures Scene and
@@ -856,6 +919,8 @@ export default class StickyScrollTrigger {
       stickyTops = measured
         ? this.#planLayerPositions(viewportHeight, active, measured)
         : new Map<HTMLElement, number>();
+      this.#readsPageHeight = pins.length > 0
+        || (measured?.measured.some(({ end }) => end.mode === 'max') ?? false);
     } catch (error) {
       // catch rather than finally: after a success the snapshots hold what the writes below
       // replace, and restoring them would undo the lot.

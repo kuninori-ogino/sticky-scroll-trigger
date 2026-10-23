@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>instanceOrderFrame fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      iframe {
+        display: block;
+        width: 1000px;
+        border: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <iframe id="frame"></iframe>
+    <script type="module">
+      // Hosts instanceOrder.html in an iframe, whose viewport a test resizes synchronously by
+      // setting the iframe's height: a refresh in the same task already measures the new size.
+      const params = new URLSearchParams(location.search);
+      const frame = document.getElementById('frame');
+
+      frame.style.height = `${params.get('height')}px`;
+      frame.src = `instanceOrder.html?${params.get('inner')}`;
+      window.__inner = () => frame.contentWindow;
+    </script>
+  </body>
+</html>

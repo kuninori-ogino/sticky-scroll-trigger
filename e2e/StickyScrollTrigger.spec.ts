@@ -2989,3 +2989,120 @@ test('a later layer\'s onRefreshInit changes reach every window in GSAP\'s refre
   // #s0 dwells 250 longer, which also delays #s1 and #s2; #s1 is 250 taller, which delays #s2.
   expect((await read()).windows).toEqual([[200, 650], [950, 1150], [1700, 1900]]);
 });
+
+// instanceOrder.html's hooks.
+interface InstanceOrderWindow {
+  __ready?: boolean;
+  __windows: () => [number, number][];
+  __refreshes: () => number;
+  __ScrollTrigger: { refresh: () => void };
+}
+
+// GSAP's refresh runs each instance's refreshInit in the order its triggers were created, so in
+// these layouts the lower instance measures before the upper one moves what it read: its container,
+// or (layout=max) the page's end the upper cover's 'max' reads.
+const instanceOrderLayouts = [
+  'layout=dwell&order=after',
+  'layout=dwell&order=after&cover',
+  'layout=dwell&order=remount',
+  'layout=dwell&order=remount&cover',
+  'layout=max',
+];
+
+const loadInstanceOrder = async (page: Page, query: string, height: number) => {
+  await page.setViewportSize({ width: 1000, height });
+  await page.goto(`/fixtures/instanceOrder.html?${query}`);
+  await page.waitForFunction(() => (window as never as InstanceOrderWindow).__ready === true);
+};
+
+const readInstanceOrder = (page: Page) =>
+  page.evaluate(() => (window as never as InstanceOrderWindow).__windows());
+
+for (const query of instanceOrderLayouts) {
+  for (const [from, to] of [[600, 900], [900, 600]]) {
+    test(`a resize gives two instances the windows of a fresh load (${query}, ${from} -> ${to})`, async ({ page }) => {
+      await loadInstanceOrder(page, query, to);
+
+      const fresh = await readInstanceOrder(page);
+
+      await loadInstanceOrder(page, query, from);
+
+      const refreshes = () =>
+        page.evaluate(() => (window as never as InstanceOrderWindow).__refreshes());
+      const before = await refreshes();
+
+      await page.setViewportSize({ width: 1000, height: to });
+      await expect.poll(refreshes).toBeGreaterThan(before);
+      // Anything the refresh left to a frame has run by the second one.
+      await page.evaluate(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }));
+
+      expect(await readInstanceOrder(page)).toEqual(fresh);
+      // One refresh got there.
+      expect(await refreshes()).toBe(before + 1);
+    });
+  }
+}
+
+// An iframe's height is its viewport, so setting it resizes synchronously and the refreshes below
+// all run in one task, as a resize handler's would. second: a refresh before the resize, which
+// leaves its record of what each instance read in place for the one after it. split: a refresh
+// at each of two sizes.
+const sameTaskRefreshes = {
+  one: ['resize', 'refresh'],
+  second: ['refresh', 'resize', 'refresh'],
+  split: ['resizeMid', 'refresh', 'resize', 'refresh'],
+} as const;
+
+// instanceOrderFrame.html's hook: the framed page's window.
+interface InstanceOrderFrameWindow {
+  __inner: () => (InstanceOrderWindow & Window) | null;
+}
+
+const loadInstanceOrderFrame = async (page: Page, query: string, height: number) => {
+  await page.setViewportSize({ width: 1000, height: 1000 });
+  await page.goto(
+    `/fixtures/instanceOrderFrame.html?height=${height}&inner=${encodeURIComponent(query)}`,
+  );
+  await page.waitForFunction(
+    () => (window as never as InstanceOrderFrameWindow).__inner()?.__ready === true,
+  );
+};
+
+for (const query of instanceOrderLayouts) {
+  for (const [shape, steps] of Object.entries(sameTaskRefreshes)) {
+    test(`refreshes in the task of a resize give two instances the windows of a fresh load (${query}, ${shape})`, async ({ page }) => {
+      const readFrame = () => page.evaluate(
+        () => (window as never as InstanceOrderFrameWindow).__inner()!.__windows(),
+      );
+
+      await loadInstanceOrderFrame(page, query, 900);
+
+      const fresh = await readFrame();
+
+      await loadInstanceOrderFrame(page, query, 600);
+
+      const sameTask = await page.evaluate((stepList) => {
+        const frame = document.getElementById('frame') as HTMLIFrameElement;
+        const inner = (window as never as InstanceOrderFrameWindow).__inner()!;
+
+        const resizeTo = (height: number) => {
+          frame.style.height = `${height}px`;
+          // Reading it lays the frame out at the new size.
+          void inner.innerHeight;
+        };
+
+        stepList.forEach((step) => {
+          if (step === 'refresh') inner.__ScrollTrigger.refresh();
+          else resizeTo(step === 'resize' ? 900 : 750);
+        });
+
+        return { innerHeight: inner.innerHeight, windows: inner.__windows() };
+      }, [...steps]);
+
+      expect(sameTask.innerHeight).toBe(900);
+      expect(sameTask.windows).toEqual(fresh);
+    });
+  }
+}

@@ -31,10 +31,10 @@ class FakeScrollTrigger {
 
 const makeFakeSelf = () => Object.create(FakeScrollTrigger.prototype) as ScrollTrigger;
 
-// A ScrollTrigger class whose refreshInit dispatch the test runs. getScrollFunc() holds GSAP's
-// scroll record.
+// A ScrollTrigger class whose refresh the test runs. getScrollFunc() holds GSAP's scroll record.
 const makeClass = (scroller: { rec?: unknown }) => {
   const listeners: (() => unknown)[] = [];
+  const refreshListeners: (() => unknown)[] = [];
 
   class Cls {
     static refresh = vi.fn();
@@ -51,20 +51,25 @@ const makeClass = (scroller: { rec?: unknown }) => {
 
     static addEventListener = (type: string, callback: () => unknown) => {
       if (type === 'refreshInit') listeners.push(callback);
+
+      if (type === 'refresh') refreshListeners.push(callback);
     };
 
     static removeEventListener = (type: string, callback: () => unknown) => {
-      if (type === 'refreshInit' && listeners.includes(callback)) {
-        listeners.splice(listeners.indexOf(callback), 1);
-      }
+      const list = type === 'refreshInit' ? listeners : type === 'refresh' ? refreshListeners : null;
+
+      if (list?.includes(callback)) list.splice(list.indexOf(callback), 1);
     };
   }
 
-  // GSAP's refreshInit dispatch, with isRefreshing set. GSAP measures right after it.
-  const gsapRefresh = () => {
+  // GSAP's refreshInit dispatch, with isRefreshing set. GSAP measures right after it, then
+  // dispatches 'refresh' (complete); without it the refresh is one that threw before then.
+  const gsapRefresh = (complete = false) => {
     Cls.isRefreshing = true;
     [...listeners].forEach((callback) => callback());
     Cls.isRefreshing = false;
+
+    if (complete) [...refreshListeners].forEach((callback) => callback());
   };
 
   return { Cls, listeners, gsapRefresh };
@@ -5856,5 +5861,395 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       expect(scrollTo.mock.calls).toEqual([[{ top: 100, behavior: 'instant' }]]);
     });
+  });
+});
+
+describe('an instance that measured earlier in the same GSAP refresh', () => {
+  // jsdom puts nothing anywhere, so each block's elements sit where `tops` says, which may follow
+  // other blocks' padding. offsetParent stays null, so offsetTop is each one's whole documentTop.
+  let tops: Record<string, () => number> = {};
+  const paddingIn = (block: string) => Array.from(
+    document.querySelectorAll<HTMLElement>(`.${block} div[aria-hidden="true"]`),
+    (el) => parseFloat(el.style.height) || 0,
+  ).reduce((sum, height) => sum + height, 0);
+
+  beforeEach(() => {
+    tops = {};
+    vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(function offsetTop(
+      this: HTMLElement,
+    ) {
+      const block = Object.keys(tops).find((name) => this.closest(`.${name}`));
+
+      return block ? tops[block]() : 0;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // Each block holds one instance with one Scene layer whose end the test gives.
+  const setupBlocks = (blocks: Record<string, () => string>) => {
+    document.body.innerHTML = Object.keys(blocks)
+      .map((name) => `<div class="${name}"><div class="root"><section></section></div></div>`)
+      .join('');
+
+    return Object.fromEntries(Object.entries(blocks).map(([name, end]) => {
+      const controller = new StickyScrollTrigger(query(`.${name} .root`));
+      const vars = controller.createStickyTrigger({ trigger: query(`.${name} section`), end });
+
+      return [name, { controller, vars, start: () => (vars.start as () => number)() }];
+    }));
+  };
+
+  // GSAP adds each trigger's onRefreshInit to its refreshInit listeners as the trigger is created,
+  // and calls it with that trigger.
+  const listen = (cls: ReturnType<typeof makeClass>, ...layers: ScrollTrigger.Vars[]) =>
+    layers.map((vars) => {
+      const self = Object.create(cls.Cls.prototype) as ScrollTrigger;
+      const listener = () => vars.onRefreshInit?.(self);
+
+      cls.listeners.push(listener);
+
+      return listener;
+    });
+
+  it('measures again when a later handler moves its container', () => {
+    const gsap = makeClass({ rec: 0 });
+    let upperDwell = 100;
+    const { upper, lower } = setupBlocks({
+      upper: () => `+=${upperDwell}`,
+      lower: () => '+=200',
+    });
+
+    tops.lower = () => 1000 + paddingIn('upper');
+    upper.controller.refresh();
+    lower.controller.refresh();
+    listen(gsap, lower.vars, upper.vars);
+    upperDwell = 300;
+    gsap.gsapRefresh(true);
+
+    expect(lower.start()).toBe(1300);
+  });
+
+  it('measures again when a later handler moves an endTrigger outside its container', () => {
+    const gsap = makeClass({ rec: 0 });
+    let lowerDwell = 100;
+
+    document.body.innerHTML = `
+      <div class="upper"><div class="root"><section class="c1"></section><section></section></div></div>
+      <div class="lower"><div class="root"><section></section></div></div>
+      <div class="after"></div>`;
+    tops.lower = () => 1000;
+    tops.after = () => 2000 + paddingIn('lower');
+
+    const upper = new StickyScrollTrigger(query('.upper .root'));
+    const cover = upper.createOverlapScroll({
+      trigger: query('.c1'),
+      endTrigger: query('.after'),
+      end: 'top top',
+    });
+    const lower = new StickyScrollTrigger(query('.lower .root'));
+    const scene = lower.createStickyTrigger({
+      trigger: query('.lower section'),
+      end: () => `+=${lowerDwell}`,
+    });
+
+    upper.refresh();
+    lower.refresh();
+    listen(gsap, cover, scene);
+    lowerDwell = 300;
+    gsap.gsapRefresh(true);
+
+    expect((cover.end as () => number)()).toBe(2300);
+  });
+
+  // Two GSAP refreshes in one task (a resize handler's, say) share the record of what each instance
+  // read, so one whose trigger GSAP stopped refreshing in between (disabled) measures again too.
+  it('measures again for a GSAP refresh earlier in the same task', () => {
+    const gsap = makeClass({ rec: 0 });
+    let upperDwell = 100;
+    const { upper, lower } = setupBlocks({
+      upper: () => `+=${upperDwell}`,
+      lower: () => '+=200',
+    });
+
+    tops.lower = () => 1000 + paddingIn('upper');
+    upper.controller.refresh();
+    lower.controller.refresh();
+
+    const [lowerListener] = listen(gsap, lower.vars, upper.vars);
+
+    gsap.gsapRefresh(true);
+    gsap.Cls.removeEventListener('refreshInit', lowerListener);
+    upperDwell = 300;
+    gsap.gsapRefresh(true);
+
+    expect(lower.start()).toBe(1300);
+  });
+
+  // A refresh in a later task has no record of what an instance read before, so one whose
+  // trigger GSAP no longer refreshes (disabled) keeps what it measured.
+  it('measures nothing again for a GSAP refresh in an earlier task', async () => {
+    const gsap = makeClass({ rec: 0 });
+    let upperDwell = 100;
+    const { upper, lower } = setupBlocks({
+      upper: () => `+=${upperDwell}`,
+      lower: () => '+=200',
+    });
+
+    tops.lower = () => 1000 + paddingIn('upper');
+    upper.controller.refresh();
+    lower.controller.refresh();
+
+    const [lowerListener] = listen(gsap, lower.vars, upper.vars);
+
+    gsap.gsapRefresh(true);
+    await flushMicrotasks();
+    gsap.Cls.removeEventListener('refreshInit', lowerListener);
+    upperDwell = 300;
+    gsap.gsapRefresh(true);
+
+    expect(lower.start()).toBe(1100);
+  });
+
+  it('measures again when a later handler moves the page\'s end its \'max\' reads', () => {
+    const gsap = makeClass({ rec: 0 });
+    let lowerDwell = 100;
+
+    document.body.innerHTML = `
+      <div class="upper"><div class="root"><section class="c1"></section><section></section></div></div>
+      <div class="lower"><div class="root"><section></section></div></div>`;
+    vi.spyOn(document.documentElement, 'scrollHeight', 'get')
+      .mockImplementation(() => 3000 + paddingIn('lower'));
+
+    const upper = new StickyScrollTrigger(query('.upper .root'));
+    const cover = upper.createOverlapScroll({ trigger: query('.c1'), end: 'max' });
+    const lower = new StickyScrollTrigger(query('.lower .root'));
+    const scene = lower.createStickyTrigger({
+      trigger: query('.lower section'),
+      end: () => `+=${lowerDwell}`,
+    });
+
+    upper.refresh();
+    lower.refresh();
+    listen(gsap, cover, scene);
+    lowerDwell = 300;
+    gsap.gsapRefresh(true);
+
+    expect((cover.end as () => number)()).toBe(3300 - window.innerHeight);
+  });
+
+  // A pin's range stops at the page's end.
+  it('measures again when a later handler moves the page\'s end a pin reads', () => {
+    const gsap = makeClass({ rec: 0 });
+    let lowerDwell = 100;
+
+    document.body.innerHTML = `
+      <div class="upper"><div class="root"><section class="pin"></section></div></div>
+      <div class="lower"><div class="root"><section></section></div></div>`;
+    vi.spyOn(document.documentElement, 'scrollHeight', 'get')
+      .mockImplementation(() => 3000 + paddingIn('lower'));
+
+    const upper = new StickyScrollTrigger(query('.upper .root'));
+    const pin = upper.createStickyPin({ trigger: query('.pin'), end: '+=5000' });
+    const lower = new StickyScrollTrigger(query('.lower .root'));
+    const scene = lower.createStickyTrigger({
+      trigger: query('.lower section'),
+      end: () => `+=${lowerDwell}`,
+    });
+
+    upper.refresh();
+    lower.refresh();
+    listen(gsap, pin, scene);
+    lowerDwell = 300;
+    gsap.gsapRefresh(true);
+
+    expect(query('.pin').parentElement!.style.height).toBe('3300px');
+  });
+
+  // Creating instances top to bottom is the usual order, and a lower one's dwell moves the page's
+  // end on most resizes.
+  it('measures nothing again when a later handler moves the page\'s end and nothing read it', () => {
+    const gsap = makeClass({ rec: 0 });
+    let lowerDwell = 100;
+    const upperEnd = vi.fn(() => '+=200');
+    const { upper, lower } = setupBlocks({ upper: upperEnd, lower: () => `+=${lowerDwell}` });
+
+    vi.spyOn(document.documentElement, 'scrollHeight', 'get')
+      .mockImplementation(() => 3000 + paddingIn('upper') + paddingIn('lower'));
+    tops.lower = () => 1000 + paddingIn('upper');
+    upper.controller.refresh();
+    lower.controller.refresh();
+    listen(gsap, upper.vars, lower.vars);
+    lowerDwell = 300;
+    upperEnd.mockClear();
+    gsap.gsapRefresh(true);
+
+    expect(upperEnd).toHaveBeenCalledTimes(1);
+    expect(lower.start()).toBe(1200);
+  });
+
+  // middle's measurement moves top's container again, and top keeps what it read before that until
+  // the next refresh: each handler measures an earlier instance once, so reads that keep moving
+  // can't multiply the cost.
+  it('measures each earlier instance once per handler', () => {
+    const gsap = makeClass({ rec: 0 });
+    let bottomDwell = 100;
+    const topEnd = vi.fn(() => '+=200');
+    const { top, middle, bottom } = setupBlocks({
+      top: topEnd,
+      middle: () => `+=${paddingIn('bottom')}`,
+      bottom: () => `+=${bottomDwell}`,
+    });
+
+    tops.top = () => 1000 + paddingIn('bottom') + paddingIn('middle');
+    tops.middle = () => 3000 + paddingIn('bottom');
+    bottom.controller.refresh();
+    middle.controller.refresh();
+    top.controller.refresh();
+    listen(gsap, top.vars, middle.vars, bottom.vars);
+    bottomDwell = 300;
+    topEnd.mockClear();
+    gsap.gsapRefresh(true);
+
+    // Its own handler, then once for bottom's, before middle's padding grew.
+    expect(topEnd).toHaveBeenCalledTimes(2);
+    expect(top.start()).toBe(1400);
+    expect(middle.start()).toBe(3300);
+  });
+
+  it('measures nothing again when no later handler moves what it read', () => {
+    const gsap = makeClass({ rec: 0 });
+    let upperDwell = 100;
+    const upperEnd = vi.fn(() => `+=${upperDwell}`);
+    const { upper, lower } = setupBlocks({ upper: upperEnd, lower: () => '+=200' });
+
+    tops.lower = () => 1000 + paddingIn('upper');
+    upper.controller.refresh();
+    lower.controller.refresh();
+    listen(gsap, upper.vars, lower.vars);
+    upperDwell = 300;
+    upperEnd.mockClear();
+    gsap.gsapRefresh(true);
+
+    expect(upperEnd).toHaveBeenCalledTimes(1);
+    expect(lower.start()).toBe(1300);
+  });
+
+  it('leaves an instance\'s later handlers alone after measuring it again', () => {
+    const gsap = makeClass({ rec: 0 });
+    let upperDwell = 100;
+    const lowerEnd = vi.fn(() => '+=200');
+
+    document.body.innerHTML = `
+      <div class="upper"><div class="root"><section class="u1"></section></div></div>
+      <div class="lower"><div class="root"><section class="l1"></section><section class="l2"></section></div></div>`;
+    tops.lower = () => 1000 + paddingIn('upper');
+
+    const upper = new StickyScrollTrigger(query('.upper .root'));
+    const lower = new StickyScrollTrigger(query('.lower .root'));
+    const first = lower.createStickyTrigger({ trigger: query('.l1'), end: lowerEnd });
+    const middle = upper.createStickyTrigger({ trigger: query('.u1'), end: () => `+=${upperDwell}` });
+    const last = lower.createStickyTrigger({ trigger: query('.l2'), end: lowerEnd });
+
+    upper.refresh();
+    lower.refresh();
+    listen(gsap, first, middle, last);
+    upperDwell = 300;
+    lowerEnd.mockClear();
+    gsap.gsapRefresh(true);
+
+    // Two layers read in its own handler's refresh() and again for upper's; last's has nothing new.
+    expect(lowerEnd).toHaveBeenCalledTimes(4);
+    expect((last.start as () => number)()).toBe(1300 + 200);
+  });
+
+  // GSAP calls every layer's handler, and a page with many layers pays for each read here.
+  it('reads no layout in a handler that doesn\'t refresh', () => {
+    const gsap = makeClass({ rec: 0 });
+
+    document.body.innerHTML = `
+      <div class="upper"><div class="root"><section class="u1"></section></div></div>
+      <div class="lower"><div class="root"><section class="l1"></section><section class="l2"></section></div></div>`;
+    tops.lower = () => 1000 + paddingIn('upper');
+
+    const upper = new StickyScrollTrigger(query('.upper .root'));
+    const lower = new StickyScrollTrigger(query('.lower .root'));
+    const layers = [
+      upper.createStickyTrigger({ trigger: query('.u1'), end: '+=100' }),
+      ...['.l1', '.l2'].map((sel) =>
+        lower.createStickyTrigger({ trigger: query(sel), end: '+=200' })),
+    ];
+    const reads = [
+      vi.mocked(Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetTop')!.get!),
+      vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get'),
+      vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get'),
+      vi.spyOn(Element.prototype, 'scrollHeight', 'get'),
+      vi.spyOn(Element.prototype, 'scrollTop', 'get'),
+      vi.spyOn(Element.prototype, 'clientHeight', 'get'),
+      vi.spyOn(Element.prototype, 'getBoundingClientRect'),
+      vi.spyOn(Element.prototype, 'getClientRects'),
+      vi.spyOn(window, 'getComputedStyle'),
+      vi.spyOn(window, 'innerHeight', 'get'),
+      vi.spyOn(window, 'scrollY', 'get'),
+    ];
+    const readCount = () => reads.reduce((sum, spy) => sum + spy.mock.calls.length, 0);
+    let readsInLast = -1;
+
+    upper.refresh();
+    lower.refresh();
+
+    const [, , last] = listen(gsap, ...layers);
+
+    gsap.listeners[gsap.listeners.indexOf(last)] = () => {
+      const before = readCount();
+
+      last();
+      readsInLast = readCount() - before;
+    };
+
+    gsap.gsapRefresh(true);
+
+    expect(readsInLast).toBe(0);
+  });
+
+  it('measures the other instances again when one of them throws, and rethrows off the stack', async () => {
+    const gsap = makeClass({ rec: 0 });
+    let upperDwell = 100;
+    let failing = false;
+    const { upper, first, second } = setupBlocks({
+      upper: () => `+=${upperDwell}`,
+      first: () => {
+        if (failing) throw new Error('first end');
+
+        return '+=200';
+      },
+      second: () => '+=200',
+    });
+
+    tops.first = () => 1000 + paddingIn('upper');
+    tops.second = () => 2000 + paddingIn('upper');
+    upper.controller.refresh();
+    first.controller.refresh();
+    second.controller.refresh();
+
+    const [, , upperListener] = listen(gsap, first.vars, second.vars, upper.vars);
+
+    // first's own handler measures; it fails only when measured again for upper's.
+    gsap.listeners[gsap.listeners.indexOf(upperListener)] = () => {
+      failing = true;
+      upperListener();
+    };
+
+    upperDwell = 300;
+
+    const uncaught = await runDispatch(() => gsap.gsapRefresh(true));
+
+    expect(uncaught).toEqual([new Error('first end')]);
+    expect(second.start()).toBe(2300);
+    // first keeps its last measurement, which the throw left unwritten.
+    expect(first.start()).toBe(1100);
+    expect(paddingIn('first')).toBe(200);
   });
 });
