@@ -76,6 +76,25 @@ const flushMicrotasks = async () => {
   for (let i = 0; i < 50; i += 1) await Promise.resolve();
 };
 
+// Collects the deliberate uncaught exception each dispatch leaves behind, which Vitest would
+// otherwise report against whichever test was running. The finally keeps a failing dispatch
+// from leaking the listener into every later test.
+const runDispatch = async (dispatch: () => void) => {
+  const uncaught: unknown[] = [];
+  const onUncaught = (error: unknown) => uncaught.push(error);
+
+  process.on('uncaughtException', onUncaught);
+
+  try {
+    dispatch();
+    await flushMicrotasks();
+  } finally {
+    process.off('uncaughtException', onUncaught);
+  }
+
+  return uncaught;
+};
+
 beforeEach(() => {
   FakeScrollTrigger.refresh.mockClear();
   // Cleared alongside the body each setup() swaps out, so a stylesheet one test installs can't
@@ -775,25 +794,6 @@ describe('a refresh() that throws from GSAP\'s refreshInit dispatch', () => {
     broken = true;
 
     return vars;
-  };
-
-  // Collects the deliberate uncaught exception each dispatch leaves behind, which Vitest would
-  // otherwise report against whichever test was running. The finally keeps a failing dispatch
-  // from leaking the listener into every later test.
-  const runDispatch = async (dispatch: () => void) => {
-    const uncaught: unknown[] = [];
-    const onUncaught = (error: unknown) => uncaught.push(error);
-
-    process.on('uncaughtException', onUncaught);
-
-    try {
-      dispatch();
-      await flushMicrotasks();
-    } finally {
-      process.off('uncaughtException', onUncaught);
-    }
-
-    return uncaught;
   };
 
   it('lets the listeners dispatched after it still run', async () => {
@@ -4430,6 +4430,63 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       expect(scrollTo).toHaveBeenCalledTimes(1);
     });
 
+    // GSAP's dispatch runs each trigger's onRefreshInit, then the listeners added since.
+    it('rebuilds once, in the refreshInit of the GSAP refresh the batch starts', async () => {
+      const { Cls, listeners } = makeClass({ rec: 0 });
+      const inGsapRefresh: boolean[] = [];
+      const { vars, self } = setupScenes(Cls, () => {
+        inGsapRefresh.push(Cls.isRefreshing);
+
+        return '+=100';
+      });
+
+      Cls.refresh.mockImplementation(() => {
+        Cls.isRefreshing = true;
+        vars.slice(1).forEach((layerVars) => layerVars.onRefreshInit?.(self));
+        [...listeners].forEach((callback) => callback());
+        Cls.isRefreshing = false;
+      });
+      inGsapRefresh.length = 0;
+      vars[0].onKill?.(self);
+      await flushMicrotasks();
+
+      // One evaluation per layer left, each inside GSAP's refresh.
+      expect(inGsapRefresh).toEqual([true, true]);
+      expect(Cls.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves a kill during the batch\'s GSAP refresh to a GSAP refresh of its own', async () => {
+      const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+      const { vars, self } = setupScenes(Cls);
+
+      // The second kill comes from onRefresh, once GSAP has measured.
+      Cls.refresh.mockImplementationOnce(() => {
+        gsapRefresh();
+        vars[1].onKill?.(self);
+      });
+      vars[0].onKill?.(self);
+      await flushMicrotasks();
+
+      expect(Cls.refresh).toHaveBeenCalledTimes(2);
+      expect(paddings()).toHaveLength(1);
+    });
+
+    // GSAP's dispatch has no try/catch: a listener before the batch's stops the rest.
+    it('still rebuilds when a refreshInit listener before the batch\'s throws', async () => {
+      const { Cls, listeners } = makeClass({ rec: 0 });
+      const { vars, self } = setupScenes(Cls);
+
+      Cls.refresh.mockImplementation(() => {
+        throw new Error('listener');
+      });
+
+      const uncaught = await runDispatch(() => vars[0].onKill?.(self));
+
+      expect(uncaught.map((error) => (error as Error).message)).toEqual(['listener']);
+      expect(paddings()).toHaveLength(2);
+      expect(listeners).toHaveLength(0);
+    });
+
     it('doesn\'t scroll where the browser\'s anchoring has already kept the content', async () => {
       const { Cls } = makeClass({ rec: 2500 });
       const { vars, self } = setupScenes(Cls);
@@ -5570,13 +5627,20 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       fail = true;
       Cls.scrolling = false;
+      Cls.refresh.mockClear();
+
+      // The catch-up's throw goes off the stack, as inside GSAP's refreshInit, and GSAP still
+      // refreshes.
+      let uncaught: unknown[];
 
       try {
-        expect(() => vi.advanceTimersByTime(100)).toThrow('boom');
+        uncaught = await runDispatch(() => vi.advanceTimersByTime(100));
       } finally {
         fail = false;
       }
 
+      expect(uncaught.map((error) => (error as Error).message)).toEqual(['boom']);
+      expect(Cls.refresh).toHaveBeenCalledTimes(1);
       expect(listeners).toHaveLength(0);
     });
   });

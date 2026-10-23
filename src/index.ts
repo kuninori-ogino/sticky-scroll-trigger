@@ -183,8 +183,9 @@ type PendingKeep = {
 };
 
 const pendingKeeps = new Set<PendingKeep>();
-// Kill batches waiting for a GSAP refresh. A batch's own refreshInit listener comes after those of
-// the layers registered before the kill, so every layer's handler runs them all first.
+// The kill batch each instance has yet to catch up, at most one. A batch's own refreshInit listener
+// comes after those of the layers registered before the kill, so every layer's handler runs them
+// all first.
 const pendingCatchUps = new Map<StickyScrollTrigger, () => boolean>();
 // Counts structures taken down by any instance. Only such a rebuild moves a container under
 // windows measured before it; a change with none (in a stuck ancestor's offset, say) isn't one.
@@ -234,7 +235,6 @@ export default class StickyScrollTrigger {
   #dirty = false; // Set true when a trigger is added/removed; rebuilt on the next refresh().
   #outermostContainer: HTMLDivElement | null = null;
   #destroyed = false;
-  #rebuildScheduled = false;
   // #runRefresh frames on the stack: a start or end function's refresh() comes in at 1 or more.
   #depth = 0;
   // The one nested run for a GSAP refresh a function starts is spent until the outermost run ends.
@@ -528,8 +528,8 @@ export default class StickyScrollTrigger {
   //
   // GSAP doesn't re-read function-valued start/end until ScrollTrigger.refresh() is called, so
   // refresh() alone would leave GSAP's cache holding stale freezeStart/freezeEnd. The microtask
-  // calls ScrollTrigger.refresh() right after to keep the two in sync; a GSAP refresh measures
-  // after its refreshInit anyway.
+  // calls ScrollTrigger.refresh() instead, and the batch catches up in its refreshInit, as it does
+  // for a GSAP refresh later in the task: one run, before GSAP measures.
   #scheduleRebuild() {
     if (this.#destroyed) return;
 
@@ -537,22 +537,22 @@ export default class StickyScrollTrigger {
     // Nothing built has no dwell to take off.
     if (this.#built) this.#keepContentPending = true;
 
-    if (this.#rebuildScheduled) return;
-
-    this.#rebuildScheduled = true;
+    if (pendingCatchUps.has(this)) return;
 
     // Lets that GSAP refresh measure without the killed layers, even with no layer left to run
     // refresh() from its own onRefreshInit.
     const cls = this.#scrollTriggerClass;
+    // Not caught up yet; a kill after that starts the next batch, with its own GSAP refresh.
+    const pending = () => pendingCatchUps.get(this) === catchUpNow;
 
     // True if it caught up.
-    const catchUpNow = () => {
-      pendingCatchUps.delete(this);
-
-      if (!this.#rebuildScheduled || this.#destroyed) return false;
+    const catchUpNow = (): boolean => {
+      if (!pending()) return false;
 
       // Before the catch-up: a GSAP refresh a function starts in it comes back here.
-      this.#rebuildScheduled = false;
+      pendingCatchUps.delete(this);
+
+      if (this.#destroyed) return false;
 
       try {
         this.#catchUp();
@@ -578,24 +578,20 @@ export default class StickyScrollTrigger {
     addGsapListener(cls, 'refreshInit', onRefreshInit);
 
     const run = () => {
-      // Off the stack: GSAP's dispatch maps over its live listener array.
-      removeGsapListener(cls, 'refreshInit', onRefreshInit);
-      pendingCatchUps.delete(this);
-
-      if (!this.#rebuildScheduled) return;
-
-      this.#rebuildScheduled = false;
-
-      if (this.#destroyed) return;
-
-      this.#catchUp();
-      refreshAll(this.#scrollTriggerClass);
+      try {
+        if (pending() && !this.#destroyed) refreshAll(this.#scrollTriggerClass);
+      } finally {
+        // Off the stack: GSAP's dispatch maps over its live listener array.
+        removeGsapListener(cls, 'refreshInit', onRefreshInit);
+        // No dispatch caught it up: no class, or a listener threw before it did.
+        catchUpNow();
+      }
     };
 
     queueMicrotask(() => {
       // While the page scrolls, the killed layers' padding stays until the scroll stops, as GSAP
       // holds its own refresh: keeping the content in place then needs no scroll mid-fling.
-      if (this.#rebuildScheduled && !this.#destroyed && isScrolling(cls)) {
+      if (pending() && !this.#destroyed && isScrolling(cls)) {
         const earlier = this.#deferredRun;
 
         // An earlier batch a GSAP refresh ran still has its listener to drop.

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A repeated `kill()` of a `createStickyTrigger` or `createOverlapScroll` trigger now only calls its `onKill`. Unless a GSAP refresh followed in the same task, it ran `refresh()` and a `ScrollTrigger.refresh()` again
 - A `createStickyTrigger`, `createOverlapScroll` or `createStickyPin` start or end function that calls `refresh()` or `ScrollTrigger.refresh()` on every evaluation no longer recurses without end, and one that changes the layout before calling `refresh()` gets the new layout's values
 - A layer or pin registered from a `createStickyTrigger`, `createOverlapScroll` or `createStickyPin` start or end function during a GSAP refresh is now built before GSAP measures. Until the next refresh, a pin had no sticky position or range, and a `createStickyTrigger` layer had a start and end of 0 when no later layer of the instance refreshed after it
+- A `kill()` with no GSAP refresh after it in the same task now runs `refresh()` once instead of twice, inside the batch's `ScrollTrigger.refresh()`, as a kill followed by a GSAP refresh already did. As there, `refreshInit` listeners see the scroll from before the content is kept, and one GSAP runs before the rebuild also sees the killed layers' dwell. An error thrown in that `refresh()` (from a start or end function, say) now goes off the stack instead of skipping the `ScrollTrigger.refresh()`
 
 ## [0.13.0] - 2026-10-20
 
