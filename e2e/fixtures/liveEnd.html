@@ -31,12 +31,20 @@
       // Each dwell comes from a layout read: end=height, half the page's height; end=below, a
       // quarter of where the tail starts, below every padding. impl=gsap: GSAP's own pins with the
       // same end functions, for the windows to compare. instances=two adds a second instance below,
-      // layers=two a second layer to the first.
+      // layers=two a second layer to the first. call=gsapRefresh: the library's end functions also
+      // call ScrollTrigger.refresh() every time; GSAP's pins keep the plain one.
       const params = new URLSearchParams(location.search);
       const tail = document.querySelector('.tail');
-      const end = params.get('end') === 'below'
+      const read = params.get('end') === 'below'
         ? () => `+=${Math.round(tail.offsetTop * 0.25)}`
         : () => `+=${Math.round(document.documentElement.scrollHeight * 0.5)}`;
+      const end = params.get('call') === 'gsapRefresh' && params.get('impl') !== 'gsap'
+        ? () => {
+            ScrollTrigger.refresh();
+
+            return read();
+          }
+        : read;
       const instances = [];
       const create = (selector, count) => {
         const triggers = [...document.querySelectorAll(`${selector} > section`)].slice(0, count);

@@ -63,10 +63,11 @@ const makeClass = (scroller: { rec?: unknown }) => {
   }
 
   // GSAP's refreshInit dispatch, with isRefreshing set. GSAP measures right after it, then
-  // dispatches 'refresh' (complete); without it the refresh is one that threw before then.
-  const gsapRefresh = (complete = false) => {
+  // dispatches 'refresh' (complete); without it the refresh is one that threw before then. live:
+  // GSAP's own map over the listener array, which a listener taken off or added during it shifts.
+  const gsapRefresh = (complete = false, live = false) => {
     Cls.isRefreshing = true;
-    [...listeners].forEach((callback) => callback());
+    (live ? listeners : [...listeners]).map((callback) => callback());
     Cls.isRefreshing = false;
 
     if (complete) [...refreshListeners].forEach((callback) => callback());
@@ -3935,6 +3936,380 @@ describe('an end function called again in the layout GSAP shows it', () => {
     expect(y).toBe(500);
   });
 
+  // GSAP measures right after its refreshInit dispatch, so what the page looks like at the end of
+  // it is what GSAP measures.
+  describe('a GSAP refresh from the function', () => {
+    // onCall runs on every call of the function after the arm, pass 1's included.
+    const setupGsap = (onCall: (gsapRefresh: (complete?: boolean) => void) => void) => {
+      const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+      const self = Object.create(Cls.prototype) as ScrollTrigger;
+      const measured: ReturnType<typeof layout>[] = [];
+      let armed = false;
+      const { controller, vars } = setupInstances(() => {
+        if (armed) onCall(gsapRefresh);
+
+        return '+=100';
+      });
+
+      Cls.addEventListener('refreshInit', () => vars.onRefreshInit?.(self));
+      controller.refresh();
+
+      return {
+        Cls,
+        controller,
+        gsapRefresh,
+        measured,
+        // Calls after every listener added before it, the layer's handler included.
+        measureAtEnd: () => Cls.addEventListener('refreshInit', () => measured.push(layout())),
+        arm: () => {
+          armed = true;
+        },
+      };
+    };
+
+    // Calls 1 and 2 of one refresh(): pass 1, then the evaluation.
+    const onEvaluation = (act: () => void) => {
+      let calls = 0;
+
+      return () => {
+        calls += 1;
+
+        if (calls === 2) act();
+      };
+    };
+
+    it('measures the page refresh() left, and the evaluation goes on in its own layout', () => {
+      let inEvaluation: ReturnType<typeof layout> | null = null;
+      let afterGsapRefresh: ReturnType<typeof layout> | null = null;
+      let gsap: (complete?: boolean) => void = () => {};
+      const act = onEvaluation(() => {
+        inEvaluation = layout();
+        gsap(true);
+        afterGsapRefresh = layout();
+      });
+      const { controller, measured, measureAtEnd, arm } = setupGsap((gsapRefresh) => {
+        gsap = gsapRefresh;
+        act();
+      });
+      const left = layout();
+
+      measureAtEnd();
+      arm();
+      controller.refresh();
+
+      expect(measured).toEqual([left]);
+      expect(inEvaluation).not.toEqual(left);
+      expect(afterGsapRefresh).toEqual(inEvaluation);
+      expect(layout()).toEqual(left);
+    });
+
+    it('leaves the page as refresh() left it after a GSAP refresh that threw before its end', () => {
+      let afterGsapRefresh: ReturnType<typeof layout> | null = null;
+      let gsap: (complete?: boolean) => void = () => {};
+      const act = onEvaluation(() => {
+        gsap(false);
+        afterGsapRefresh = layout();
+      });
+      const { controller, arm } = setupGsap((gsapRefresh) => {
+        gsap = gsapRefresh;
+        act();
+      });
+      const left = layout();
+
+      arm();
+      controller.refresh();
+
+      expect(afterGsapRefresh).toEqual(left);
+      expect(layout()).toEqual(left);
+    });
+
+    // The evaluation (call 2) starts a GSAP refresh, whose layer handler runs a nested refresh();
+    // that one's pass 1 (call 3) starts another GSAP refresh inside the first. Its end must not
+    // resume the evaluation while the first GSAP refresh is still to measure.
+    it('resumes an evaluation only at the end of the GSAP refresh it started', () => {
+      let calls = 0;
+      let callsInFirst: number[] = [];
+      const { controller, measured, measureAtEnd, arm } = setupGsap((gsapRefresh) => {
+        calls += 1;
+
+        if (calls === 2 || calls === 3) {
+          const call = calls;
+
+          gsapRefresh(true);
+
+          if (call === 2) callsInFirst = [calls];
+        }
+      });
+      const left = layout();
+
+      measureAtEnd();
+      arm();
+      controller.refresh();
+
+      // The second GSAP refresh ran inside the first.
+      expect(callsInFirst[0]).toBeGreaterThan(3);
+      expect(measured).toEqual([left, left]);
+    });
+
+    // As above, but the second GSAP refresh throws before its end.
+    it('resumes an evaluation at the end of the GSAP refresh it started when one inside it threw', () => {
+      let calls = 0;
+      let inEvaluation: ReturnType<typeof layout> | null = null;
+      let afterGsapRefresh: ReturnType<typeof layout> | null = null;
+      const { controller, arm } = setupGsap((gsapRefresh) => {
+        calls += 1;
+
+        const call = calls;
+
+        if (call === 2) {
+          inEvaluation = layout();
+          gsapRefresh(true);
+          afterGsapRefresh = layout();
+        }
+
+        if (call === 3) gsapRefresh(false);
+      });
+
+      arm();
+      controller.refresh();
+
+      expect(calls).toBeGreaterThan(3);
+      expect(afterGsapRefresh).toEqual(inEvaluation);
+    });
+
+    // The second GSAP refresh throws out of a layer's onRefreshInit, through the handler of the
+    // first one that ran the nested refresh(), which catches it.
+    it('resumes an evaluation after a throw went through a layer handler', async () => {
+      const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+      const self = Object.create(Cls.prototype) as ScrollTrigger;
+      const error = new Error('onRefreshInit');
+      let calls = 0;
+      let throwing = false;
+      let inEvaluation: ReturnType<typeof layout> | null = null;
+      let afterGsapRefresh: ReturnType<typeof layout> | null = null;
+
+      document.body.innerHTML = `
+        <div class="root"><section class="s1"></section></div>
+        <div class="below"><section class="b1"></section></div>`;
+
+      const layout = () => ({ root: paddingsIn('.root'), divs: document.querySelectorAll('div').length });
+      const controller = new StickyScrollTrigger(query('.root'));
+      const below = new StickyScrollTrigger(query('.below'));
+      const vars = controller.createStickyTrigger({
+        trigger: query('.s1'),
+        end: () => {
+          calls += 1;
+
+          // The second call runs the third inside it.
+          const call = calls;
+
+          if (call === 2) {
+            inEvaluation = layout();
+            gsapRefresh(true);
+            afterGsapRefresh = layout();
+          }
+
+          if (call === 3) {
+            throwing = true;
+
+            try {
+              gsapRefresh(true);
+            } finally {
+              throwing = false;
+            }
+          }
+
+          return '+=100';
+        },
+      });
+      const belowVars = below.createStickyTrigger({
+        trigger: query('.b1'),
+        end: '+=400',
+        onRefreshInit: () => {
+          if (throwing) throw error;
+        },
+      });
+
+      below.refresh();
+      controller.refresh();
+      Cls.addEventListener('refreshInit', () => vars.onRefreshInit?.(self));
+      Cls.addEventListener('refreshInit', () => belowVars.onRefreshInit?.(self));
+      calls = 0;
+
+      const uncaught = await runDispatch(() => controller.refresh());
+
+      expect(uncaught).toEqual([error]);
+      expect(calls).toBeGreaterThan(3);
+      expect(afterGsapRefresh).toEqual(inEvaluation);
+    });
+
+    // A listener after the layer's handler takes off one before it, as a kill does, so GSAP's
+    // dispatch also calls a listener added during it, and skips the next.
+    it('resumes an evaluation though a listener came off during the GSAP refresh it started', () => {
+      const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+      const self = Object.create(Cls.prototype) as ScrollTrigger;
+      const before = () => undefined;
+      let armed = false;
+      let inEvaluation: ReturnType<typeof layout> | null = null;
+      let afterGsapRefresh: ReturnType<typeof layout> | null = null;
+      const { controller, vars } = setupInstances(() => {
+        if (armed && !inEvaluation && paddingsIn('.root')[1] === '0px') {
+          inEvaluation = layout();
+          gsapRefresh(true, true);
+          afterGsapRefresh = layout();
+        }
+
+        return '+=100';
+      });
+
+      Cls.addEventListener('refreshInit', before);
+      Cls.addEventListener('refreshInit', () => vars.onRefreshInit?.(self));
+      Cls.addEventListener('refreshInit', () => Cls.removeEventListener('refreshInit', before));
+      // Leaves GSAP's map a slot to visit after the removal.
+      Cls.addEventListener('refreshInit', () => undefined);
+      controller.refresh();
+      armed = true;
+      controller.refresh();
+
+      expect(inEvaluation).not.toBeNull();
+      expect(afterGsapRefresh).toEqual(inEvaluation);
+    });
+
+    // The evaluation runs in the handler of a GSAP refresh already under way, and the one the
+    // function starts throws before its end: the 'refresh' of the outer one comes after the
+    // evaluation is over.
+    it('leaves the page as refresh() left it at the end of the GSAP refresh the evaluation ran in', () => {
+      let gsap: (complete?: boolean) => void = () => {};
+      const act = onEvaluation(() => gsap(false));
+      const { controller, gsapRefresh, arm } = setupGsap((inner) => {
+        gsap = inner;
+        act();
+      });
+
+      controller.refresh();
+
+      const left = layout();
+
+      arm();
+      gsapRefresh(true);
+
+      expect(layout()).toEqual(left);
+    });
+
+    // A dwell of 0 writes the same 0 the evaluation does. With the GSAP refresh's end missing, the
+    // evaluation ends while still held.
+    it.each([[700, true], [0, true], [0, false]])('keeps what the GSAP refresh had the instance below write (dwell %i, ends: %s)', (newDwell, complete) => {
+      const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+      const self = Object.create(Cls.prototype) as ScrollTrigger;
+      let belowDwell = 400;
+      let calls = 0;
+
+      document.body.innerHTML = `
+        <div class="root"><section class="s1"></section></div>
+        <div class="below"><section class="b1"></section></div>`;
+
+      const controller = new StickyScrollTrigger(query('.root'));
+      const below = new StickyScrollTrigger(query('.below'));
+      const belowVars = below.createStickyTrigger({ trigger: query('.b1'), end: () => `+=${belowDwell}` });
+
+      controller.createStickyTrigger({
+        trigger: query('.s1'),
+        end: () => {
+          calls += 1;
+
+          if (calls === 2) {
+            belowDwell = newDwell;
+            gsapRefresh(complete);
+          }
+
+          return '+=100';
+        },
+      });
+      Cls.addEventListener('refreshInit', () => belowVars.onRefreshInit?.(self));
+      below.refresh();
+      calls = 0;
+      controller.refresh();
+
+      expect(paddingsIn('.below')).toEqual([`${newDwell}px`]);
+    });
+
+    it('measures the page refresh() left after a resolveScrollPosition from a GSAP measurement', () => {
+      let gsap: (complete?: boolean) => void = () => {};
+      const act = onEvaluation(() => gsap(true));
+      const { Cls, controller, measured, measureAtEnd, arm } = setupGsap((gsapRefresh) => {
+        gsap = gsapRefresh;
+        act();
+      });
+      const left = layout();
+
+      // A plain trigger's start function, which GSAP calls as it measures.
+      Cls.addEventListener('refreshInit', () => controller.resolveScrollPosition(query('.b1'), 'top top'));
+      measureAtEnd();
+      arm();
+      controller.refresh();
+
+      expect(measured).toEqual([left]);
+    });
+
+    it('gives a resolveScrollPosition after the GSAP refresh the page refresh() left', () => {
+      const seen: ReturnType<typeof layout>[] = [];
+      let resolving = false;
+      let gsap: (complete?: boolean) => void = () => {};
+      let controller: StickyScrollTrigger | null = null;
+      const act = onEvaluation(() => {
+        gsap(true);
+        resolving = true;
+        controller!.resolveScrollPosition(query('.b1'), 'top top');
+        resolving = false;
+      });
+      const setup = setupGsap((gsapRefresh) => {
+        gsap = gsapRefresh;
+        act();
+      });
+
+      controller = setup.controller;
+      Object.defineProperty(query('.b1'), 'offsetTop', {
+        configurable: true,
+        get: () => {
+          if (resolving) seen.push(layout());
+
+          return 0;
+        },
+      });
+
+      const left = layout();
+
+      setup.arm();
+      controller.refresh();
+
+      expect(seen).toEqual([left]);
+    });
+
+    // The function reads 700 in its own layout and 100 in the page refresh() left, before calling
+    // ScrollTrigger.refresh() each time. GSAP measuring through resolveScrollPosition is not the
+    // function measuring through it.
+    it('keeps the value of a function whose GSAP refresh measures through resolveScrollPosition', () => {
+      const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+      const self = Object.create(Cls.prototype) as ScrollTrigger;
+      let armed = false;
+      const { controller, vars } = setupInstances(() => {
+        const dwell = paddingsIn('.root')[1] === '0px' ? '+=700' : '+=100';
+
+        if (armed) gsapRefresh(true);
+
+        return dwell;
+      });
+
+      Cls.addEventListener('refreshInit', () => vars.onRefreshInit?.(self));
+      Cls.addEventListener('refreshInit', () => controller.resolveScrollPosition(query('.b1'), 'top top'));
+      controller.refresh();
+      armed = true;
+      controller.refresh();
+
+      expect(paddingsIn('.root')[1]).toBe('700px');
+    });
+  });
+
   // The instance below has a function-valued end too, so its refresh() runs an evaluation of its
   // own inside this one's.
   describe('a refresh() of the instance below from the function', () => {
@@ -3986,6 +4361,114 @@ describe('an end function called again in the layout GSAP shows it', () => {
 
       expect(calls).toBe(2);
       expect((vars.end as () => number)()).toBe(1100);
+    });
+
+    // The instance below's evaluation runs inside this one's, and what its function does in its
+    // evaluation (onBelowEvaluation) sees neither evaluation's layout.
+    const setupTwoEvaluations = (onBelowEvaluation: (controller: StickyScrollTrigger) => void) => {
+      document.body.innerHTML = `
+        <div class="root"><section class="s1"></section><section class="s2"></section></div>
+        <div class="below"><section class="b1"></section></div>`;
+
+      const nestedLayout = () => ({
+        root: paddingsIn('.root'),
+        below: paddingsIn('.below'),
+        divs: document.querySelectorAll('div').length,
+      });
+      const controller = new StickyScrollTrigger(query('.root'));
+      const below = new StickyScrollTrigger(query('.below'));
+      let calls = 0;
+      let belowCalls = 0;
+
+      controller.createStickyTrigger({ trigger: query('.s1'), end: '+=300' });
+
+      const vars = controller.createStickyTrigger({
+        trigger: query('.s2'),
+        end: () => {
+          calls += 1;
+
+          // 700 in this evaluation's layout, 100 in the page refresh() left.
+          const dwell = paddingsIn('.root')[1] === '0px' ? '+=700' : '+=100';
+
+          if (calls === 2) {
+            belowCalls = 0;
+            below.refresh();
+          }
+
+          return dwell;
+        },
+      });
+
+      below.createStickyTrigger({
+        trigger: query('.b1'),
+        end: () => {
+          belowCalls += 1;
+
+          if (calls === 2 && belowCalls === 2) onBelowEvaluation(controller);
+
+          return '+=400';
+        },
+      });
+      below.refresh();
+      controller.refresh();
+
+      return {
+        controller,
+        vars,
+        nestedLayout,
+        // The second refresh() of the instance, with the first one's layout as left.
+        run: () => {
+          const left = nestedLayout();
+
+          calls = 0;
+          controller.refresh();
+
+          expect(nestedLayout()).toEqual(left);
+
+          return left;
+        },
+      };
+    };
+
+    it('lets a GSAP refresh from the function below measure the page refresh() left', () => {
+      const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+      const self = Object.create(Cls.prototype) as ScrollTrigger;
+      const { vars, nestedLayout, run } = setupTwoEvaluations(() => gsapRefresh(true));
+      const measured: ReturnType<typeof nestedLayout>[] = [];
+
+      Cls.addEventListener('refreshInit', () => vars.onRefreshInit?.(self));
+      Cls.addEventListener('refreshInit', () => measured.push(nestedLayout()));
+
+      const left = run();
+
+      expect(measured).toEqual([left]);
+    });
+
+    it('gives a resolveScrollPosition from the function below the page refresh() left', () => {
+      const seen: unknown[] = [];
+      let armed = false;
+      let resolving = false;
+      const { nestedLayout, run } = setupTwoEvaluations((controller) => {
+        resolving = armed;
+        controller.resolveScrollPosition(query('.b1'), 'top top');
+        resolving = false;
+      });
+
+      armed = true;
+      Object.defineProperty(query('.b1'), 'offsetTop', {
+        configurable: true,
+        get: () => {
+          if (resolving) seen.push(nestedLayout());
+
+          return 0;
+        },
+      });
+
+      const left = run();
+
+      expect(seen).toEqual([left]);
+      // The function below measured through it, not this one.
+      expect(left.root[1]).toBe('700px');
     });
   });
 });

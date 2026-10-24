@@ -3151,6 +3151,28 @@ for (const end of ['height', 'below']) {
   }
 }
 
+// A ScrollTrigger.refresh() from the end function's second call, which runs with this padding and
+// the one below out, measures the page refresh() left, as a top-level one does.
+test('an end function that calls ScrollTrigger.refresh() gets GSAP\'s windows', async ({ page }) => {
+  const read = () => page.evaluate(() => (window as never as LiveEndWindow).__windows());
+
+  await loadLiveEnd(page, 'end=height&instances=two&impl=gsap');
+
+  const gsapWindows = await read();
+
+  await loadLiveEnd(page, 'end=height&instances=two&call=gsapRefresh');
+
+  expect(await read()).toEqual(gsapWindows);
+
+  await page.evaluate(() => (window as never as LiveEndWindow).__refresh());
+
+  expect(await read()).toEqual(gsapWindows);
+
+  await page.evaluate(() => (window as never as LiveEndWindow).__gsapRefresh());
+
+  expect(await read()).toEqual(gsapWindows);
+});
+
 // Calling the end function again takes the padding out, the instance below's too, which shortens
 // the page, and the browser clamps the scroll to it.
 for (const fromEnd of [0, 150]) {

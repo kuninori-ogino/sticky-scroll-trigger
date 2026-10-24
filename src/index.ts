@@ -167,8 +167,27 @@ type ContentPosition = {
 };
 
 // An end function's evaluation (see #evaluateLiveEnd). suspend puts the page back as refresh()
-// left it and returns the function that sets the evaluation up again.
-type LiveEvaluation = { suspend: () => () => void; suspended: boolean };
+// left it, unless it already is, and returns the function that sets the evaluation up again.
+// resolved: the function measured through resolveScrollPosition, which already gives GSAP's
+// value. outer: the evaluation whose function started this one, whose layout is in place too.
+type LiveEvaluation = {
+  suspend: (resolving: boolean) => () => void;
+  resolved: boolean;
+  ended: boolean;
+  outer: LiveEvaluation | null;
+};
+
+// Suspends an evaluation and every one around it, innermost first, and returns the function that
+// sets them up again, outermost first.
+const suspendLiveEvaluations = (evaluation: LiveEvaluation, resolving: boolean): (() => void) => {
+  const resumes: (() => void)[] = [];
+
+  for (let current: LiveEvaluation | null = evaluation; current; current = current.outer) {
+    resumes.unshift(current.suspend(resolving && current === evaluation));
+  }
+
+  return () => resumes.forEach((resume) => resume());
+};
 
 // The number a re-evaluated end gives: measure.ts's liveEnd is only there for these two modes.
 const liveEndValue = (spec: EndSpec): number => {
@@ -216,6 +235,40 @@ let refreshedInGsapRefresh: Map<StickyScrollTrigger, string> | null = null;
 const armedInstances = new Set<StickyScrollTrigger>();
 // The end function evaluation under way, which resolveScrollPosition sets aside to measure.
 let liveEvaluation: LiveEvaluation | null = null;
+// How many layer handlers (see #createAutoRefreshHandler) are running, one inside another.
+let layerHandlerDepth = 0;
+
+// A GSAP refresh the end function under evaluation starts measures the page refresh() left, with
+// no evaluation's layout in, from its first layer handler until its 'refresh'. Only a 'refresh' no
+// deeper in layer handlers than that start resumes: one started inside a handler (by a nested
+// refresh()'s function, say) ends deeper, or never if it threw. The listener comes off in a
+// microtask, since GSAP's dispatch maps over its live listener array. Until the 'refresh' no
+// evaluation is under way, so a resolveScrollPosition there isn't the function's.
+const holdLiveEvaluationForGsapRefresh = (cls: ScrollTriggerClass | null): void => {
+  const evaluation = liveEvaluation;
+
+  if (!evaluation) return;
+
+  const resume = suspendLiveEvaluations(evaluation, false);
+  // This handler is one deeper than where the function started the GSAP refresh.
+  const depth = layerHandlerDepth - 1;
+  let held = true;
+
+  liveEvaluation = null;
+
+  const onRefresh = () => {
+    if (!held || layerHandlerDepth > depth) return;
+
+    held = false;
+    resume();
+
+    if (!evaluation.ended) liveEvaluation = evaluation;
+  };
+
+  addGsapListener(cls, 'refresh', onRefresh);
+  queueMicrotask(() => removeGsapListener(cls, 'refresh', onRefresh));
+};
+
 // How often held work checks isScrolling(), the condition GSAP holds its own refresh on, so it
 // waits as long (a finger held down, or ScrollTrigger.disable() mid-scroll). A poll, not
 // scrollEnd: ScrollTrigger.killAll() drops every listener, and GSAP also fires scrollEnd from the
@@ -658,8 +711,12 @@ export default class StickyScrollTrigger {
   #createAutoRefreshHandler(
     userOnRefreshInit: ScrollTrigger.Vars['onRefreshInit'],
   ): ScrollTrigger.Vars['onRefreshInit'] {
-    return (self) => {
+    const handle = (self: ScrollTrigger) => {
       this.#captureScrollTriggerClass(self);
+
+      if (isRefreshing(this.#scrollTriggerClass)) {
+        holdLiveEvaluationForGsapRefresh(this.#scrollTriggerClass);
+      }
 
       // GSAP dispatches refreshInit before any measurement, so a callback that puts something in
       // place to be measured expects to run before refresh() too. This call stays outside the
@@ -711,6 +768,16 @@ export default class StickyScrollTrigger {
       const restoreDormancy = takeGsapRefreshRestore();
 
       return restoreDormancy ? revertAfterMeasure(restoreDormancy, result) : result;
+    };
+
+    return (self) => {
+      layerHandlerDepth += 1;
+
+      try {
+        return handle(self);
+      } finally {
+        layerHandlerDepth -= 1;
+      }
     };
   }
 
@@ -1239,19 +1306,21 @@ export default class StickyScrollTrigger {
     index: number,
     liveEnd: () => EndSpec,
   ): EndSpec | null {
-    const later = [...armedInstances].filter((other) => other !== this
-      && compareDocumentOrder(this.#rootElement, other.#rootElement) < 0);
-    const paddings = [this, ...later].flatMap((instance) => instance.#layers.flatMap((layer) =>
-      (layer.kind === 'scene' && layer.padding ? [layer.padding] : [])));
-    const heights = paddings.map((padding) => padding.style.height);
     const spacers = active.flatMap((layer, k) => (k < index && layer.kind === 'scene' && planned[k]
       ? [{ after: layer.trigger, height: planned[k] }]
       : []));
 
     // Returns the function that takes this layout down again. A padding goes back only while it
     // still holds the 0 written here: an end function that refreshes another instance leaves that
-    // one's own write.
+    // one's own write. The paddings are read at each set-up, since a GSAP refresh the evaluation
+    // was held for (see holdLiveEvaluationForGsapRefresh) may have refreshed any instance.
     const setUp = () => {
+      const later = [...armedInstances].filter((other) => other !== this
+        && compareDocumentOrder(this.#rootElement, other.#rootElement) < 0);
+      const paddings = [this, ...later].flatMap((instance) => instance.#layers.flatMap((layer) =>
+        (layer.kind === 'scene' && layer.padding ? [layer.padding] : [])));
+      const heights = paddings.map((padding) => padding.style.height);
+
       paddings.forEach((padding) => commitHeight(padding, '0px'));
 
       const removeSpacers = insertSpacers(spacers);
@@ -1264,16 +1333,29 @@ export default class StickyScrollTrigger {
       };
     };
 
-    const outer = liveEvaluation;
     let takeDown = (): void => {};
+    let holds = 0;
     const evaluation: LiveEvaluation = {
-      suspended: false,
-      suspend: () => {
-        evaluation.suspended = true;
-        takeDown();
+      resolved: false,
+      ended: false,
+      outer: liveEvaluation,
+      suspend: (resolving) => {
+        if (resolving) evaluation.resolved = true;
 
+        holds += 1;
+
+        // Done once: a padding a GSAP refresh in the hold sets to 0 is that refresh's.
+        if (holds === 1) {
+          takeDown();
+          takeDown = () => {};
+        }
+
+        // Called once per suspend. A GSAP refresh that threw before its end leaves its hold to
+        // the 'refresh' of one under way around the evaluation, which comes after it is over.
         return () => {
-          takeDown = setUp();
+          holds -= 1;
+
+          if (holds === 0 && !evaluation.ended) takeDown = setUp();
         };
       },
     };
@@ -1284,9 +1366,10 @@ export default class StickyScrollTrigger {
 
       const next = liveEnd();
 
-      return evaluation.suspended ? null : next;
+      return evaluation.resolved ? null : next;
     } finally {
-      liveEvaluation = outer;
+      evaluation.ended = true;
+      liveEvaluation = evaluation.outer;
       takeDown();
     }
   }
@@ -1934,7 +2017,7 @@ export default class StickyScrollTrigger {
   ): number {
     // Called from an end function being evaluated again (see #evaluateLiveEnd), it measures the
     // page refresh() left, which its dwell correction is for.
-    const resume = liveEvaluation?.suspend();
+    const resume = liveEvaluation && suspendLiveEvaluations(liveEvaluation, true);
 
     try {
       return this.#resolveScrollPosition(elementInput, position);
