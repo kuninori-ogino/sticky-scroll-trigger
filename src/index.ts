@@ -6,8 +6,10 @@
 
 import {
   captureInlinePosition,
+  compareDocumentOrder,
   describeElement,
   documentTop,
+  insertSpacers,
   liftAboveStickyWrapper,
   measureDocumentHeightWithoutPinRanges,
   measureDocumentMaxScroll,
@@ -58,7 +60,7 @@ import {
   planLayers,
   TIE_TOLERANCE_PX,
 } from './freezeWindow';
-import type { LayerMeasurement } from './freezeWindow';
+import type { EndSpec, LayerMeasurement } from './freezeWindow';
 import { measureLayer } from './measure';
 import {
   classifyPosition,
@@ -164,6 +166,22 @@ type ContentPosition = {
   consumed: Map<HTMLElement, number>;
 };
 
+// An end function's evaluation (see #evaluateLiveEnd). suspend puts the page back as refresh()
+// left it and returns the function that sets the evaluation up again.
+type LiveEvaluation = { suspend: () => () => void; suspended: boolean };
+
+// The number a re-evaluated end gives: measure.ts's liveEnd is only there for these two modes.
+const liveEndValue = (spec: EndSpec): number => {
+  if (spec.mode === 'dwell') return spec.distancePx;
+
+  return spec.mode === 'absolute' ? spec.value : 0;
+};
+
+// An end function is evaluated again at most this many times per refresh(), so one whose value
+// keeps moving its own layout can't loop. Two usually settle it: one moves, the next confirms.
+const LIVE_END_ROUNDS = 6;
+// Sub-pixel layout noise isn't a move.
+const LIVE_END_TOLERANCE_PX = 0.5;
 // Shared by the layer and pin registration paths, which both reject an already-registered trigger.
 const hasDuplicateTrigger = (
   list: readonly { trigger: HTMLElement }[],
@@ -193,6 +211,11 @@ let unbuildCount = 0;
 // The instances that have refreshed in the GSAP refresh under way, each with what it read outside
 // its own structure (see #outsideReads). Two GSAP refreshes in one task share it.
 let refreshedInGsapRefresh: Map<StickyScrollTrigger, string> | null = null;
+// Every armed instance: an end function's evaluation takes out the padding of those later in the
+// page (see #evaluateLiveEnd).
+const armedInstances = new Set<StickyScrollTrigger>();
+// The end function evaluation under way, which resolveScrollPosition sets aside to measure.
+let liveEvaluation: LiveEvaluation | null = null;
 // How often held work checks isScrolling(), the condition GSAP holds its own refresh on, so it
 // waits as long (a finger held down, or ScrollTrigger.disable() mid-scroll). A poll, not
 // scrollEnd: ScrollTrigger.killAll() drops every listener, and GSAP also fires scrollEnd from the
@@ -329,6 +352,7 @@ export default class StickyScrollTrigger {
     if (this.#armed) return;
 
     this.#armed = true;
+    armedInstances.add(this);
 
     pendingKeeps.forEach((keep) => {
       if (keep.owner.#overlaps(this)) keep.cancelled = true;
@@ -475,6 +499,7 @@ export default class StickyScrollTrigger {
 
   #disarm(): void {
     this.#armed = false;
+    armedInstances.delete(this);
 
     // Even with no client of its own, its wrappers were ancestors in the other instances' ranges.
     unregisterDormancyClient(this.#dormancyClient);
@@ -1129,6 +1154,21 @@ export default class StickyScrollTrigger {
         },
       });
 
+    this.#reevaluateLiveEnds(active, measured, () => {
+      const heights = active.map(() => 0);
+
+      planLayers(measured, {
+        viewportHeight,
+        structureTop,
+        documentMaxScroll,
+        measureLiveEndTriggerTop: () => 0,
+        onPlanned: (index, plan) => {
+          heights[index] = plan.paddingHeight ?? 0;
+        },
+      });
+
+      return heights;
+    });
     applyLayers();
 
     // Pin ranges are left out: the pin pass sizes them only later, stopping each at the page's end
@@ -1142,6 +1182,113 @@ export default class StickyScrollTrigger {
     if (needsLiveRemeasure || needsMaxRemeasure) applyLayers();
 
     return stickyTops;
+  }
+
+  // GSAP calls a pin's end function with the earlier pins' spacers in place and the later ones'
+  // gone, while pass 1 read the layout with every padding in place. Each Scene layer's
+  // function-valued dwell or absolute end is called again in GSAP's layout, against windows planned
+  // in memory: nothing is written until every end settles, so the page sees one padding write and a
+  // throw leaves nothing to undo.
+  #reevaluateLiveEnds(
+    active: readonly Layer[],
+    measured: LayerMeasurement[],
+    planPaddings: () => number[],
+  ): void {
+    const live = measured.flatMap(({ liveEnd }, index) => (liveEnd ? [{ index, liveEnd }] : []));
+
+    if (!live.length) return;
+
+    // Taking the padding out can shorten the page, and the browser clamps the scroll to it. The
+    // layout is back to this one when the loop ends, so the scroll can go back to this too.
+    const scrollBefore = window.scrollY;
+
+    try {
+      for (let round = 0; round < LIVE_END_ROUNDS; round += 1) {
+        const planned = planPaddings();
+        let moved = false;
+
+        live.forEach(({ index, liveEnd }) => {
+          const next = this.#evaluateLiveEnd(active, planned, index, liveEnd);
+          const current = measured[index].end;
+
+          // A function that changes what kind of value it returns between calls keeps the first.
+          if (!next || next.mode !== current.mode) return;
+
+          if (Math.abs(liveEndValue(next) - liveEndValue(current)) <= LIVE_END_TOLERANCE_PX) return;
+
+          measured[index] = { ...measured[index], end: next };
+          moved = true;
+        });
+
+        if (!moved) break;
+      }
+    } finally {
+      if (Math.abs(window.scrollY - scrollBefore) >= 0.5) {
+        window.scrollTo({ top: scrollBefore, behavior: 'instant' });
+      }
+    }
+  }
+
+  // Calls one end function with the Scene padding of this instance and every later one out, and a
+  // spacer as tall as each earlier layer's planned padding right after its trigger. null if the
+  // function measured through resolveScrollPosition, which already gives GSAP's value: pass 1's
+  // stays.
+  #evaluateLiveEnd(
+    active: readonly Layer[],
+    planned: readonly number[],
+    index: number,
+    liveEnd: () => EndSpec,
+  ): EndSpec | null {
+    const later = [...armedInstances].filter((other) => other !== this
+      && compareDocumentOrder(this.#rootElement, other.#rootElement) < 0);
+    const paddings = [this, ...later].flatMap((instance) => instance.#layers.flatMap((layer) =>
+      (layer.kind === 'scene' && layer.padding ? [layer.padding] : [])));
+    const heights = paddings.map((padding) => padding.style.height);
+    const spacers = active.flatMap((layer, k) => (k < index && layer.kind === 'scene' && planned[k]
+      ? [{ after: layer.trigger, height: planned[k] }]
+      : []));
+
+    // Returns the function that takes this layout down again. A padding goes back only while it
+    // still holds the 0 written here: an end function that refreshes another instance leaves that
+    // one's own write.
+    const setUp = () => {
+      paddings.forEach((padding) => commitHeight(padding, '0px'));
+
+      const removeSpacers = insertSpacers(spacers);
+
+      return () => {
+        removeSpacers();
+        paddings.forEach((padding, k) => {
+          if (padding.style.height === '0px') commitHeight(padding, heights[k]);
+        });
+      };
+    };
+
+    const outer = liveEvaluation;
+    let takeDown = (): void => {};
+    const evaluation: LiveEvaluation = {
+      suspended: false,
+      suspend: () => {
+        evaluation.suspended = true;
+        takeDown();
+
+        return () => {
+          takeDown = setUp();
+        };
+      },
+    };
+
+    try {
+      takeDown = setUp();
+      liveEvaluation = evaluation;
+
+      const next = liveEnd();
+
+      return evaluation.suspended ? null : next;
+    } finally {
+      liveEvaluation = outer;
+      takeDown();
+    }
   }
 
   // Public entry point. Rebuilds the nesting if triggers were added/removed, and recomputes
@@ -1782,6 +1929,21 @@ export default class StickyScrollTrigger {
   // freezeWindow.ts's dwellBeforeReach) back onto the static documentTop. Cover layers are
   // excluded, never having changed the document height. Call this only after refresh() has run.
   resolveScrollPosition(
+    elementInput: string | HTMLElement,
+    position: PositionInput,
+  ): number {
+    // Called from an end function being evaluated again (see #evaluateLiveEnd), it measures the
+    // page refresh() left, which its dwell correction is for.
+    const resume = liveEvaluation?.suspend();
+
+    try {
+      return this.#resolveScrollPosition(elementInput, position);
+    } finally {
+      resume?.();
+    }
+  }
+
+  #resolveScrollPosition(
     elementInput: string | HTMLElement,
     position: PositionInput,
   ): number {

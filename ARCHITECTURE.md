@@ -56,6 +56,14 @@ Measurements use `documentTop` (`offsetParent` chain), not `getBoundingClientRec
 
 Viewport height is measured via a temporary `height:100vh` element (`measureViewportHeight`) instead of `window.innerHeight`, which fluctuates on mobile address-bar show/hide. This matches GSAP's own approach (`_refresh100vh`).
 
+### Why a Scene layer's end function runs twice
+
+Pass 1 reads the layout with every padding where the last refresh left it. GSAP calls a pin's `end` function in another one: the spacers of the pins refreshed before it in place, those after it reverted. An `end` that reads the page's height in pass 1 counts its own padding, so it grows on every refresh. `#reevaluateLiveEnds` calls each Scene layer's function-valued dwell or absolute `end` again with that layout set up: the instance's own paddings and those of every armed instance later in the page at 0, and after each earlier layer's trigger a spacer as tall as that layer's planned padding. Page order stands in for GSAP's creation order. A clause `end` isn't called again, since pass 2 places its `endTrigger`, and neither is `start`, which GSAP calls once.
+
+The windows are planned in memory until no value moves (six rounds at most) and written once after that. A first write of pass 1's plan would move the page and the scroll on its own, which engines then undo differently, and a function that throws leaves nothing to put back. Taking the paddings out can still leave the page shorter than the scroll, which the browser clamps; the layout after the loop is the one before it, so `refresh()` scrolls back to the position read first. Firefox and WebKit can still fire a `scroll` event, WebKit even where the scroll wasn't clamped. Holding the height with a `min-height` doesn't stop that, and the function would read the page's height with every padding again, so the growth comes back (measured).
+
+`resolveScrollPosition` called inside the function puts the page back for its own read, and such a function keeps pass 1's value, which the dwell correction already makes GSAP's. An evaluation puts back only the paddings still at its own 0, so a `refresh()` of another instance from the function keeps that instance's write.
+
 ### Why a `ResizeObserver`-triggered refresh doesn't loop forever
 
 A common integration pattern (used in `demo/src/main.ts`) watches `document.scrollingElement` with a `ResizeObserver` and calls `refresh()` on change, to catch layout shifts a plain window resize wouldn't. Since `refresh()` itself writes Scene layer dwell padding, which changes the document's own height, this is a feedback loop by construction: writing padding re-triggers the observer.
@@ -198,7 +206,7 @@ Each `refresh()` runs these steps in order (`#refreshLayout` holds steps 1 to 9)
 4. Put the cover lifts back over the sibling chain steps 1 and 3 left, even when step 3 throws for a detached `trigger`.
 5. Measure the viewport height once, for the Scene/Cover passes and the pins alike.
 6. Take every wrapper and pin off sticky, then read what this refresh's padding can't move (phase 1): each Scene and Cover layer, running its start/end functions, and the scroll-margin targets, all inside the container.
-7. Plan the Scene and Cover layers as [Two-pass position measurement](#two-pass-position-measurement) describes and write the paddings.
+7. Plan the Scene and Cover layers as [Two-pass position measurement](#two-pass-position-measurement) describes, calling each Scene layer's function-valued dwell or absolute `end` again in the layout GSAP shows it (see [Why a Scene layer's end function runs twice](#why-a-scene-layers-end-function-runs-twice)), and write the paddings.
 8. Read what the padding moves (phase 2): a cover's `endTrigger` outside the container and the document height for a cover's `'max'`, planning the covers again from them, then every pin with its range cleared, running its start/end functions.
 9. Write every sticky top and pin range, then sync the scroll margins to the settled freeze windows.
 10. Rebuild the page-level dormancy table, also after a throw in steps 1 to 9.

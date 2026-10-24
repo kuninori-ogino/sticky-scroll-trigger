@@ -198,6 +198,22 @@ export const stripStickyPositions = (elements: readonly HTMLElement[]): (() => v
   return () => elements.forEach((el, i) => restoreInlinePosition(el, saved[i]));
 };
 
+// Puts a block of each height right after its element and returns a function that takes them out.
+export const insertSpacers = (
+  spacers: readonly { after: HTMLElement; height: number }[],
+): (() => void) => {
+  const inserted = spacers.map(({ after, height }) => {
+    const spacer = document.createElement('div');
+
+    spacer.style.cssText = `height:${height}px;margin:0;padding:0;border:0`;
+    after.after(spacer);
+
+    return spacer;
+  });
+
+  return () => inserted.forEach((spacer) => spacer.remove());
+};
+
 // Scene layer: wraps inner in one level of stickyContainer{ stickyWrapper, stickyPadding }
 // and moves it inside the wrapper. With holdTrailingMargin, an empty flow-root after inner keeps a
 // bottom margin ending inner (its own or its content's) in the wrapper, where it can't move the end

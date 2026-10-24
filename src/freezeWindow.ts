@@ -67,6 +67,9 @@ export interface LayerMeasurement {
   coverTop: number; // Only meaningful for cover layers (0 for Scene layers).
   end: EndSpec;
   endTrigger: EndTriggerMeasurement;
+  // A Scene layer's function-valued end that gave a dwell or an absolute position: calls it again
+  // (see index.ts's #reevaluateLiveEnds).
+  liveEnd?: () => EndSpec;
 }
 
 // A layer's endTrigger as pass 1 measured it.

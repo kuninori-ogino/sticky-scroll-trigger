@@ -3693,6 +3693,303 @@ describe('a refresh() from a start or end function', () => {
   });
 });
 
+// jsdom has no layout to read, so what these check is the layout each call sees and what refresh()
+// does with the values the function returns; the values a real layout gives are e2e's.
+describe('an end function called again in the layout GSAP shows it', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // In page order: an instance above, the one under test, an instance below.
+  const setupInstances = (end: () => string | number) => {
+    document.body.innerHTML = `
+      <div class="above"><section class="a1"></section></div>
+      <div class="root">
+        <section class="s1"></section>
+        <section class="s2"></section>
+      </div>
+      <div class="below"><section class="b1"></section></div>`;
+
+    const above = new StickyScrollTrigger(query('.above'));
+    const below = new StickyScrollTrigger(query('.below'));
+    const controller = new StickyScrollTrigger(query('.root'));
+
+    above.createStickyTrigger({ trigger: query('.a1'), end: '+=200' });
+    below.createStickyTrigger({ trigger: query('.b1'), end: '+=400' });
+    controller.createStickyTrigger({ trigger: query('.s1'), end: '+=300' });
+
+    const vars = controller.createStickyTrigger({ trigger: query('.s2'), end });
+
+    above.refresh();
+    below.refresh();
+
+    return { above, below, controller, vars };
+  };
+
+  // An instance's padding sits in the structure around its root.
+  const paddingsIn = (root: string) => {
+    let outermost = query(root);
+
+    while (outermost.parentElement !== document.body) outermost = outermost.parentElement!;
+
+    return Array.from(
+      outermost.querySelectorAll<HTMLElement>('div[aria-hidden="true"]'),
+      (el) => el.style.height,
+    );
+  };
+
+  const layout = () => ({
+    above: paddingsIn('.above'),
+    root: paddingsIn('.root'),
+    below: paddingsIn('.below'),
+    afterS1: (query('.s1').nextElementSibling as HTMLElement | null)?.style.height ?? null,
+    divs: document.querySelectorAll('div').length,
+  });
+
+  it('takes out this instance\'s padding and the padding below, with a spacer for each earlier layer', () => {
+    const seen: ReturnType<typeof layout>[] = [];
+    const { controller } = setupInstances(() => {
+      seen.push(layout());
+
+      return '+=100';
+    });
+
+    controller.refresh();
+    seen.length = 0;
+    controller.refresh();
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toEqual({
+      above: ['200px'],
+      root: ['0px', '0px'],
+      below: ['0px'],
+      afterS1: '300px',
+      divs: seen[0].divs + 1,
+    });
+  });
+
+  it('puts every padding back and leaves no spacer', () => {
+    const { controller } = setupInstances(() => '+=100');
+
+    controller.refresh();
+
+    const before = layout();
+
+    controller.refresh();
+
+    expect(layout()).toEqual(before);
+    expect(before.root).toEqual(['300px', '100px']);
+    expect(before.below).toEqual(['400px']);
+  });
+
+  it('plans with the value the function returns in that layout', () => {
+    let calls = 0;
+    const { controller, vars } = setupInstances(() => {
+      calls += 1;
+
+      return calls === 1 ? '+=100' : '+=400';
+    });
+
+    controller.refresh();
+
+    expect(calls).toBe(3);
+    expect(paddingsIn('.root')).toEqual(['300px', '400px']);
+    // s1's dwell comes first.
+    expect((vars.end as () => number)()).toBe(700);
+  });
+
+  it('calls a function whose value keeps moving at most six more times', () => {
+    let calls = 0;
+    const { controller } = setupInstances(() => {
+      calls += 1;
+
+      return `+=${calls * 100}`;
+    });
+
+    calls = 0;
+
+    expect(() => controller.refresh()).not.toThrow();
+    expect(calls).toBe(7);
+  });
+
+  it('keeps the first value when the function changes what kind of value it returns', () => {
+    let calls = 0;
+    const { controller } = setupInstances(() => {
+      calls += 1;
+
+      return calls === 1 ? '+=100' : 2000;
+    });
+
+    controller.refresh();
+
+    expect(paddingsIn('.root')).toEqual(['300px', '100px']);
+  });
+
+  it('calls neither a start function nor an end function that gave a position clause again', () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="s1"></section>
+        <section class="s2"></section>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const start = vi.fn(() => 'top top');
+    const clauseEnd = vi.fn(() => 'bottom top');
+    const dwellEnd = vi.fn(() => '+=100');
+
+    controller.createStickyTrigger({ trigger: query('.s1'), end: clauseEnd });
+    controller.createStickyTrigger({ trigger: query('.s2'), start, end: dwellEnd });
+    controller.refresh();
+    start.mockClear();
+    clauseEnd.mockClear();
+    dwellEnd.mockClear();
+    controller.refresh();
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(clauseEnd).toHaveBeenCalledTimes(1);
+    expect(dwellEnd).toHaveBeenCalledTimes(2);
+  });
+
+  // The function throws in the first evaluation, or in the second after the first moved a value.
+  // Every call returns something new, so a write before the throw would show.
+  it.each([2, 3])('leaves the last refresh\'s layout and windows when the function throws on call %i', (throwAt) => {
+    let calls = 0;
+    let failing = false;
+    const { controller, vars } = setupInstances(() => {
+      calls += 1;
+
+      if (!failing) return '+=100';
+
+      if (calls === throwAt) throw new Error('end failed');
+
+      return calls === 1 ? '+=250' : '+=400';
+    });
+
+    controller.refresh();
+
+    const before = layout();
+    const endBefore = (vars.end as () => number)();
+
+    failing = true;
+    calls = 0;
+
+    expect(() => controller.refresh()).toThrow('end failed');
+    expect(layout()).toEqual(before);
+    expect((vars.end as () => number)()).toBe(endBefore);
+  });
+
+  it('gives resolveScrollPosition the page refresh() left and keeps the value pass 1 gave', () => {
+    // What the page looks like whenever resolveScrollPosition reads its element's position.
+    const seenByMeasure: ReturnType<typeof layout>[] = [];
+    let calls = 0;
+    const { controller, vars } = setupInstances(() => {
+      calls += 1;
+
+      return controller.resolveScrollPosition(query('.b1'), 'top top') + 1000 + calls * 100;
+    });
+
+    Object.defineProperty(query('.b1'), 'offsetTop', {
+      configurable: true,
+      get: () => {
+        seenByMeasure.push(layout());
+
+        return 0;
+      },
+    });
+    controller.refresh();
+
+    const left = layout();
+
+    seenByMeasure.length = 0;
+    calls = 0;
+    controller.refresh();
+
+    // In pass 1 and in the evaluation alike.
+    expect(seenByMeasure).toEqual([left, left]);
+    expect(calls).toBe(2);
+    expect((vars.end as () => number)()).toBe(1100);
+  });
+
+  it('scrolls back to where it was when taking the padding out moved the scroll', () => {
+    let y = 500;
+    let calls = 0;
+
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => y);
+
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation((options) => {
+      y = (options as ScrollToOptions).top ?? y;
+    });
+    const { controller } = setupInstances(() => {
+      calls += 1;
+
+      // The browser clamps the scroll to the shorter page.
+      if (calls > 1) y = 200;
+
+      return '+=100';
+    });
+
+    calls = 0;
+    controller.refresh();
+
+    expect(scrollTo.mock.calls).toEqual([[{ top: 500, behavior: 'instant' }]]);
+    expect(y).toBe(500);
+  });
+
+  // The instance below has a function-valued end too, so its refresh() runs an evaluation of its
+  // own inside this one's.
+  describe('a refresh() of the instance below from the function', () => {
+    const setupNested = (end: (below: StickyScrollTrigger) => string | number) => {
+      document.body.innerHTML = `
+        <div class="root"><section class="s1"></section></div>
+        <div class="below"><section class="b1"></section></div>`;
+
+      const state = { belowDwell: 400 };
+      const controller = new StickyScrollTrigger(query('.root'));
+      const below = new StickyScrollTrigger(query('.below'));
+      const vars = controller.createStickyTrigger({ trigger: query('.s1'), end: () => end(below) });
+
+      below.createStickyTrigger({ trigger: query('.b1'), end: () => `+=${state.belowDwell}` });
+      below.refresh();
+
+      return { state, controller, vars };
+    };
+
+    it('keeps what that refresh() wrote', () => {
+      let calls = 0;
+      const { state, controller } = setupNested((below) => {
+        calls += 1;
+
+        if (calls === 2) {
+          state.belowDwell = 700;
+          below.refresh();
+        }
+
+        return '+=100';
+      });
+
+      controller.refresh();
+
+      expect(paddingsIn('.below')).toEqual(['700px']);
+    });
+
+    it('still gives resolveScrollPosition the page refresh() left afterwards', () => {
+      let calls = 0;
+      const { controller, vars } = setupNested((below) => {
+        calls += 1;
+
+        if (calls === 2) below.refresh();
+
+        return controller.resolveScrollPosition(query('.s1'), 'top top') + 1000 + calls * 100;
+      });
+
+      controller.refresh();
+
+      expect(calls).toBe(2);
+      expect((vars.end as () => number)()).toBe(1100);
+    });
+  });
+});
+
 // dormancy.test.ts owns the table and its windows. What's checked here is that each instance
 // reaches it: the option, its refresh(), a pin's unwrap and destroy(). jsdom puts everything at 0,
 // so a scroll far past 0 is past every range.

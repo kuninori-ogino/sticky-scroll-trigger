@@ -4,6 +4,7 @@ import {
   captureInlinePosition,
   compareDocumentOrder,
   describeElement,
+  insertSpacers,
   liftAboveStickyWrapper,
   measureDocumentHeightWithoutPinRanges,
   measureDocumentMaxScroll,
@@ -445,6 +446,29 @@ describe('compareDocumentOrder', () => {
     shuffled.sort(compareDocumentOrder);
 
     expect(shuffled.map((el) => el.id)).toEqual(['1', '2', '3']);
+  });
+});
+
+describe('insertSpacers', () => {
+  it('puts a block of each height right after its element and takes them all out again', () => {
+    document.body.innerHTML = '<div id="parent"><div id="a"></div><div id="b"></div></div>';
+
+    const parent = document.getElementById('parent')!;
+    const remove = insertSpacers([
+      { after: document.getElementById('a')!, height: 300 },
+      { after: document.getElementById('b')!, height: 50 },
+    ]);
+    const spacers = Array.from(parent.children as HTMLCollectionOf<HTMLElement>)
+      .filter((el) => !el.id);
+
+    expect(Array.from(parent.children, (el) => el.id || (el as HTMLElement).style.height))
+      .toEqual(['a', '300px', 'b', '50px']);
+    expect(spacers.map(({ style }) => [style.margin, style.padding, style.borderWidth]))
+      .toEqual([['0px', '0px', '0px'], ['0px', '0px', '0px']]);
+
+    remove();
+
+    expect(ids(parent)).toEqual(['a', 'b']);
   });
 });
 

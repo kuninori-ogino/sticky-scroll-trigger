@@ -178,6 +178,20 @@ export const measureLayer = (
   );
   const endTriggerInContainer = end.mode === 'clause' && !end.measureLive && !endTriggerIsSelf;
   const start = resolveStartSpec(layer, startResolved, elementHeight, viewportHeight);
+  // Only a dwell or an absolute end turns what the function read into a number; a clause's
+  // endTrigger is placed by pass 2 anyway. start isn't resolved again: GSAP calls it once.
+  const { end: endInput } = layer;
+  const liveEnd = layer.kind === 'scene' && typeof endInput === 'function'
+    && (end.mode === 'dwell' || end.mode === 'absolute')
+    ? () => resolveEndSpec(
+        rootElement,
+        viewportHeight,
+        layer,
+        prefixSpacedRelativeEnd(startResolved, endInput()),
+        ownIndex,
+        endTriggerIndex,
+      )
+    : undefined;
 
   return {
     kind: layer.kind,
@@ -200,5 +214,6 @@ export const measureLayer = (
         ? indicesWhere((other) => other !== layer.endTrigger && layer.endTrigger.contains(other))
         : [],
     },
+    liveEnd,
   };
 };

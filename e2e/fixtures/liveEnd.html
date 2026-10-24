@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>liveEnd fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        display: block;
+        height: 400px;
+      }
+      .tail {
+        height: 300px;
+      }
+    </style>
+  </head>
+  <body>
+    <div style="height: 200px"></div>
+    <div class="top"><section>A1</section><section>A2</section></div>
+    <div class="bottom"><section>B1</section><section>B2</section></div>
+    <div class="tail"></div>
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      // Each dwell comes from a layout read: end=height, half the page's height; end=below, a
+      // quarter of where the tail starts, below every padding. impl=gsap: GSAP's own pins with the
+      // same end functions, for the windows to compare. instances=two adds a second instance below,
+      // layers=two a second layer to the first.
+      const params = new URLSearchParams(location.search);
+      const tail = document.querySelector('.tail');
+      const end = params.get('end') === 'below'
+        ? () => `+=${Math.round(tail.offsetTop * 0.25)}`
+        : () => `+=${Math.round(document.documentElement.scrollHeight * 0.5)}`;
+      const instances = [];
+      const create = (selector, count) => {
+        const triggers = [...document.querySelectorAll(`${selector} > section`)].slice(0, count);
+
+        if (params.get('impl') === 'gsap') {
+          return triggers.map((trigger) =>
+            ScrollTrigger.create({ trigger, start: 'top top', end, pin: true }),
+          );
+        }
+
+        const sticky = new StickyScrollTrigger(selector);
+
+        instances.push(sticky);
+
+        return triggers.map((trigger) =>
+          ScrollTrigger.create(sticky.createStickyTrigger({ trigger, end })),
+        );
+      };
+      const watched = create('.top', params.get('layers') === 'two' ? 2 : 1);
+
+      if (params.get('instances') === 'two') watched.push(...create('.bottom', 1));
+
+      ScrollTrigger.refresh();
+
+      // GSAP refreshes again on the window's load.
+      if (document.readyState !== 'complete') {
+        await new Promise((resolve) => window.addEventListener('load', resolve, { once: true }));
+      }
+
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      window.__windows = () => watched.map((t) => [Math.round(t.start), Math.round(t.end)]);
+      window.__gsapRefresh = () => ScrollTrigger.refresh();
+      window.__refresh = () => instances[0].refresh();
+      window.__ready = true;
+    </script>
+  </body>
+</html>

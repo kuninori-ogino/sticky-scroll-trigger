@@ -282,6 +282,33 @@ describe('measureLayer', () => {
     expect(measure(layer).end).toEqual<EndSpec>({ mode: 'dwell', distancePx: 900 });
   });
 
+  // index.ts's #reevaluateLiveEnds calls liveEnd again in another layout.
+  it('lets a Scene layer\'s function-valued dwell or absolute end resolve again, start left as it was', () => {
+    let dwell = 500;
+    let starts = 0;
+    const { liveEnd } = measure(scene({
+      start: () => {
+        starts += 1;
+
+        return 'top top';
+      },
+      end: () => `+=${dwell}`,
+    }));
+
+    dwell = 900;
+
+    expect(liveEnd?.()).toEqual<EndSpec>({ mode: 'dwell', distancePx: 900 });
+    expect(starts).toBe(1);
+    expect(measure(scene({ end: () => 2000 })).liveEnd?.())
+      .toEqual<EndSpec>({ mode: 'absolute', value: 2000 });
+  });
+
+  it('gives no liveEnd to an end that isn\'t a function, gives a position clause, or is a cover\'s', () => {
+    expect(measure(scene({ end: '+=500' })).liveEnd).toBeUndefined();
+    expect(measure(scene({ endTrigger: query('.b'), end: () => 'top top' })).liveEnd).toBeUndefined();
+    expect(measure(cover({ end: () => '+=500' })).liveEnd).toBeUndefined();
+  });
+
   // What the composed clause resolves to needs real heights, so that half is e2e's (see its
   // "spaced '+=' end" tests). This checks only that measureLayer composes the end at all, rather
   // than reading '+=100 bottom' as a dwell.

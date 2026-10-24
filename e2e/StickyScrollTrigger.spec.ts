@@ -3106,3 +3106,69 @@ for (const query of instanceOrderLayouts) {
     });
   }
 }
+
+// liveEnd.html's hooks.
+interface LiveEndWindow {
+  __ready?: boolean;
+  __windows: () => [number, number][];
+  __gsapRefresh: () => void;
+  __refresh: () => void;
+}
+
+const loadLiveEnd = async (page: Page, query: string) => {
+  await page.goto(`/fixtures/liveEnd.html?${query}`);
+  await page.waitForFunction(() => (window as never as LiveEndWindow).__ready === true);
+};
+
+// GSAP calls an end function with the earlier pins' spacers in place and the later ones' gone, so a
+// dwell read from the page's height or a position below the instance takes only what comes before
+// it. Read with every padding in place instead, the dwell would grow with its own padding on every
+// refresh.
+for (const end of ['height', 'below']) {
+  for (const shape of ['instances=one', 'instances=two', 'layers=two']) {
+    test(`an end function reading the layout gets GSAP's windows, refresh after refresh (end=${end}, ${shape})`, async ({ page }) => {
+      const read = () => page.evaluate(() => (window as never as LiveEndWindow).__windows());
+      const query = `end=${end}&${shape}`;
+
+      await loadLiveEnd(page, `${query}&impl=gsap`);
+
+      const gsapWindows = await read();
+
+      await loadLiveEnd(page, query);
+
+      expect(await read()).toEqual(gsapWindows);
+
+      await page.evaluate(() => {
+        const w = window as never as LiveEndWindow;
+
+        w.__gsapRefresh();
+        w.__refresh();
+        w.__gsapRefresh();
+      });
+
+      expect(await read()).toEqual(gsapWindows);
+    });
+  }
+}
+
+// Calling the end function again takes the padding out, the instance below's too, which shortens
+// the page, and the browser clamps the scroll to it.
+for (const fromEnd of [0, 150]) {
+  test(`a refresh() ${fromEnd ? `${fromEnd}px above` : 'at'} the page's end keeps the scroll`, async ({ page }) => {
+    await loadLiveEnd(page, 'end=height&instances=two');
+
+    const before = await page.evaluate(async (offset) => {
+      scrollTo(0, document.documentElement.scrollHeight - innerHeight - offset);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      return scrollY;
+    }, fromEnd);
+
+    expect(before).toBeGreaterThan(1000);
+    expect(await page.evaluate(() => {
+      (window as never as LiveEndWindow).__refresh();
+
+      return scrollY;
+    })).toBe(before);
+  });
+}
