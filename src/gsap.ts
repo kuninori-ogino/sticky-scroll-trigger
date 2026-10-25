@@ -59,13 +59,18 @@ export const refreshAll = (cls: ScrollTriggerClass | null | undefined): void => 
 type ScrollRecord = { read(): number; write(value: number): void };
 
 // GSAP's record of the scroll it returns to after measuring, while one of its refreshes runs.
-// Each read and write goes to the record itself, since GSAP may move it in between.
-export const scrollRecord = (cls: ScrollTriggerClass | null | undefined): ScrollRecord | null => {
+// Each read and write goes to the record itself, since GSAP may move it in between. GSAP took it
+// before its refreshInit (ScrollTrigger.js:1179) and doesn't go back to a record of 0 (1233),
+// which counts as none unless `zero`.
+export const scrollRecord = (
+  cls: ScrollTriggerClass | null | undefined,
+  zero = false,
+): ScrollRecord | null => {
   if (!cls || !isRefreshing(cls)) return null;
 
   const scrollFunc = cls.getScrollFunc?.(window) as { rec?: unknown } | undefined;
 
-  if (!(scrollFunc && typeof scrollFunc.rec === 'number' && scrollFunc.rec)) return null;
+  if (!(scrollFunc && typeof scrollFunc.rec === 'number' && (zero || scrollFunc.rec))) return null;
 
   const record = scrollFunc as { rec: number };
 

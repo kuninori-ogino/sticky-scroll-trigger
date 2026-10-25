@@ -6,6 +6,7 @@ import {
   mergeIntervals,
   rebuildDormancy,
   registerDormancyClient,
+  setGsapRefreshReturn,
   takeGsapRefreshRestore,
   releaseDormant,
   unregisterDormancyClient,
@@ -777,6 +778,24 @@ describe('rebuildDormancy', () => {
     scroll = 0;
     result.render(-1);
     rebuildDormancy(refreshing);
+    expect(el.style.top).toBe('500px');
+  });
+
+  // The scroll GSAP took was moved after the table took it.
+  it('applies the state for the scroll GSAP\'s return was moved to', () => {
+    const el = setupSingle();
+    const refreshing = fakeGsap();
+
+    addClient([el]);
+    scroll = 3500;
+    rebuildDormancy(refreshing);
+    refreshing.listeners.refresh();
+    scroll = 0;
+
+    const result = refreshInit(refreshing);
+
+    setGsapRefreshReturn(3500);
+    result.render(-1);
     expect(el.style.top).toBe('500px');
   });
 

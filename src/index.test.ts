@@ -3701,6 +3701,32 @@ describe('an end function called again in the layout GSAP shows it', () => {
     vi.restoreAllMocks();
   });
 
+  // The browser's scroll: `start` on a page that reaches `top`, cut back by `cut` for each padding
+  // at 0 as the page gets shorter, and left there when it grows again.
+  // shorten: a layout change elsewhere that takes px off the page.
+  const clampingScroll = (cut: number, start = 500, top = start) => {
+    let y = start;
+    let shorter = 0;
+    const max = () => Math.max(0, top - shorter - cut * Array.from(
+      document.querySelectorAll<HTMLElement>('div[aria-hidden="true"]'),
+    ).filter((el) => el.style.height === '0px').length);
+
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => {
+      y = Math.min(y, max());
+
+      return y;
+    });
+    vi.spyOn(window, 'scrollTo').mockImplementation((options) => {
+      y = Math.min((options as ScrollToOptions).top ?? y, max());
+    });
+
+    return {
+      shorten: (px: number) => {
+        shorter = px;
+      },
+    };
+  };
+
   // In page order: an instance above, the one under test, an instance below.
   const setupInstances = (end: () => string | number) => {
     document.body.innerHTML = `
@@ -3940,8 +3966,11 @@ describe('an end function called again in the layout GSAP shows it', () => {
   // it is what GSAP measures.
   describe('a GSAP refresh from the function', () => {
     // onCall runs on every call of the function after the arm, pass 1's included.
-    const setupGsap = (onCall: (gsapRefresh: (complete?: boolean) => void) => void) => {
-      const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+    const setupGsap = (
+      onCall: (gsapRefresh: (complete?: boolean) => void) => void,
+      scroller: { rec?: unknown } = { rec: 0 },
+    ) => {
+      const { Cls, listeners, gsapRefresh } = makeClass(scroller);
       const self = Object.create(Cls.prototype) as ScrollTrigger;
       const measured: ReturnType<typeof layout>[] = [];
       let armed = false;
@@ -3956,6 +3985,7 @@ describe('an end function called again in the layout GSAP shows it', () => {
 
       return {
         Cls,
+        listeners,
         controller,
         gsapRefresh,
         measured,
@@ -4001,6 +4031,90 @@ describe('an end function called again in the layout GSAP shows it', () => {
       expect(inEvaluation).not.toEqual(left);
       expect(afterGsapRefresh).toEqual(inEvaluation);
       expect(layout()).toEqual(left);
+    });
+
+    // GSAP's scroll function for the window, with its record and its cache of the scroll.
+    const makeScroller = () => {
+      let cache = 0;
+      const scroller = Object.assign((value?: number) => {
+        if (value !== undefined) cache = value;
+
+        return cache;
+      }, {
+        rec: 0,
+        // What GSAP does before its refreshInit.
+        record: () => {
+          cache = window.scrollY;
+          scroller.rec = cache;
+        },
+      });
+
+      return scroller;
+    };
+
+    // GSAP takes the scroll before its refreshInit, in the evaluation's shorter page, and goes back
+    // there after measuring to run the triggers' callbacks.
+    it.each([
+      ['cut back', 100, 500, 500, 500],
+      ['cut back to 0', 250, 500, 500, 500],
+      // GSAP's scroll function goes to whole pixels.
+      ['cut back from a fraction of a pixel', 100, 500.4, 500.4, 500],
+      ['not cut back, at half a pixel', 0, 500.5, 600, 500.5],
+    ])('gives the GSAP refresh the scroll of the page refresh() left when the evaluation is %s', (_, cut, start, top, left) => {
+      clampingScroll(cut, start, top);
+
+      const scroller = makeScroller();
+      const seen: { scroll: number; rec: number; cache: number }[] = [];
+      let gsap: (complete?: boolean) => void = () => {};
+      const act = onEvaluation(() => {
+        scroller.record();
+        gsap(true);
+      });
+      const { Cls, controller, arm } = setupGsap((gsapRefresh) => {
+        gsap = gsapRefresh;
+        act();
+      }, scroller);
+
+      Cls.addEventListener('refreshInit', () => seen.push({
+        scroll: window.scrollY,
+        rec: scroller.rec,
+        cache: scroller(),
+      }));
+      arm();
+      controller.refresh();
+
+      expect(seen).toEqual([{ scroll: left, rec: left, cache: left }]);
+    });
+
+    // A top-level GSAP refresh takes the scroll before the listener and goes back there, as far as
+    // the page then reaches. The function's layout cuts the scroll to 200.
+    it.each([
+      ['scrolls', () => window.scrollTo({ top: 100 }), { scroll: 500, rec: 500 }],
+      ['shortens the page', (shorten: (px: number) => void) => shorten(50), { scroll: 450, rec: 450 }],
+    ])('takes the scroll back when a refreshInit listener ahead of the layer handler %s', (_, ahead, left) => {
+      const { shorten } = clampingScroll(100);
+      const scroller = makeScroller();
+      const seen: { scroll: number; rec: number }[] = [];
+      let gsap: (complete?: boolean) => void = () => {};
+      const act = onEvaluation(() => {
+        scroller.record();
+        gsap(true);
+      });
+      const { Cls, listeners, controller, arm } = setupGsap((gsapRefresh) => {
+        gsap = gsapRefresh;
+        act();
+      }, scroller);
+
+      listeners.unshift(() => {
+        ahead(shorten);
+        // The browser applies a layout change at the next read.
+        void window.scrollY;
+      });
+      Cls.addEventListener('refreshInit', () => seen.push({ scroll: window.scrollY, rec: scroller.rec }));
+      arm();
+      controller.refresh();
+
+      expect(seen).toEqual([left]);
     });
 
     it('leaves the page as refresh() left it after a GSAP refresh that threw before its end', () => {
@@ -4442,6 +4556,26 @@ describe('an end function called again in the layout GSAP shows it', () => {
       const left = run();
 
       expect(measured).toEqual([left]);
+    });
+
+    // The function below's evaluation starts on the scroll this one's layout cut back.
+    it('gives a GSAP refresh from the function below the scroll of the page refresh() left', () => {
+      clampingScroll(100);
+
+      const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+      const self = Object.create(Cls.prototype) as ScrollTrigger;
+      const record = Cls.getScrollFunc() as { rec: number };
+      const { vars, run } = setupTwoEvaluations(() => {
+        record.rec = window.scrollY;
+        gsapRefresh(true);
+      });
+      const seen: { scroll: number; rec: number }[] = [];
+
+      Cls.addEventListener('refreshInit', () => vars.onRefreshInit?.(self));
+      Cls.addEventListener('refreshInit', () => seen.push({ scroll: window.scrollY, rec: record.rec }));
+      run();
+
+      expect(seen).toEqual([{ scroll: 500, rec: 500 }]);
     });
 
     it('gives a resolveScrollPosition from the function below the page refresh() left', () => {

@@ -29,6 +29,7 @@ import {
   registerDormancyClient,
   takeGsapRefreshRestore,
   releaseDormant,
+  setGsapRefreshReturn,
   unregisterDormancyClient,
 } from './dormancy';
 import type { DormancyClient } from './dormancy';
@@ -170,11 +171,13 @@ type ContentPosition = {
 // left it, unless it already is, and returns the function that sets the evaluation up again.
 // resolved: the function measured through resolveScrollPosition, which already gives GSAP's
 // value. outer: the evaluation whose function started this one, whose layout is in place too.
+// scroll: the scroll on the page refresh() left, before any evaluation's shorter layout cut it.
 type LiveEvaluation = {
   suspend: (resolving: boolean) => () => void;
   resolved: boolean;
   ended: boolean;
   outer: LiveEvaluation | null;
+  scroll: number;
 };
 
 // Suspends an evaluation and every one around it, innermost first, and returns the function that
@@ -238,6 +241,11 @@ let liveEvaluation: LiveEvaluation | null = null;
 // How many layer handlers (see #createAutoRefreshHandler) are running, one inside another.
 let layerHandlerDepth = 0;
 
+// Scrolls to `top` unless the scroll is already there.
+const scrollBackTo = (top: number): void => {
+  if (Math.abs(window.scrollY - top) >= 0.5) window.scrollTo({ top, behavior: 'instant' });
+};
+
 // A GSAP refresh the end function under evaluation starts measures the page refresh() left, with
 // no evaluation's layout in, from its first layer handler until its 'refresh'. Only a 'refresh' no
 // deeper in layer handlers than that start resumes: one started inside a handler (by a nested
@@ -250,6 +258,21 @@ const holdLiveEvaluationForGsapRefresh = (cls: ScrollTriggerClass | null): void 
   if (!evaluation) return;
 
   const resume = suspendLiveEvaluations(evaluation, false);
+  // GSAP took the scroll in the function's layout, cut back if that is shorter, and would run
+  // every trigger's callbacks there after measuring. A top-level call would have taken it before
+  // any listener ahead of this one moved it.
+  const record = scrollRecord(cls, true);
+
+  if (record && Math.abs(record.read() - evaluation.scroll) >= 0.5) {
+    // Whole pixels, as GSAP's scroll function goes there.
+    scrollBackTo(Math.round(evaluation.scroll));
+    syncScrollCache(cls);
+    // Where the scroll got to, if the page is shorter than that now.
+    record.write(window.scrollY);
+    // The nested-sticky table took the scroll too if its listener came first.
+    setGsapRefreshReturn(window.scrollY);
+  }
+
   // This handler is one deeper than where the function started the GSAP refresh.
   const depth = layerHandlerDepth - 1;
   let held = true;
@@ -1275,7 +1298,7 @@ export default class StickyScrollTrigger {
         let moved = false;
 
         live.forEach(({ index, liveEnd }) => {
-          const next = this.#evaluateLiveEnd(active, planned, index, liveEnd);
+          const next = this.#evaluateLiveEnd(active, planned, index, liveEnd, scrollBefore);
           const current = measured[index].end;
 
           // A function that changes what kind of value it returns between calls keeps the first.
@@ -1290,9 +1313,7 @@ export default class StickyScrollTrigger {
         if (!moved) break;
       }
     } finally {
-      if (Math.abs(window.scrollY - scrollBefore) >= 0.5) {
-        window.scrollTo({ top: scrollBefore, behavior: 'instant' });
-      }
+      scrollBackTo(scrollBefore);
     }
   }
 
@@ -1305,6 +1326,7 @@ export default class StickyScrollTrigger {
     planned: readonly number[],
     index: number,
     liveEnd: () => EndSpec,
+    scroll: number,
   ): EndSpec | null {
     const spacers = active.flatMap((layer, k) => (k < index && layer.kind === 'scene' && planned[k]
       ? [{ after: layer.trigger, height: planned[k] }]
@@ -1339,6 +1361,8 @@ export default class StickyScrollTrigger {
       resolved: false,
       ended: false,
       outer: liveEvaluation,
+      // Inside another evaluation, the scroll read before this one is that layout's.
+      scroll: liveEvaluation?.scroll ?? scroll,
       suspend: (resolving) => {
         if (resolving) evaluation.resolved = true;
 

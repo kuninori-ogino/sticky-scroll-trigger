@@ -798,6 +798,12 @@ export const takeGsapRefreshRestore = (): (() => void) | null => {
   return restoreAfterGsapMeasure;
 };
 
+// Moves the scroll GSAP's refresh in progress goes back to, for one whose record was moved after
+// the table took the scroll.
+export const setGsapRefreshReturn = (scroll: number): void => {
+  if (gsapPhase !== 'idle') scrollBeforeGsapRefresh = scroll;
+};
+
 // Promotes every demoted element and empties the table, for a refresh() that couldn't rebuild it.
 export const clearDormancy = clearTable;
 
