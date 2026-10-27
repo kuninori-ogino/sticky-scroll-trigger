@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-27
+
 - A `createStickyPin` with its `trigger` or `endTrigger` inside the `trigger` of a pin registered earlier on the same instance now keeps its range when `refresh()` runs while that earlier pin is stuck. The element was measured where the stuck pin had carried it
 - A `createOverlapScroll` with `end: 'max'` now ends at the page's max scroll position in the first `refresh()` after the page gets shorter. Until a second refresh it counted a `createStickyPin` range still sized for the longer page
 - A `createStickyPin` killed from a `createStickyTrigger` or `createOverlapScroll` start or end function now gets its `trigger`'s own inline `position` and `top` back, as does one killed from another pin's function before a later pin's option throws. It was left `position: sticky`
