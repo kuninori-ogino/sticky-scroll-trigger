@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>killKeepsState fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        display: block;
+        height: 400px;
+      }
+    </style>
+  </head>
+  <body>
+    <div style="height: 200px"></div>
+    <div class="root">
+      <section class="s1">S1</section>
+      <section class="s2">S2</section>
+      <section class="s3">S3 <input class="field" /></section>
+    </div>
+    <div style="height: 4000px"></div>
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const root = document.querySelector('.root');
+      const field = document.querySelector('.field');
+      const iframe = document.createElement('iframe');
+      let loads = 0;
+
+      iframe.addEventListener('load', () => {
+        loads += 1;
+      });
+      iframe.srcdoc = 'frame';
+      document.querySelector('.s3').appendChild(iframe);
+
+      // ?self: s1 kills itself in onLeave; ?once: s1 has once: true. Otherwise the page kills s1.
+      const params = new URLSearchParams(location.search);
+      const once = params.has('once');
+      const self = once || params.has('self');
+      const sticky = new StickyScrollTrigger(root);
+      const triggers = ['.s1', '.s2', '.s3'].map((sel) =>
+        ScrollTrigger.create(
+          sticky.createStickyTrigger({
+            trigger: sel,
+            end: '+=200',
+            once: once && sel === '.s1',
+            onLeave: self && !once && sel === '.s1' ? (st) => st.kill() : undefined,
+          }),
+        ),
+      );
+
+      ScrollTrigger.refresh();
+
+      // Counts adds only: one move is a remove and an add.
+      let rootMoves = 0;
+
+      new MutationObserver((records) => {
+        rootMoves += records.filter((record) => Array.from(record.addedNodes).includes(root)).length;
+      }).observe(document.body, { childList: true, subtree: true });
+
+      const frames = () =>
+        new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      // Waits out the deferred step, which holds while GSAP reports a scroll.
+      const settle = async () => {
+        do {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        } while (ScrollTrigger.isScrolling());
+        await frames();
+      };
+
+      window.__run = async () => {
+        field.focus({ preventScroll: true });
+
+        if (self) {
+          for (let i = 0; i < 12; i += 1) {
+            window.scrollBy(0, 100);
+            await frames();
+          }
+        } else {
+          triggers[0].kill();
+        }
+
+        await settle();
+
+        return {
+          killed: !ScrollTrigger.getAll().includes(triggers[0]),
+          loads,
+          focused: document.activeElement === field,
+          rootMoves,
+        };
+      };
+
+      window.__ready = () => loads === 1;
+    </script>
+  </body>
+</html>

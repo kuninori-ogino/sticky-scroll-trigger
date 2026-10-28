@@ -23,6 +23,14 @@ export const commitHeight = (el: HTMLElement, height: string): void => {
   el.style.height = height;
 };
 
+// A Scene level a kill leaves in the DOM: no longer sticky, and no dwell.
+export const commitInert = (wrapper: HTMLElement, padding: HTMLElement | null): void => {
+  wrapper.style.position = '';
+  wrapper.style.top = '';
+
+  if (padding) padding.style.height = '0px';
+};
+
 export const clearStickyForRead = (el: HTMLElement): void => {
   el.style.position = '';
   el.style.top = '';

@@ -50,6 +50,7 @@ import {
   clearHeightForRead,
   clearStickyForRead,
   commitHeight,
+  commitInert,
   commitPosition,
   commitSticky,
 } from './commit';
@@ -227,9 +228,9 @@ const pendingKeeps = new Set<PendingKeep>();
 // comes after those of the layers registered before the kill, so every layer's handler runs them
 // all first.
 const pendingCatchUps = new Map<StickyScrollTrigger, () => boolean>();
-// Counts structures taken down by any instance. Only such a rebuild moves a container under
-// windows measured before it; a change with none (in a stuck ancestor's offset, say) isn't one.
-let unbuildCount = 0;
+// Counts structures taken down, or levels made inert, by any instance: only such a change moves a
+// container under windows measured before it (a stuck ancestor's offset doesn't).
+let structureChanges = 0;
 // The instances that have refreshed in the GSAP refresh under way, each with what it read outside
 // its own structure (see #outsideReads). Two GSAP refreshes in one task share it.
 let refreshedInGsapRefresh: Map<StickyScrollTrigger, string> | null = null;
@@ -325,17 +326,19 @@ export default class StickyScrollTrigger {
   // The set of layers that "should" exist. Changes immediately on register, kill, and reorder.
   #layers: Layer[] = [];
   // The layers last built into the DOM. A layer that a kill removed from `#layers` stays here until
-  // the batch's rebuild: a Scene one still built, a cover one already unbuilt by the kill.
+  // the batch's refresh: a Scene one still built, a cover one already unbuilt by the kill.
   #builtLayers: Layer[] = [];
-  // The outermost container's top and unbuildCount when the windows were measured, null before.
+  // The outermost container's top and structureChanges when the windows were measured, null before.
   // Another instance's rebuild above moves the container, and the windows with it.
-  #measuredStructure: { top: number; unbuilds: number } | null = null;
+  #measuredStructure: { top: number; changes: number } | null = null;
   // Restore callbacks for cover layers' z-order. Kept in a WeakMap so destroy() can call them
   // even without going through GSAP's onKill.
   #coverRestoreByLayer = new WeakMap<CoverLayer, () => void>();
   #built = false;
-  #dirty = false; // Set true when a trigger is added/removed; rebuilt on the next refresh().
+  #dirty = false; // Set true when a trigger is added/removed; the next refresh() catches up.
   #outermostContainer: HTMLDivElement | null = null;
+  // Bumped when the structure comes down or loses a level (see structureKept in #refreshGeometry).
+  #structureGeneration = 0;
   #destroyed = false;
   // #runRefresh frames on the stack: a start or end function's refresh() comes in at 1 or more.
   #depth = 0;
@@ -448,7 +451,7 @@ export default class StickyScrollTrigger {
       const cls = this.#scrollTriggerClass;
 
       // Mid-scroll, the structure stays until the scroll stops, so the content keeps its place
-      // without a scroll mid-fling (see #scheduleRebuild).
+      // without a scroll mid-fling (see #scheduleCatchUp).
       if (!isRefreshing(cls) && isScrollingOrUpdating(cls)) {
         pendingDisarms.add(this);
         // An update no scroll started (ScrollTrigger.update(), say) is over by the microtask.
@@ -604,10 +607,46 @@ export default class StickyScrollTrigger {
     if (!this.#built) return;
 
     unbuildStructure(this.#rootElement, this.#builtLayers, this.#outermostContainer);
-    unbuildCount += 1;
+    structureChanges += 1;
+    this.#structureGeneration += 1;
     this.#measuredStructure = null;
     this.#outermostContainer = null;
     this.#built = false;
+  }
+
+  // Whether every change since the build is a removal, with a Scene layer left to hold the
+  // structure.
+  #onlyRemoved(): boolean {
+    const built = new Set(this.#builtLayers);
+
+    return this.#layers.every((layer) => built.has(layer))
+      && this.#layers.some((layer) => layer.kind === 'scene');
+  }
+
+  // Rebuilding would move the container's subtree, which reloads iframes and drops focus inside
+  // it, so a removed Scene level stays in the DOM, static and with no padding, until the next
+  // rebuild or the disarm takes the whole structure down.
+  #makeRemovedInert(): void {
+    const kept = new Set(this.#layers);
+    const removed = this.#builtLayers.flatMap((layer) => (
+      !kept.has(layer) && layer.kind === 'scene' ? [layer] : []));
+
+    releaseDormant(removed.flatMap(({ wrapper }) => (wrapper ? [wrapper] : [])));
+
+    for (const layer of removed) {
+      if (!layer.wrapper) continue;
+
+      commitInert(layer.wrapper, layer.padding);
+      layer.wrapper = null;
+      layer.container = null;
+      layer.padding = null;
+    }
+
+    this.#builtLayers = [...this.#layers];
+    structureChanges += 1;
+    this.#structureGeneration += 1;
+    this.#measuredStructure = null;
+    this.#dirty = false;
   }
 
   #build() {
@@ -627,17 +666,17 @@ export default class StickyScrollTrigger {
     this.#applyPendingKeep();
   }
 
-  // Defers teardown and rebuild to a microtask, or to a GSAP refresh later in the task, so kills
-  // within the same task coalesce into one refresh(). Rebuilding per kill would be O(n^2), and
-  // moving the shared container's subtree each time breaks iframes and focus. The last kill
-  // tears down without a rebuild instead (see #disarmIfEmpty), which still moves the subtree only
-  // once. While the page scrolls, both wait for the scroll to stop.
+  // Defers the kills' refresh() to a microtask, or to a GSAP refresh later in the task, so kills
+  // within the same task coalesce into one: rebuilding per kill would be O(n^2). That refresh()
+  // makes the killed Scene levels inert while a Scene layer is left (see #makeRemovedInert), and
+  // otherwise rebuilds. The last kill tears down without a rebuild instead (see #disarmIfEmpty),
+  // which moves the subtree once. While the page scrolls, both wait for the scroll to stop.
   //
   // GSAP doesn't re-read function-valued start/end until ScrollTrigger.refresh() is called, so
   // refresh() alone would leave GSAP's cache holding stale freezeStart/freezeEnd. The microtask
   // calls ScrollTrigger.refresh() instead, and the batch catches up in its refreshInit, as it does
   // for a GSAP refresh later in the task: one run, before GSAP measures.
-  #scheduleRebuild() {
+  #scheduleCatchUp() {
     if (this.#destroyed) return;
 
     // Set even with the batch already scheduled, since a refresh() after an earlier kill clears it.
@@ -1018,6 +1057,15 @@ export default class StickyScrollTrigger {
       position: captureInlinePosition(layer.trigger),
       range: layer.inner ? layer.inner.style.height : '',
     }));
+    // Neither the writes nor the rollback touch a Scene wrapper once a start or end function's
+    // refresh() has changed the structure: a level it made inert stays static, and it wrote the
+    // others' values for the new layout.
+    const generation = this.#structureGeneration;
+    const structureKept = () => this.#structureGeneration === generation;
+
+    const commitWrapperTops = (stickyTops: Map<HTMLElement, number>) => {
+      if (structureKept()) stickyTops.forEach((top, wrapper) => commitSticky(wrapper, top));
+    };
 
     // Every one cleared here is written again below, or rolled back on a throw. The rollback skips
     // a pin a start or end function killed meanwhile: its unwrap gave the caller's values back.
@@ -1039,7 +1087,10 @@ export default class StickyScrollTrigger {
     } catch (error) {
       // catch rather than finally: after a success the snapshots hold what the writes below
       // replace, and restoring them would undo the lot.
-      wrappers.forEach((wrapper, i) => commitPosition(wrapper, savedWrappers[i]));
+      if (structureKept()) {
+        wrappers.forEach((wrapper, i) => commitPosition(wrapper, savedWrappers[i]));
+      }
+
       pins.forEach(({ layer, position }) => {
         if (layer.inner) commitPosition(layer.trigger, position);
       });
@@ -1063,7 +1114,7 @@ export default class StickyScrollTrigger {
         plannedPins = this.#planPinLayers(viewportHeight, measureDocumentHeightWithoutPinRanges());
       }
     } catch (error) {
-      stickyTops.forEach((top, wrapper) => commitSticky(wrapper, top));
+      commitWrapperTops(stickyTops);
       pins.forEach(({ layer, position, range }) => {
         if (!layer.inner) return;
 
@@ -1074,7 +1125,7 @@ export default class StickyScrollTrigger {
       throw error;
     }
 
-    stickyTops.forEach((top, wrapper) => commitSticky(wrapper, top));
+    commitWrapperTops(stickyTops);
     // A later pin's start/end function can kill an earlier one, which unwraps it.
     plannedPins.forEach(({ layer, topPx, range }) => {
       if (!layer.inner) return;
@@ -1173,7 +1224,7 @@ export default class StickyScrollTrigger {
     // natural position aligns here.
     const structureTop = this.#outermostContainer ? documentTop(this.#outermostContainer) : 0;
 
-    this.#measuredStructure = { top: structureTop, unbuilds: unbuildCount };
+    this.#measuredStructure = { top: structureTop, changes: structureChanges };
 
     // Registered trigger element -> index. If endTrigger is among these, its already-computed
     // natural absolute position can be reused.
@@ -1333,24 +1384,28 @@ export default class StickyScrollTrigger {
       : []));
 
     // Returns the function that takes this layout down again. A padding goes back only while it
-    // still holds the 0 written here: an end function that refreshes another instance leaves that
-    // one's own write. The paddings are read at each set-up, since a GSAP refresh the evaluation
-    // was held for (see holdLiveEvaluationForGsapRefresh) may have refreshed any instance.
+    // still holds the 0 written here and its layer still holds it: an end function that refreshes
+    // another instance leaves that one's own write, and one whose refresh() made a level inert
+    // leaves it without dwell. The paddings are read at each set-up, since a GSAP refresh the
+    // evaluation was held for (see holdLiveEvaluationForGsapRefresh) may have refreshed any
+    // instance.
     const setUp = () => {
       const later = [...armedInstances].filter((other) => other !== this
         && compareDocumentOrder(this.#rootElement, other.#rootElement) < 0);
-      const paddings = [this, ...later].flatMap((instance) => instance.#layers.flatMap((layer) =>
-        (layer.kind === 'scene' && layer.padding ? [layer.padding] : [])));
-      const heights = paddings.map((padding) => padding.style.height);
+      const held = [this, ...later].flatMap((instance) => instance.#layers.flatMap((layer) =>
+        (layer.kind === 'scene' && layer.padding ? [{ layer, padding: layer.padding }] : [])));
+      const heights = held.map(({ padding }) => padding.style.height);
 
-      paddings.forEach((padding) => commitHeight(padding, '0px'));
+      held.forEach(({ padding }) => commitHeight(padding, '0px'));
 
       const removeSpacers = insertSpacers(spacers);
 
       return () => {
         removeSpacers();
-        paddings.forEach((padding, k) => {
-          if (padding.style.height === '0px') commitHeight(padding, heights[k]);
+        held.forEach(({ layer, padding }, k) => {
+          if (layer.padding === padding && padding.style.height === '0px') {
+            commitHeight(padding, heights[k]);
+          }
         });
       };
     };
@@ -1462,7 +1517,7 @@ export default class StickyScrollTrigger {
       rebuildDormancy(this.#scrollTriggerClass);
     } catch (error) {
       // Every demoted element goes back to sticky. The table's error goes out off the stack, so
-      // #scheduleRebuild still reaches GSAP's refresh; the refresh's own error is the one thrown.
+      // #scheduleCatchUp still reaches GSAP's refresh; the refresh's own error is the one thrown.
       clearDormancy();
       queueMicrotask(() => {
         throw error;
@@ -1485,7 +1540,7 @@ export default class StickyScrollTrigger {
   // have rebuilt above this container and scrolled.
   #naturalScrollTop(layers: readonly Layer[]): ContentPosition {
     const measured = this.#measuredStructure;
-    const moved = measured && this.#outermostContainer && measured.unbuilds !== unbuildCount
+    const moved = measured && this.#outermostContainer && measured.changes !== structureChanges
       ? documentTop(this.#outermostContainer) - measured.top
       : 0;
     const scroll = (scrollRecord(this.#scrollTriggerClass)?.read() ?? window.scrollY) - moved;
@@ -1564,9 +1619,11 @@ export default class StickyScrollTrigger {
   #refreshLayout(): void {
     // Checks DOM-order changes as well as dirty (layer count changes),
     // since a reorder with no additions/removals never sets dirty.
-    if (this.#dirty || !this.#built || isDomOrderStale(this.#layers)) {
+    if (!this.#built || isDomOrderStale(this.#layers) || (this.#dirty && !this.#onlyRemoved())) {
       this.#unbuild();
       this.#build();
+    } else if (this.#dirty) {
+      this.#makeRemovedInert();
     }
 
     // The lift comes off before the pin wrapping below captures a pin trigger's own inline
@@ -1779,7 +1836,7 @@ export default class StickyScrollTrigger {
       // function-valued tween props get re-measured too. An explicit value is respected.
       invalidateOnRefresh: rest.invalidateOnRefresh ?? true,
       // Removes the layer when GSAP kills it (a matchMedia switch, say). It leaves `#layers`
-      // immediately; a Scene layer's wrappers stay until the teardown #scheduleRebuild defers,
+      // immediately; a Scene layer's wrappers stay until the refresh() #scheduleCatchUp defers,
       // or, for the last layer or pin, until the scroll stops (see #disarmIfEmpty).
       onKill: (self) => {
         this.#captureScrollTriggerClass(self);
@@ -1794,7 +1851,7 @@ export default class StickyScrollTrigger {
 
         removeItem(this.#layers, layer);
         this.#dirty = true;
-        this.#scheduleRebuild();
+        this.#scheduleCatchUp();
         this.#disarmIfEmpty();
         onKill?.(self);
       },
@@ -2020,7 +2077,7 @@ export default class StickyScrollTrigger {
         // restore the margin collapsing between trigger and its siblings that the wrappers
         // blocked. That still moves everything below, invalidating every later Scene layer's
         // freeze window. A pin that was never wrapped moved nothing.
-        if (this.#unwrapPinLayer(layer)) this.#scheduleRebuild();
+        if (this.#unwrapPinLayer(layer)) this.#scheduleCatchUp();
 
         this.#disarmIfEmpty();
         onKill?.(self);

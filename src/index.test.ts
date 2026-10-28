@@ -19,7 +19,7 @@ import StickyScrollTrigger from './index';
 // (numeric) and e2e's job (a real browser).
 
 // onKill relies on the constructor of self (the killed ScrollTrigger itself, as passed in
-// by GSAP) to update GSAP's own cache (see index.ts's scheduleRebuild).
+// by GSAP) to update GSAP's own cache (see index.ts's scheduleCatchUp).
 // With a fake like `{} as ScrollTrigger`, `self.constructor` resolves to the
 // built-in Object, and calling `.refresh()` on it fails silently inside the microtask
 // (Vitest doesn't catch async exceptions as test failures, so the test appears to pass while
@@ -125,6 +125,12 @@ beforeEach(() => {
 // A query helper reused across tests. Since document.body.innerHTML is swapped out each time,
 // there's no need to redefine this per test.
 const query = (sel: string) => document.querySelector<HTMLElement>(sel)!;
+// The Scene paddings still holding a level's place. A kill that only removes layers leaves each
+// killed level in the DOM, static with a 0px padding.
+const livePaddings = () => Array.from(
+  document.querySelectorAll<HTMLElement>('div[aria-hidden="true"]'),
+).filter((padding) => padding.style.height !== '0px'
+  || (padding.previousElementSibling as HTMLElement | null)?.style.position !== '');
 
 // jsdom puts every element at 0, and resolveScrollPosition only adds a Scene layer's dwell to an
 // element that reaches its anchor after that freeze starts, so a test that needs the dwell counted
@@ -737,7 +743,7 @@ describe('registerLayer\'s onRefreshInit', () => {
       vars[1].onRefreshInit?.(refreshingSelf);
 
       expect(refreshes).toHaveBeenCalledTimes(2);
-      expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(2);
+      expect(livePaddings()).toHaveLength(2);
     });
 
     // A callback can change what refresh() reads without touching the DOM: a variable a
@@ -888,23 +894,189 @@ describe('batching kill()', () => {
     return { query, controller, vars };
   };
 
-  // The main case: killing N layers within the same task still coalesces DOM teardown
-  // and rebuild into a single pass (deferred to the end of the task). Naively tearing down and
-  // rebuilding synchronously on every kill would move the subtree containing rootElement
-  // once per kill, causing internal iframes to reload and focus to be lost.
-  it('synchronous kills merge into one pass at the end of the task (no immediate rebuild)', async () => {
+  // The main case. A move of the subtree containing rootElement reloads iframes and drops focus
+  // inside it.
+  it('synchronous kills merge into one pass at the end of the task, and only-removing ones leave root in place', async () => {
     const { query, vars } = setupThreeScenes();
     const wrapperBefore = query('.root').parentElement;
 
     vars[0].onKill?.(fakeSelf);
     vars[1].onKill?.(fakeSelf);
-    // still synchronous: waiting on the batch, so the DOM shouldn't have moved at all yet
+    // still synchronous: waiting on the batch
+    expect(livePaddings()).toHaveLength(3);
+
+    await flushMicrotasks();
     expect(query('.root').parentElement).toBe(wrapperBefore);
+    expect(livePaddings()).toHaveLength(1);
     expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(3);
+  });
+
+  // A registration in the same task needs the full rebuild, still deferred to the batch.
+  it('a kill and a registration in one task rebuild once, at the end of the task', async () => {
+    const { query, controller, vars } = setupThreeScenes();
+    const wrapperBefore = query('.root').parentElement;
+
+    vars[0].onKill?.(fakeSelf);
+    controller.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
+    expect(query('.root').parentElement).toBe(wrapperBefore);
 
     await flushMicrotasks();
     expect(query('.root').parentElement).not.toBe(wrapperBefore);
-    expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(1);
+    expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(3);
+    expect(livePaddings()).toHaveLength(3);
+  });
+
+  // With no Scene layer left there's no structure to keep, so the batch takes it down.
+  it('killing every Scene layer while a pin stays puts root back after the batch', async () => {
+    document.body.innerHTML = `
+      <div class="host">
+        <div class="root"><section class="s1"></section><section class="s2"></section></div>
+        <div class="pin"></div>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const vars = ['.s1', '.s2'].map((sel) =>
+      controller.createStickyTrigger({ trigger: query(sel), end: '+=100' }));
+
+    controller.createStickyPin({ trigger: query('.pin') });
+    controller.refresh();
+    vars.forEach((entry) => entry.onKill?.(fakeSelf));
+    await flushMicrotasks();
+
+    expect(query('.root').parentElement).toBe(query('.host'));
+    expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(0);
+  });
+
+  // The refresh() the function runs makes s1's level inert after the outer one has planned its
+  // sticky top, which neither the writes nor the rollback after a later throw put back.
+  it.each([false, true])('a Scene level killed from a pin\'s start function stays static (throws: %s)', (rejects) => {
+    document.body.innerHTML = `
+      <div class="host">
+        <div class="root"><section class="s1"></section><section class="s2"></section></div>
+        <div class="pin"></div>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const vars = ['.s1', '.s2'].map((sel) =>
+      controller.createStickyTrigger({ trigger: query(sel), end: '+=100' }));
+    let kill: (() => void) | null = null;
+
+    controller.createStickyPin({
+      trigger: query('.pin'),
+      start: () => {
+        kill?.();
+
+        return 'top top';
+      },
+    });
+    controller.refresh();
+
+    const wrapper = query('.root').parentElement!;
+
+    expect(wrapper.style.position).toBe('sticky');
+
+    kill = () => {
+      kill = null;
+      vars[0].onKill?.(fakeSelf);
+      controller.refresh();
+
+      if (rejects) throw new Error('start');
+    };
+
+    if (rejects) {
+      expect(() => controller.refresh()).toThrow('start');
+    } else {
+      controller.refresh();
+    }
+
+    expect(query('.root').parentElement).toBe(wrapper);
+    expect(wrapper.style.position).toBe('');
+    expect(livePaddings()).toHaveLength(1);
+  });
+
+  // GSAP's layout for the end function's second call has every padding at 0. Taking it down gives
+  // the dwell back to each padding still at 0, but not to a level the call's refresh() made inert.
+  it('a Scene level killed from an end function\'s live call keeps no padding', () => {
+    document.body.innerHTML = `
+      <div class="root"><section class="s1"></section><section class="s2"></section><section class="s3"></section></div>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const vars = ['.s1', '.s2'].map((sel) =>
+      controller.createStickyTrigger({ trigger: query(sel), end: '+=100' }));
+    let calls = 0;
+    let kill: (() => void) | null = null;
+
+    controller.createStickyTrigger({
+      trigger: query('.s3'),
+      end: () => {
+        calls += 1;
+
+        if (calls === 2) kill?.();
+
+        return '+=100';
+      },
+    });
+    controller.refresh();
+    calls = 0;
+
+    kill = () => {
+      kill = null;
+      vars[0].onKill?.(fakeSelf);
+      controller.refresh();
+    };
+
+    controller.refresh();
+
+    const paddings = Array.from(document.querySelectorAll<HTMLElement>('div[aria-hidden="true"]'));
+
+    expect(paddings.map((padding) => padding.style.height)).toEqual(['0px', '100px', '100px']);
+    expect(livePaddings()).toHaveLength(2);
+  });
+
+  // The rollback after phase 1 throws leaves the wrappers as the function's refresh() wrote them:
+  // the killed level static, and s2's top from the layout without s1. jsdom plans every top the
+  // same, so a stale top written before the pass stands in for the one planned with s1's dwell.
+  it('a Scene level killed from an end function that then throws stays static', () => {
+    document.body.innerHTML = `
+      <div class="host">
+        <div class="root"><section class="s1"></section><section class="s2"></section></div>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    let act: (() => void) | null = null;
+    const vars = [
+      controller.createStickyTrigger({ trigger: query('.s1'), end: '+=100' }),
+      controller.createStickyTrigger({
+        trigger: query('.s2'),
+        end: () => {
+          act?.();
+
+          return '+=100';
+        },
+      }),
+    ];
+
+    controller.refresh();
+
+    const wrapper = query('.root').parentElement!;
+    const survivor = wrapper.parentElement!.parentElement!;
+
+    survivor.style.top = '999px';
+
+    act = () => {
+      act = null;
+      vars[0].onKill?.(fakeSelf);
+      controller.refresh();
+      throw new Error('end');
+    };
+
+    expect(() => controller.refresh()).toThrow('end');
+    expect(query('.root').parentElement).toBe(wrapper);
+    expect(wrapper.style.position).toBe('');
+    expect(livePaddings()).toHaveLength(1);
+    expect(survivor.style.position).toBe('sticky');
+    expect(survivor.style.top).not.toBe('999px');
   });
 
   // Nothing is left to rebuild, so the one move back to host happens in the kill's own task.
@@ -953,8 +1125,8 @@ describe('batching kill()', () => {
     // precedingGaps changes now that s1 and s2 are gone, so s3's (the survivor's)
     // freezeStart should be recomputed and move.
     expect((vars[2].start as () => number)()).not.toBe(survivorStartBefore);
-    // only one padding remains, for the surviving s3 (both s1's and s2's are gone).
-    expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(1);
+    // only one padding still holds a place, for the surviving s3 (s1's and s2's levels are inert).
+    expect(livePaddings()).toHaveLength(1);
   });
 
   // gsap.matchMedia reverts the old setup and runs the next one in the same task, so a cover
@@ -1127,7 +1299,7 @@ describe('batching kill()', () => {
   });
 
   // From here: the binding that keeps GSAP's own start/end cache current after a kill.
-  // See the comment on index.ts's scheduleRebuild definition. Calls GSAP's static refresh
+  // See the comment on index.ts's scheduleCatchUp definition. Calls GSAP's static refresh
   // via self's constructor (a way to obtain a reference to the ScrollTrigger class
   // without importing gsap).
   describe('updating GSAP\'s own cache', () => {
@@ -2220,7 +2392,7 @@ describe('createStickyPin()', () => {
 // Unlike Scene/Cover layers, createStickyPin's returned Vars uses onKill/onRefreshInit for
 // pinLayers-specific cleanup and auto-refresh binding. A pin wraps/unwraps independently without
 // going through the shared container, so the DOM teardown is synchronous; only the re-measure it
-// forces on the layers below goes through scheduleRebuild's batch.
+// forces on the layers below goes through scheduleCatchUp's batch.
 describe('createStickyPin\'s onKill/onRefreshInit', () => {
   const fakeSelf = makeFakeSelf();
 
@@ -4660,6 +4832,36 @@ describe('nestedStickyOptimization', () => {
     added.forEach((listener) => expect(remove).toHaveBeenCalledWith('scroll', listener));
   });
 
+  // The table still holds a killed level's wrapper as demoted, and would write sticky back onto it.
+  it('leaves a Scene level a kill made inert out of the table', () => {
+    document.body.innerHTML = `
+      <div class="root"><section class="s1"></section><section class="s2"></section><section class="s3"></section></div>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'), { nestedStickyOptimization: 'always' });
+    const vars = ['.s1', '.s2', '.s3'].map((trigger) => controller.createStickyTrigger({ trigger, end: '+=100' }));
+
+    vars[0].onRefreshInit?.(fakeSelf);
+    scroll = 5000;
+    window.dispatchEvent(new Event('scroll'));
+    vars[1].onKill?.(fakeSelf);
+    controller.refresh();
+
+    const inert = Array.from(document.querySelectorAll<HTMLElement>('div[aria-hidden="true"]'))
+      .filter((padding) => padding.style.height === '0px')
+      .map((padding) => padding.previousElementSibling as HTMLElement);
+
+    expect(inert).toHaveLength(1);
+
+    for (const at of [5000, 0]) {
+      scroll = at;
+      window.dispatchEvent(new Event('scroll'));
+      expect(inert[0].style.cssText).toBe('');
+    }
+
+    controller.destroy();
+  });
+
   // GSAP measures at scroll 0 between its refreshInit dispatch and the render(-1) it calls on what
   // each listener returned. ScrollTrigger.create() runs onRefreshInit, whose refresh() puts the
   // table's own listener on before GSAP's first refresh; the caller's result goes back untouched.
@@ -4850,7 +5052,7 @@ describe('nestedStickyOptimization', () => {
     process.on('uncaughtException', onUncaught);
 
     try {
-      // A caller like #scheduleRebuild carries on to GSAP's refresh: the error comes off the stack.
+      // A caller like #scheduleCatchUp carries on to GSAP's refresh: the error comes off the stack.
       expect(() => other.refresh()).not.toThrow();
       expect(query('.pin').style.cssText).toBe('position: sticky; top: 0px;');
       await flushMicrotasks();
@@ -4976,8 +5178,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
     return { controller, vars, self };
   };
 
-  const paddings = () => document.querySelectorAll<HTMLElement>('div[aria-hidden="true"]');
-  const paddingTotal = () => Array.from(paddings())
+  const paddingTotal = () => livePaddings()
     .reduce((sum, el) => sum + (parseFloat(el.style.height) || 0), 0);
 
   // The browser's scroll anchoring, with every padding above the viewport: the scroll follows
@@ -5009,7 +5210,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       controller.refresh();
       vars[0].onKill?.(self);
       gsapRefresh();
-      paddingsAtGsapRefresh = paddings().length;
+      paddingsAtGsapRefresh = livePaddings().length;
     };
 
     controller.refresh();
@@ -5033,7 +5234,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       vars[1].onRefreshInit?.(self);
       vars[0].onKill?.(self);
       gsapRefresh();
-      paddingsAtGsapRefresh = paddings().length;
+      paddingsAtGsapRefresh = livePaddings().length;
     };
 
     controller.refresh();
@@ -5058,7 +5259,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       controller.refresh();
       dwell = 300;
       gsapRefresh();
-      paddingsAtGsapRefresh = Array.from(paddings(), (el) => el.style.height);
+      paddingsAtGsapRefresh = Array.from(livePaddings(), (el) => el.style.height);
     };
 
     controller.refresh();
@@ -5084,7 +5285,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       controller.refresh();
       dwell = 300;
       gsapRefresh();
-      paddingsAtGsapRefresh = Array.from(paddings(), (el) => el.style.height);
+      paddingsAtGsapRefresh = Array.from(livePaddings(), (el) => el.style.height);
     };
 
     controller.refresh();
@@ -5155,7 +5356,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
     [...listeners].forEach((callback) => callback());
     Cls.isRefreshing = false;
 
-    expect(paddings()).toHaveLength(3);
+    expect(livePaddings()).toHaveLength(3);
   });
 
   // The instance created first is dispatched first, before the batch's listener.
@@ -5171,7 +5372,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
     const firstVars = first.createStickyTrigger({
       trigger: query('.f1'),
       start: () => {
-        paddingsSeen.push(paddings().length);
+        paddingsSeen.push(livePaddings().length);
 
         return 'top top';
       },
@@ -5201,10 +5402,10 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
     vars[0].onKill?.(self);
     vars[1].onKill?.(self);
-    expect(paddings()).toHaveLength(3);
+    expect(livePaddings()).toHaveLength(3);
 
     gsapRefresh();
-    expect(paddings()).toHaveLength(1);
+    expect(livePaddings()).toHaveLength(1);
 
     await flushMicrotasks();
     expect(Cls.refresh).not.toHaveBeenCalled();
@@ -5234,7 +5435,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
     vars[1].onKill?.(self);
     gsapRefresh();
 
-    expect(paddings()).toHaveLength(1);
+    expect(livePaddings()).toHaveLength(1);
     expect(scroller.rec).toBe(2300);
   });
 
@@ -5309,7 +5510,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
     vars[0].onKill?.(self);
     gsapRefresh();
 
-    expect(paddings()).toHaveLength(2);
+    expect(livePaddings()).toHaveLength(2);
     expect(scrollTo).not.toHaveBeenCalled();
   });
 
@@ -5356,7 +5557,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       expect(scrollTo).not.toHaveBeenCalled();
 
       await flushMicrotasks();
-      expect(paddings()).toHaveLength(1);
+      expect(livePaddings()).toHaveLength(1);
       expect(scrollTo.mock.calls).toEqual([[{ top: 2300, behavior: 'instant' }]]);
 
       // The batch is done: a refresh after it is a resize's and keeps the scroll.
@@ -5408,7 +5609,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       await flushMicrotasks();
 
       expect(Cls.refresh).toHaveBeenCalledTimes(2);
-      expect(paddings()).toHaveLength(1);
+      expect(livePaddings()).toHaveLength(1);
     });
 
     // GSAP's dispatch has no try/catch: a listener before the batch's stops the rest.
@@ -5423,7 +5624,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       const uncaught = await runDispatch(() => vars[0].onKill?.(self));
 
       expect(uncaught.map((error) => (error as Error).message)).toEqual(['listener']);
-      expect(paddings()).toHaveLength(2);
+      expect(livePaddings()).toHaveLength(2);
       expect(listeners).toHaveLength(0);
     });
 
@@ -5437,7 +5638,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       vars[1].onKill?.(self);
       await flushMicrotasks();
 
-      expect(paddings()).toHaveLength(1);
+      expect(livePaddings()).toHaveLength(1);
       expect(scrollTo).not.toHaveBeenCalled();
     });
 
@@ -5448,7 +5649,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       vi.spyOn(window, 'scrollY', 'get').mockReturnValue(2500);
       vars.forEach((layerVars) => layerVars.onKill?.(self));
-      expect(paddings()).toHaveLength(0);
+      expect(livePaddings()).toHaveLength(0);
 
       await flushMicrotasks();
       expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
@@ -5463,7 +5664,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       vars.forEach((layerVars) => layerVars.onKill?.(self));
       await flushMicrotasks();
 
-      expect(paddings()).toHaveLength(0);
+      expect(livePaddings()).toHaveLength(0);
       expect(scrollTo).not.toHaveBeenCalled();
     });
 
@@ -5479,7 +5680,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       controller.refresh();
       await flushMicrotasks();
 
-      expect(paddings()).toHaveLength(1);
+      expect(livePaddings()).toHaveLength(1);
       expect(scrollTo).not.toHaveBeenCalled();
     });
 
@@ -5548,7 +5749,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       Cls.isRefreshing = true;
       vars.forEach((layerVars) => layerVars.onKill?.(self));
       Cls.isRefreshing = false;
-      expect(paddings()).toHaveLength(0);
+      expect(livePaddings()).toHaveLength(0);
       expect(scrollTo).not.toHaveBeenCalled();
 
       await flushMicrotasks();
@@ -5586,7 +5787,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       vars[0].onKill?.(self);
       await flushMicrotasks();
 
-      expect(paddings()).toHaveLength(2);
+      expect(livePaddings()).toHaveLength(2);
       expect(scrollTo).not.toHaveBeenCalled();
       controller.destroy();
     });
@@ -5601,7 +5802,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       Cls.scrolling = true;
       await flushMicrotasks();
 
-      expect(paddings()).toHaveLength(0);
+      expect(livePaddings()).toHaveLength(0);
       expect(scrollTo).not.toHaveBeenCalled();
     });
 
@@ -5667,7 +5868,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       vars[1].onKill?.(self);
       await flushMicrotasks();
-      expect(paddings()).toHaveLength(1);
+      expect(livePaddings()).toHaveLength(1);
     });
 
     it('keeps the content for a kill after a refresh() that already used up an earlier one', async () => {
@@ -5681,7 +5882,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       vars[1].onKill?.(self);
       await flushMicrotasks();
-      expect(paddings()).toHaveLength(1);
+      expect(livePaddings()).toHaveLength(1);
       expect(scrollTo).toHaveBeenLastCalledWith({ top: 2300, behavior: 'instant' });
     });
 
@@ -5702,7 +5903,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       killDuringRebuild = true;
       await flushMicrotasks();
 
-      expect(paddings()).toHaveLength(1);
+      expect(livePaddings()).toHaveLength(1);
       expect(scrollTo).toHaveBeenLastCalledWith({ top: 2300, behavior: 'instant' });
     });
 
@@ -5773,7 +5974,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       await flushMicrotasks();
       vi.advanceTimersByTime(250);
 
-      expect(paddings()).toHaveLength(3);
+      expect(livePaddings()).toHaveLength(3);
       expect(scrollTo).not.toHaveBeenCalled();
       expect(Cls.refresh).not.toHaveBeenCalled();
 
@@ -5782,7 +5983,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       Cls.scrolling = false;
       vi.advanceTimersByTime(100);
 
-      expect(paddings()).toHaveLength(2);
+      expect(livePaddings()).toHaveLength(2);
       expect(scrollTo.mock.calls).toEqual([[{ top: 2400, behavior: 'instant' }]]);
       expect(Cls.refresh).toHaveBeenCalledTimes(1);
       expect(vi.getTimerCount()).toBe(0);
@@ -5799,7 +6000,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       await flushMicrotasks();
       gsapRefresh();
 
-      expect(paddings()).toHaveLength(2);
+      expect(livePaddings()).toHaveLength(2);
       expect(scroller.rec).toBe(2400);
 
       Cls.scrolling = false;
@@ -5838,7 +6039,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       Cls.scrolling = false;
       vi.advanceTimersByTime(100);
-      expect(paddings()).toHaveLength(1);
+      expect(livePaddings()).toHaveLength(1);
       expect(Cls.refresh).toHaveBeenCalledTimes(1);
       expect(listeners).toHaveLength(0);
     });
@@ -5854,11 +6055,11 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       vars[0].onKill?.(self);
       await flushMicrotasks();
       vi.advanceTimersByTime(5000);
-      expect(paddings()).toHaveLength(3);
+      expect(livePaddings()).toHaveLength(3);
 
       Cls.scrolling = false;
       vi.advanceTimersByTime(100);
-      expect(paddings()).toHaveLength(2);
+      expect(livePaddings()).toHaveLength(2);
     });
 
     // A refresh() the page calls itself is no fling: kd6 skipped its scroll and the content
@@ -5872,7 +6073,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       vars[0].onKill?.(self);
       controller.refresh();
 
-      expect(paddings()).toHaveLength(2);
+      expect(livePaddings()).toHaveLength(2);
       expect(scrollTo.mock.calls).toEqual([[{ top: 2400, behavior: 'instant' }]]);
     });
 
@@ -5900,7 +6101,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       vars[0].onKill?.(self);
       await flushMicrotasks();
 
-      expect(paddings()).toHaveLength(2);
+      expect(livePaddings()).toHaveLength(2);
       expect(scrollTo).not.toHaveBeenCalled();
       expect(scroller).toHaveBeenLastCalledWith(2400);
     });
@@ -5916,7 +6117,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       vars[0].onKill?.(self);
       await flushMicrotasks();
 
-      expect(paddings()).toHaveLength(2);
+      expect(livePaddings()).toHaveLength(2);
       expect(scroller.mock.calls.every((args) => args.length === 0)).toBe(true);
     });
 
@@ -5963,7 +6164,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         vi.advanceTimersByTime(100);
         await flushMicrotasks();
 
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         expect(query('.root').parentElement).toBe(query('.host'));
         expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
         expect(Cls.refresh).toHaveBeenCalledTimes(1);
@@ -5989,7 +6190,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         controller.refresh();
         await flushMicrotasks();
 
-        expect(paddings()).toHaveLength(3);
+        expect(livePaddings()).toHaveLength(3);
         expect(scrollTo).not.toHaveBeenCalled();
       });
 
@@ -6005,7 +6206,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         await flushMicrotasks();
         gsapRefresh();
 
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         expect(scroller.rec).toBe(2200);
 
         Cls.scrolling = false;
@@ -6022,16 +6223,16 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         Cls.refresh.mockImplementation(() => {
           gsapRefresh();
-          paddingsAtGsapRefresh.push(paddings().length);
+          paddingsAtGsapRefresh.push(livePaddings().length);
         });
         Cls.isUpdating = true;
         vars.forEach((layerVars) => layerVars.onKill?.(self));
-        expect(paddings()).toHaveLength(3);
+        expect(livePaddings()).toHaveLength(3);
 
         Cls.isUpdating = false;
         await flushMicrotasks();
 
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         expect(paddingsAtGsapRefresh).toEqual([0]);
       });
 
@@ -6044,7 +6245,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         vars.forEach((layerVars) => layerVars.onKill?.(self));
         Cls.isRefreshing = false;
 
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
       });
 
       it('reuses the structure for a registration before the scroll stops', async () => {
@@ -6058,13 +6259,13 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         controller.refresh();
 
         // As at rest: the setup puts the dwell back, so the content isn't kept.
-        expect(paddings()).toHaveLength(1);
+        expect(livePaddings()).toHaveLength(1);
         expect(scrollTo).not.toHaveBeenCalled();
 
         Cls.scrolling = false;
         await flushMicrotasks();
         vi.advanceTimersByTime(100);
-        expect(paddings()).toHaveLength(1);
+        expect(livePaddings()).toHaveLength(1);
       });
 
       it('hands the root back to a new instance that only resolves a trigger on it', () => {
@@ -6076,10 +6277,10 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         const next = new StickyScrollTrigger(query('.root'));
 
-        expect(paddings()).toHaveLength(3);
+        expect(livePaddings()).toHaveLength(3);
 
         next.createResolvedTrigger({ trigger: query('.s1') });
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         expect(query('.root').parentElement).toBe(query('.host'));
         next.destroy();
       });
@@ -6100,7 +6301,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         vi.advanceTimersByTime(100);
         await flushMicrotasks();
 
-        expect(paddings()).toHaveLength(3);
+        expect(livePaddings()).toHaveLength(3);
         expect(Cls.refresh).toHaveBeenCalledTimes(1);
         expect(scrollTo).not.toHaveBeenCalled();
       });
@@ -6137,11 +6338,11 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         const next = new StickyScrollTrigger(query('.root'));
 
-        expect(paddings()).toHaveLength(3);
+        expect(livePaddings()).toHaveLength(3);
 
         next.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
         await flushMicrotasks();
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         expect(query('.root').parentElement).toBe(query('.host'));
         expect(scrollTo).not.toHaveBeenCalled();
         next.destroy();
@@ -6161,7 +6362,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         next.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
         await flushMicrotasks();
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         expect(scrollTo).not.toHaveBeenCalled();
         next.destroy();
       });
@@ -6179,7 +6380,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         const next = new StickyScrollTrigger(query('.root'));
 
         await flushMicrotasks();
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
         next.destroy();
       });
@@ -6196,7 +6397,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         controller.destroy();
         await flushMicrotasks();
 
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         expect(query('.root').parentElement).toBe(query('.host'));
         expect(vi.getTimerCount()).toBe(0);
         expect(scrollTo).not.toHaveBeenCalled();
@@ -6214,7 +6415,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         controller.destroy();
         await flushMicrotasks();
 
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
       });
 
@@ -6232,12 +6433,12 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         elsewhere.append(section);
         unrelated.createStickyTrigger({ trigger: section, end: '+=100' });
-        expect(paddings()).toHaveLength(3);
+        expect(livePaddings()).toHaveLength(3);
 
         const around = new StickyScrollTrigger(query('.host'));
 
         around.createStickyTrigger({ trigger: query('.root'), end: '+=100' });
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         expect(query('.root').parentElement).toBe(query('.host'));
         unrelated.destroy();
         around.destroy();
@@ -6251,17 +6452,17 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         Cls.scrolling = true;
         vars.forEach((layerVars) => layerVars.onKill?.(self));
-        expect(paddings()).toHaveLength(3);
+        expect(livePaddings()).toHaveLength(3);
 
         around.createStickyTrigger({ trigger: query('.root'), end: '+=100' });
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
 
         around.refresh();
         Cls.scrolling = false;
         vi.advanceTimersByTime(100);
         await flushMicrotasks();
 
-        expect(paddings()).toHaveLength(1);
+        expect(livePaddings()).toHaveLength(1);
         around.destroy();
       });
 
@@ -6279,7 +6480,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         const around = new StickyScrollTrigger(query('.host'));
 
         expect(() => around.createOverlapScroll({ trigger: query('.root') })).not.toThrow();
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         around.destroy();
       });
 
@@ -6293,7 +6494,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         const around = new StickyScrollTrigger(query('.host'));
 
         around.createStickyPin({ trigger: query('.root') });
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         around.destroy();
       });
 
@@ -6309,12 +6510,12 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         const next = new StickyScrollTrigger(query('.root'));
 
         await flushMicrotasks();
-        expect(paddings()).toHaveLength(3);
+        expect(livePaddings()).toHaveLength(3);
 
         Cls.scrolling = false;
         vi.advanceTimersByTime(100);
         await flushMicrotasks();
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
         next.destroy();
       });
@@ -6331,7 +6532,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         query('.s2').append(child);
         inside.createStickyTrigger({ trigger: child, end: '+=100' });
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         inside.destroy();
       });
 
@@ -6349,7 +6550,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         Cls.scrolling = true;
         await flushMicrotasks();
 
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         expect(scrollTo).not.toHaveBeenCalled();
       });
 
@@ -6368,7 +6569,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         Cls.scrolling = true;
         await flushMicrotasks();
 
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         expect(scrollTo).not.toHaveBeenCalled();
         next.destroy();
       });
@@ -6385,7 +6586,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         Cls.isUpdating = false;
         await flushMicrotasks();
 
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
       });
 
@@ -6475,7 +6676,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         vars.forEach((layerVars) => layerVars.onKill?.(self));
 
         expect(() => around.createStickyTrigger({ trigger: query('.root') })).toThrow();
-        expect(paddings()).toHaveLength(3);
+        expect(livePaddings()).toHaveLength(3);
       });
 
       // A kill from a page whose cleanup throws still refreshes GSAP for the triggers left.
@@ -6499,7 +6700,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         Cls.scrolling = false;
         fail = true;
         expect(() => vi.advanceTimersByTime(100)).toThrow('boom');
-        expect(paddings()).toHaveLength(0);
+        expect(livePaddings()).toHaveLength(0);
         expect(Cls.refresh).toHaveBeenCalledTimes(1);
         expect(listeners).toHaveLength(0);
       });
@@ -6637,7 +6838,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       controller.createStickyTrigger({ trigger: s4, end: '+=100' });
       controller.refresh();
 
-      expect(paddings()).toHaveLength(3);
+      expect(livePaddings()).toHaveLength(3);
       expect(scrollTo).not.toHaveBeenCalled();
     });
 
@@ -6650,7 +6851,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       vars[2].onKill?.(self);
       await flushMicrotasks();
 
-      expect(paddings()).toHaveLength(2);
+      expect(livePaddings()).toHaveLength(2);
       expect(scrollTo).not.toHaveBeenCalled();
     });
 

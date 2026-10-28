@@ -4,6 +4,7 @@ import {
   clearHeightForRead,
   clearStickyForRead,
   commitHeight,
+  commitInert,
   commitPosition,
   commitSticky,
 } from './commit';
@@ -69,6 +70,30 @@ describe('clearHeightForRead', () => {
     expect(el.style.height).toBe('');
     expect(el.style.position).toBe('sticky');
     expect(el.style.top).toBe('10px');
+  });
+});
+
+describe('commitInert', () => {
+  it('takes sticky off the wrapper and the dwell off the padding, and nothing else', () => {
+    document.body.innerHTML = `
+      <div id="wrapper" style="position: sticky; top: 10px; z-index: 0; height: 5px"></div>
+      <div id="padding" style="height: 200px; width: 1px"></div>`;
+
+    const wrapper = document.getElementById('wrapper')!;
+    const padding = document.getElementById('padding')!;
+
+    commitInert(wrapper, padding);
+
+    expect(wrapper.style.cssText).toBe('z-index: 0; height: 5px;');
+    expect(padding.style.cssText).toBe('height: 0px; width: 1px;');
+  });
+
+  it('leaves the padding out when there is none', () => {
+    const wrapper = element('position: sticky; top: 10px');
+
+    commitInert(wrapper, null);
+
+    expect(wrapper.style.cssText).toBe('');
   });
 });
 

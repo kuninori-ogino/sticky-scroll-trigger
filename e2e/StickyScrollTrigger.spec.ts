@@ -1289,13 +1289,9 @@ test('killing every trigger within the same task still moves rootElement only on
   expect(result.rootMoveCount).toBe(1);
 });
 
-// Since s3 survives, build() has to re-wrap the root that unbuild() returned to host
-// in s3's wrapper again, meaning "a single rebuild cycle" itself takes 2 root moves
-// (out to host, then wrapped again).
-// So if batching is working, however many kills happen,
-// this should cap out at those same 2 moves (a naive implementation would move root once
-// per kill's own cycle of 2, so 2 kills would move root 4 times).
-test('killing only some triggers within the same task still caps root movement at "one cycle\'s worth"', async ({
+// A kill that only removes layers leaves their levels in place, so however many kills happen, root
+// doesn't move at all.
+test('killing only some triggers within the same task leaves rootElement in place', async ({
   page,
 }) => {
   await page.goto('/fixtures/batchKill.html');
@@ -1306,14 +1302,14 @@ test('killing only some triggers within the same task still caps root movement a
   );
 
   expect(result.killedCount).toBe(2);
-  expect(result.rootMoveCount).toBe(2);
+  expect(result.rootMoveCount).toBe(0);
 });
 
 // Killing s1 and s2 shrinks the survivor s3's freeze window (since precedingGaps decreases).
 // Only once both the internal freezeStart/freezeEnd and GSAP's own cached start/end agree
 // does the scroll position stay in sync with animation progress after a kill.
 // This confirms the wiring that calls GSAP's static refresh via self.constructor
-// (see index.ts's scheduleRebuild) also works with real GSAP.
+// (see index.ts's scheduleCatchUp) also works with real GSAP.
 test('the surviving layer\'s freeze window, shifted by a kill, is tracked by GSAP\'s own cache too', async ({ page }) => {
   await page.goto('/fixtures/batchKill.html');
 
@@ -2713,6 +2709,29 @@ for (const noAnchor of [false, true]) {
 
     expect(kills).toEqual(['.s1', '.s2', '.s3']);
     expect(steps).toEqual(steps.map(() => -100));
+  });
+}
+
+// killKeepsState.html's hooks.
+interface KillKeepsStateWindow {
+  __ready: () => boolean;
+  __run: () => Promise<{ killed: boolean; loads: number; focused: boolean; rootMoves: number }>;
+}
+
+// Another layer's kill, or s1's own mid-scroll (onLeave, once: true), leaves s3's iframe loaded
+// once and its input focused, as GSAP's own pins do: the killed level stays in place.
+for (const [mode, name] of [
+  ['', 'killing another layer'],
+  ['self', 'a layer killing itself in onLeave'],
+  ['once', 'a once: true layer'],
+]) {
+  test(`${name} keeps an iframe and focus inside the container`, async ({ page }) => {
+    await page.goto(`/fixtures/killKeepsState.html${mode ? `?${mode}` : ''}`);
+    await page.waitForFunction(() => (window as never as KillKeepsStateWindow).__ready());
+
+    const result = await page.evaluate(() => (window as never as KillKeepsStateWindow).__run());
+
+    expect(result).toEqual({ killed: true, loads: 1, focused: true, rootMoves: 0 });
   });
 }
 
