@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>killAcrossStuck fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        height: 400px;
+      }
+      .auth {
+        position: sticky;
+        top: 0;
+      }
+      .outer {
+        height: 9000px;
+      }
+      .tail {
+        height: 4000px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- A's container sits in the page's own sticky .auth, stuck at the scroll of the kill. One kill
+         in each instance catches up in one GSAP refresh; order=ab creates A first, so its catch-up
+         reads its container after B's has rebuilt above it. -->
+    <div class="rootB"><section class="b0"></section><section class="b1"></section></div>
+    <div class="outer">
+      <div class="auth">
+        <div class="rootA"><section class="a0"></section><section class="a1"></section><section></section></div>
+      </div>
+    </div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const create = (root, triggers) => {
+        const sticky = new StickyScrollTrigger(root);
+
+        return triggers.map((trigger) => ScrollTrigger.create(sticky.createStickyTrigger({ trigger, end: '+=300' })));
+      };
+      let a;
+      let b;
+
+      if (new URLSearchParams(location.search).get('order') === 'ab') {
+        a = create('.rootA', ['.a0', '.a1']);
+        b = create('.rootB', ['.b0', '.b1']);
+      } else {
+        b = create('.rootB', ['.b0', '.b1']);
+        a = create('.rootA', ['.a0', '.a1']);
+      }
+
+      ScrollTrigger.refresh();
+
+      // The scroll the page keeps after killing a0 and b0 at rest at `y`.
+      window.__killAt = async (y) => {
+        window.scrollTo(0, y);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+
+        while (ScrollTrigger.isScrolling()) await new Promise((resolve) => setTimeout(resolve, 50));
+
+        b[0].kill();
+        a[0].kill();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        return Math.round(window.scrollY);
+      };
+      window.__ready = true;
+    </script>
+  </body>
+</html>

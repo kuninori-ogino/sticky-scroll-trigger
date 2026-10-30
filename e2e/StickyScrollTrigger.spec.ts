@@ -495,6 +495,164 @@ test('measurements taken while a pin is stuck match the ones taken at scroll 0',
   expect({ ...whileStuck, pinInTopAtScroll: 0 }).toEqual({ ...atTop, pinInTopAtScroll: 0 });
 });
 
+// A read held across another instance's long nested wrapper chain: WebKit stalled on one held
+// position: sticky with every inset auto, for seconds per refresh().
+test('a refresh() that reads inside another instance\'s deep nesting stays quick', async ({ page }) => {
+  await page.goto('/fixtures/measureAcrossNested.html');
+
+  type FixtureWindow = Window & { __refreshAt: (scroll: number) => number };
+
+  for (const y of [0, 3000]) {
+    const ms = await page.evaluate(
+      (scroll) => (window as unknown as FixtureWindow).__refreshAt(scroll),
+      y,
+    );
+
+    expect(ms, `scroll ${y}`).toBeLessThan(1000);
+  }
+});
+
+test('a read at rest inside another instance\'s wrappers moved past their freeze matches the one at scroll 0', async ({ page }) => {
+  await page.goto('/fixtures/measurePastDormant.html');
+  await page.waitForFunction(() => (window as never as { __ready?: boolean }).__ready === true);
+
+  type FixtureWindow = Window & {
+    __readAt: (scroll: number) => Promise<{ read: number; moved: number }>;
+  };
+
+  const readAt = (y: number) => page.evaluate(
+    (scroll) => (window as never as FixtureWindow).__readAt(scroll),
+    y,
+  );
+  const atTop = await readAt(0);
+  const below = await readAt(6000);
+
+  expect(below.moved).toBe(8);
+  expect(below.read).toBe(atTop.read);
+});
+
+// GSAP's refreshInit dispatch reaches A's layer handler before B's table starts its own phase.
+test('a GSAP refresh far below another instance created later measures what ends inside it as at scroll 0', async ({ page }) => {
+  await page.goto('/fixtures/measurePastDormant.html?order=ab');
+  await page.waitForFunction(() => (window as never as { __ready?: boolean }).__ready === true);
+
+  type FixtureWindow = Window & { __coverEndAt: (scroll: number) => Promise<number> };
+
+  const coverEndAt = (y: number) => page.evaluate(
+    (scroll) => (window as never as FixtureWindow).__coverEndAt(scroll),
+    y,
+  );
+  const atTop = await coverEndAt(0);
+
+  expect(await coverEndAt(6000)).toBe(atTop);
+});
+
+test('measurements taken while another instance or the page holds them stuck match the ones taken at scroll 0', async ({ page }) => {
+  await page.goto('/fixtures/measureAroundStuck.html');
+
+  type Measured = {
+    [key: string]: unknown;
+    stuck: number[];
+    absolute: number;
+    absoluteOnPage: number;
+    absoluteInPin: number;
+    absoluteInPinOnPage: number;
+  };
+
+  type FixtureWindow = Window & { __measureAt: (scroll: number) => Measured };
+
+  const measureAt = (y: number) =>
+    page.evaluate((scroll) => (window as unknown as FixtureWindow).__measureAt(scroll), y);
+  const atTop = await measureAt(0);
+
+  // Nothing is stuck at scroll 0, so .absolute's position there is the one .auth gives it, plus
+  // C's 200px dwell, whose freeze starts above it.
+  expect(atTop.absolute).toBe(atTop.absoluteOnPage + 200);
+  // With no instances given, getScrollTop measures #absoluteInPin as it lays out, with no dwell.
+  expect(atTop.absoluteInPin).toBe(atTop.absoluteInPinOnPage);
+
+  // sanity check: #pinA is held at the viewport's top at 1800, and #pinB and .auth too at 3000
+  for (const [y, stuck] of [[1800, [0, 300, 900]], [3000, [0, 0, 0]]] as const) {
+    const measured = await measureAt(y);
+
+    expect(measured.stuck).toEqual(stuck);
+
+    expect({
+      ...measured,
+      stuck: atTop.stuck,
+      absoluteOnPage: atTop.absoluteOnPage,
+      absoluteInPinOnPage: atTop.absoluteInPinOnPage,
+    }, `scroll ${y}`).toEqual(atTop);
+  }
+});
+
+// The page's own sticky element, and another instance's pin, are the author's: a measurement reads
+// them where GSAP does without writing to them, a direct one at rest included.
+for (const shape of ['top', 'pin']) {
+  test(`a measurement writes nothing to a stuck element it doesn't own (${shape})`, async ({ page }) => {
+    type FixtureWindow = Window & {
+      __ready?: boolean;
+      __read: () => { resolved: number };
+      __directAt: (scroll: number) => Promise<{ direct: number; writes: number }>;
+    };
+
+    await page.goto(`/fixtures/stuckAtScrollZero.html?case=${shape}&nested=0`);
+    await page.waitForFunction(() => (window as never as FixtureWindow).__ready === true);
+
+    const fresh = await page.evaluate(() => (window as never as FixtureWindow).__read());
+    const atRest = await page.evaluate(
+      (scroll) => (window as never as FixtureWindow).__directAt(scroll),
+      1500,
+    );
+
+    expect(atRest).toEqual({ direct: fresh.resolved, writes: 0 });
+  });
+}
+
+// GSAP measures at scroll 0, where a page sticky element with a top larger than its natural top,
+// or a bottom-sticky one, is stuck already, as is another instance's pin with such a top.
+for (const shape of ['top', 'bottom', 'fraction', 'contents', 'pin']) {
+  for (const nested of ['0', '1']) {
+    test(`a sticky element stuck at scroll 0 is measured where GSAP measures it (${shape}, nested=${nested})`, async ({ page }) => {
+      type Read = {
+        scene: number;
+        gscene: number;
+        resolved: number;
+        plain: number;
+        held: boolean;
+      };
+
+      type FixtureWindow = Window & {
+        __ready?: boolean;
+        __read: () => Read;
+        __refreshAt: (scroll: number) => Read;
+      };
+
+      await page.goto(`/fixtures/stuckAtScrollZero.html?case=${shape}&nested=${nested}`);
+      await page.waitForFunction(() => (window as never as FixtureWindow).__ready === true);
+
+      const fresh = await page.evaluate(() => (window as never as FixtureWindow).__read());
+
+      expect(fresh.scene).toBe(fresh.gscene);
+
+      for (const y of [0, 1500, 0]) {
+        const read = await page.evaluate(
+          (scroll) => (window as never as FixtureWindow).__refreshAt(scroll),
+          y,
+        );
+
+        expect(read, `scroll ${y}`).toEqual({
+          scene: fresh.gscene,
+          gscene: fresh.gscene,
+          resolved: fresh.plain + 200,
+          plain: fresh.plain,
+          held: false,
+        });
+      }
+    });
+  }
+}
+
 // measureViewportHeight follows the same technique GSAP itself uses to dodge resizes caused
 // by a mobile browser's address bar showing/hiding:
 // "append a height:100vh div to body and read its offsetHeight."
@@ -2661,7 +2819,44 @@ for (const noAnchor of [false, true]) {
   }
 }
 
+// The refresh's own trip to 0 is no scroll to hold the kill's catch-up for.
+for (const refresh of ['library', 'gsap']) {
+  test(`a kill right after a ${refresh} refresh at rest keeps the content at once`, async ({ page }) => {
+    await page.goto('/fixtures/killAfterTrip.html');
+    await page.waitForFunction(() => (window as never as { __ready?: boolean }).__ready === true);
+
+    type FixtureWindow = Window & {
+      __killAfterRefresh: (refresh: string) => Promise<{ counted: boolean; scrollY: number }>;
+    };
+
+    const result = await page.evaluate(
+      (which) => (window as never as FixtureWindow).__killAfterRefresh(which),
+      refresh,
+    );
+
+    // GSAP did count the trip, and the 300px dwell above came off in the kill's task.
+    expect(result).toEqual({ counted: true, scrollY: 2200 });
+  });
+}
+
 // With no layer left, no onRefreshInit runs refresh(), so the rebuild has to come from the kill.
+// Past both killed layers' freezes, the content keeps its place without their 300px dwells.
+for (const order of ['ba', 'ab']) {
+  test(`kills in two instances keep the content, one in a stuck element (${order})`, async ({ page }) => {
+    await page.goto(`/fixtures/killAcrossStuck.html?order=${order}`);
+    await page.waitForFunction(() => (window as never as { __ready?: boolean }).__ready === true);
+
+    type FixtureWindow = Window & { __killAt: (scroll: number) => Promise<number> };
+
+    const kept = await page.evaluate(
+      (scroll) => (window as never as FixtureWindow).__killAt(scroll),
+      2500,
+    );
+
+    expect(kept).toBe(1900);
+  });
+}
+
 test('a GSAP refresh in the kill\'s task measures the layout without the killed layers', async ({ page }) => {
   await openKillRefreshAnchor(page);
 

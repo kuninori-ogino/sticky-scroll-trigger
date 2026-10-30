@@ -15,6 +15,7 @@ import {
   measureDocumentMaxScroll,
   measureUsedHeight,
   measureViewportHeight,
+  readThenRestore,
   resolveElement,
   resolveEndTrigger,
   resolveRoot,
@@ -24,7 +25,10 @@ import {
 } from './dom';
 import {
   clearDormancy,
+  dormancyAfterScrollZero,
+  dormancyAtScrollZero,
   isWebKit,
+  movedPastFreeze,
   rebuildDormancy,
   registerDormancyClient,
   takeGsapRefreshRestore,
@@ -237,16 +241,174 @@ let refreshedInGsapRefresh: Map<StickyScrollTrigger, string> | null = null;
 // Every armed instance: an end function's evaluation takes out the padding of those later in the
 // page (see #evaluateLiveEnd).
 const armedInstances = new Set<StickyScrollTrigger>();
+// The scroll a measurement at scroll 0 goes back to, while one is under way outside GSAP's refresh
+// (see enterScrollZero).
+let scrollZeroReturn: number | null = null;
+// The class an instance last took from GSAP, for a read with none armed (see isPageScrolling).
+let lastScrollTriggerClass: ScrollTriggerClass | null = null;
+// Where the last trip to 0 came back to and when, until the page is seen anywhere else. A trip
+// begun mid-scroll leaves none: the page it comes back to is still scrolling.
+let ownScrollTop: number | null = null;
+let ownScrollAt = -Infinity;
+
+const markOwnScroll = (fromRest: boolean): void => {
+  ownScrollTop = fromRest ? window.scrollY : null;
+  ownScrollAt = performance.now();
+};
+
+// GSAP's word, less the library's own trip. GSAP counts the scroll event a trip fires as the page
+// scrolling (ScrollTrigger.js:193), until a check it makes every 250 ms finds 200 ms gone since
+// (335, 1401). Within that time, with the page still where the trip came back to, the trip is the
+// only scroll there was, under a pointer held still too; past it, GSAP's word stands. Inside GSAP's
+// update, the first scroll after a pause reads as none yet (199-202), as a kill finds too; the
+// update that ends GSAP's refresh comes at rest (315-316).
+const isOwnTripOnly = (): boolean => {
+  if (ownScrollTop !== null && (Math.abs(window.scrollY - ownScrollTop) >= 0.5
+    || performance.now() - ownScrollAt >= 500)) ownScrollTop = null;
+
+  return ownScrollTop !== null;
+};
+
+const isPageScrolling = (cls: ScrollTriggerClass | null): boolean =>
+  (isRefreshing(cls) ? isScrolling(cls) : isScrollingOrUpdating(cls)) && !isOwnTripOnly();
+// What a kill holds its catch-up for: GSAP's word outside its update, less the library's own trip.
+const isUserScrolling = (cls: ScrollTriggerClass | null): boolean =>
+  isScrolling(cls) && !isOwnTripOnly();
+
+const scrollBackTo = (top: number): void => {
+  if (Math.abs(window.scrollY - top) >= 0.5) window.scrollTo({ top, behavior: 'instant' });
+};
+
+// Measures at 0 as GSAP's refresh does, returning the way back: to where it was, or where a kill's
+// catch-up moved scrollZeroReturn to keep the content. Nothing is painted in between. Dormancy's
+// table goes to its state for 0 too, without making anything sticky. Inside another one (whose
+// function's GSAP refresh went back to the real scroll), back to 0, leaving the way back to it.
+const enterScrollZero = (cls: ScrollTriggerClass | null): (() => void) => {
+  if (scrollZeroReturn !== null) {
+    scrollBackTo(0);
+    dormancyAtScrollZero();
+
+    return () => {};
+  }
+
+  const fromRest = !isUserScrolling(cls);
+
+  scrollZeroReturn = window.scrollY;
+  dormancyAtScrollZero();
+  window.scrollTo({ top: 0, behavior: 'instant' });
+
+  return () => {
+    const back = scrollZeroReturn ?? 0;
+
+    scrollZeroReturn = null;
+    window.scrollTo({ top: back, behavior: 'instant' });
+    markOwnScroll(fromRest);
+    syncScrollCache(cls);
+    // Where it got to: short of `back` if the page is shorter now.
+    dormancyAfterScrollZero(window.scrollY);
+  };
+};
+
+// Inside GSAP's refresh, a layer handler measures at 0, where GSAP measures after its refreshInit
+// dispatch, and goes back to GSAP's record, so the listeners after it see GSAP's scroll. The
+// record needs no layout read, and GSAP goes back to it too, wherever a kill's catch-up moved it.
+// Away from 0 again inside one (a function's GSAP refresh went back to its record), it goes there
+// and back, leaving the outer way back alone. Nothing to undo when GSAP has no record.
+let gsapAtZero = false;
+let gsapZeroReturn = 0;
+
+const gsapScrollToZero = (cls: ScrollTriggerClass | null): (() => void) => {
+  if (gsapAtZero) {
+    const back = window.scrollY;
+
+    if (back === 0) return () => {};
+
+    const fromRest = !isUserScrolling(cls);
+
+    window.scrollTo({ top: 0, behavior: 'instant' });
+
+    return () => {
+      window.scrollTo({ top: back, behavior: 'instant' });
+      markOwnScroll(fromRest);
+    };
+  }
+
+  const record = scrollRecord(cls, true);
+
+  if (!record || record.read() === 0) return () => {};
+
+  const fromRest = !isUserScrolling(cls);
+
+  gsapZeroReturn = record.read();
+  // The table's own GSAP phase, which puts it back afterwards, may not have begun yet (its listener
+  // after this one).
+  dormancyAtScrollZero();
+  window.scrollTo({ top: 0, behavior: 'instant' });
+  gsapAtZero = true;
+
+  return () => {
+    gsapAtZero = false;
+    // GSAP's scroll cache stays as GSAP left it: GSAP sets the scroll again once it has measured.
+    window.scrollTo({ top: record.read(), behavior: 'instant' });
+    markOwnScroll(fromRest);
+  };
+};
+
+// The scroll a measurement at 0 goes back to, or null outside one: a GSAP refresh a function
+// starts there takes it as its record, as it would have at the top level.
+const realScroll = (): number | null => scrollZeroReturn ?? (gsapAtZero ? gsapZeroReturn : null);
+
+// Whether something besides `own` around an element in `from` can sit off its place at scroll 0:
+// a sticky element (stuck at its inset, or carried to its container's end), or a wrapper dormancy
+// moved past its freeze. Read only; a false yes costs a scroll to 0 and back.
+const mayBeStuckAround = (from: readonly HTMLElement[], own: ReadonlySet<HTMLElement>): boolean => {
+  const seen = new Set<HTMLElement>();
+  const moved = movedPastFreeze();
+
+  return from.some((el) => {
+    for (let current: HTMLElement | null = el; current && !seen.has(current)
+      && current !== document.body && current !== document.documentElement;
+      current = current.parentElement) {
+      seen.add(current);
+
+      if (own.has(current)) continue;
+
+      if (moved.has(current) || getComputedStyle(current).position === 'sticky') return true;
+    }
+
+    return false;
+  });
+};
+
+// A GSAP refresh a function started went back to its record: the rest of the measurement reads
+// at 0.
+const afterFunction = (): void => {
+  if (gsapAtZero || scrollZeroReturn !== null) scrollBackTo(0);
+
+  if (scrollZeroReturn !== null) dormancyAtScrollZero();
+};
+
+// A layer's or pin's start or end function, which refresh() calls in its measurement, running
+// afterFunction once it returns or throws. A function handed to resolveScrollPosition needs none,
+// since its read goes back to 0 itself, nor does createResolvedTrigger's, which GSAP calls.
+const withAfterFunction = <T>(value: T | (() => T)): T | (() => T) => {
+  if (typeof value !== 'function') return value;
+
+  return () => {
+    try {
+      return (value as () => T)();
+    } finally {
+      afterFunction();
+    }
+  };
+};
+
 // The end function evaluation under way, which resolveScrollPosition sets aside to measure.
 let liveEvaluation: LiveEvaluation | null = null;
 // How many layer handlers (see #createAutoRefreshHandler) are running, one inside another.
 let layerHandlerDepth = 0;
 
 // Scrolls to `top` unless the scroll is already there.
-const scrollBackTo = (top: number): void => {
-  if (Math.abs(window.scrollY - top) >= 0.5) window.scrollTo({ top, behavior: 'instant' });
-};
-
 // A GSAP refresh the end function under evaluation starts measures the page refresh() left, with
 // no evaluation's layout in, from its first layer handler until its 'refresh'. Only a 'refresh' no
 // deeper in layer handlers than that start resumes: one started inside a handler (by a nested
@@ -255,6 +417,17 @@ const scrollBackTo = (top: number): void => {
 // evaluation is under way, so a resolveScrollPosition there isn't the function's.
 const holdLiveEvaluationForGsapRefresh = (cls: ScrollTriggerClass | null): void => {
   const evaluation = liveEvaluation;
+  // A GSAP refresh a function starts during a measurement at 0 goes back to the real scroll.
+  const real = realScroll();
+
+  if (real !== null && !evaluation) {
+    const zeroRecord = scrollRecord(cls, true);
+
+    if (zeroRecord && Math.abs(zeroRecord.read() - real) >= 0.5) {
+      zeroRecord.write(real);
+      setGsapRefreshReturn(real);
+    }
+  }
 
   if (!evaluation) return;
 
@@ -268,10 +441,15 @@ const holdLiveEvaluationForGsapRefresh = (cls: ScrollTriggerClass | null): void 
     // Whole pixels, as GSAP's scroll function goes there.
     scrollBackTo(Math.round(evaluation.scroll));
     syncScrollCache(cls);
-    // Where the scroll got to, if the page is shorter than that now.
-    record.write(window.scrollY);
+
+    // Where the scroll got to, if the page is shorter than that now. A measurement at 0 left GSAP
+    // its 0 to take, where a top-level call would have taken the scroll as it was.
+    const unclamped = window.scrollY >= Math.round(evaluation.scroll) - 0.5;
+    const reached = realScroll() !== null && unclamped ? evaluation.scroll : window.scrollY;
+
+    record.write(reached);
     // The nested-sticky table took the scroll too if its listener came first.
-    setGsapRefreshReturn(window.scrollY);
+    setGsapRefreshReturn(reached);
   }
 
   // This handler is one deeper than where the function started the GSAP refresh.
@@ -531,7 +709,7 @@ export default class StickyScrollTrigger {
     this.#pendingKeep = null;
     pendingKeeps.delete(keep);
 
-    if (keep.cancelled || (keep.onlyAtRest && isScrolling(keep.cls))) return;
+    if (keep.cancelled || (keep.onlyAtRest && isUserScrolling(keep.cls))) return;
 
     this.#keepContent(keep.position, keep.cls);
   }
@@ -546,7 +724,7 @@ export default class StickyScrollTrigger {
   #settleWhenAtRest(): void {
     if (this.#destroyed || this.#restTimer !== null) return;
 
-    if (isScrolling(this.#scrollTriggerClass)) {
+    if (isUserScrolling(this.#scrollTriggerClass)) {
       this.#restTimer = setTimeout(() => {
         this.#restTimer = null;
         this.#settleWhenAtRest();
@@ -573,7 +751,7 @@ export default class StickyScrollTrigger {
   // setup follows is the usual case. Inside GSAP's update alone, whether a scroll has begun shows
   // only once the update is over.
   #flushPendingDisarmForRevert(): void {
-    this.#flushPendingDisarm(!isScrolling(this.#scrollTriggerClass), true);
+    this.#flushPendingDisarm(!isUserScrolling(this.#scrollTriggerClass), true);
   }
 
   #disarm(): void {
@@ -737,7 +915,7 @@ export default class StickyScrollTrigger {
     queueMicrotask(() => {
       // While the page scrolls, the killed layers' padding stays until the scroll stops, as GSAP
       // holds its own refresh: keeping the content in place then needs no scroll mid-fling.
-      if (pending() && !this.#destroyed && isScrolling(cls)) {
+      if (pending() && !this.#destroyed && isUserScrolling(cls)) {
         const earlier = this.#deferredRun;
 
         // An earlier batch a GSAP refresh ran still has its listener to drop.
@@ -763,6 +941,7 @@ export default class StickyScrollTrigger {
     if (this.#destroyed) return;
 
     this.#scrollTriggerClass = classOf(self);
+    lastScrollTriggerClass = this.#scrollTriggerClass;
   }
 
   // Binds refresh() to the refreshInit GSAP itself fires (resize/load), so callers get the right
@@ -808,22 +987,29 @@ export default class StickyScrollTrigger {
       // GSAP's dispatch is `_listeners[type].map(f => f())` with no try/catch, so an error escaping
       // here would stop every later listener and every trigger's own refresh. The catch rethrows
       // off the stack instead of swallowing, since a stale freeze window with no signal is worse.
-      try {
-        if (!unchanged) {
-          refreshed = true;
-          this.#refreshFrom(true);
+      // The measurements read at 0, the other instances' included (see gsapScrollToZero).
+      const back = inGsapRefresh && (!unchanged || caughtUp)
+        ? gsapScrollToZero(this.#scrollTriggerClass)
+        : () => {};
+
+      readThenRestore(back, () => {
+        try {
+          if (!unchanged) {
+            refreshed = true;
+            this.#refreshFrom(true);
+          }
+        } catch (error) {
+          queueMicrotask(() => {
+            throw error;
+          });
         }
-      } catch (error) {
-        queueMicrotask(() => {
-          throw error;
-        });
-      }
 
-      if (inGsapRefresh) {
-        this.#watchGsapRefresh();
+        if (inGsapRefresh) {
+          this.#watchGsapRefresh();
 
-        if (refreshed || caughtUp) this.#remeasureEarlierInGsapRefresh();
-      }
+          if (refreshed || caughtUp) this.#remeasureEarlierInGsapRefresh();
+        }
+      });
 
       // The render(-1) GSAP calls on the result once it has measured also puts back the
       // nested-sticky state when the table took GSAP's class too late to listen itself.
@@ -1029,19 +1215,61 @@ export default class StickyScrollTrigger {
     });
   }
 
-  // Both resets above, for a measurement that can land anywhere on the page.
-  #resetStickyState(): () => void {
+  // Puts what besides `self`'s wrappers and pins can be stuck around the elements in `from` where
+  // GSAP measures it, returning the way back. The page's sticky elements and the pins are the
+  // author's, so instead of writing to them the read goes to scroll 0 and back, unless the page is
+  // scrolling, which the trip would stop; then only the other instances' wrappers are reset.
+  static #resetStickyAround(
+    self: StickyScrollTrigger | null,
+    from: readonly HTMLElement[],
+  ): () => void {
+    const withClass = self ?? [...armedInstances].find((instance) => instance.#scrollTriggerClass);
+    const cls = (withClass ? withClass.#scrollTriggerClass : null) ?? lastScrollTriggerClass;
+
+    // Inside refresh() or another read: at 0 already, or back there.
+    if (scrollZeroReturn !== null) return enterScrollZero(cls);
+
+    const refreshing = isRefreshing(cls);
+
+    // A layer handler's measurement inside GSAP's refresh: at 0, or back there (see
+    // gsapScrollToZero).
+    if (refreshing && gsapAtZero) return gsapScrollToZero(cls);
+
+    // A kill's catch-up in a layer handler reads at the scroll it keeps, ahead of the measurement.
+    const catchingUp = refreshing && layerHandlerDepth > 0;
+
+    if (!catchingUp && !isPageScrolling(cls) && window.scrollY !== 0) {
+      const own = new Set(self ? self.#ownedStickyElements() : []);
+
+      return mayBeStuckAround(from, own) ? enterScrollZero(cls) : () => {};
+    }
+
+    const restores = [...armedInstances]
+      .filter((instance) => instance !== self)
+      .map((instance) => instance.#resetSceneCoverStickyState());
+
+    return () => restores.reverse().forEach((restore) => restore());
+  }
+
+  // All three resets above, for a measurement of the elements in `from`, which can be anywhere on
+  // the page.
+  #resetStickyState(from: readonly HTMLElement[]): () => void {
     const restoreSceneCoverStickyState = this.#resetSceneCoverStickyState();
     const restorePinStickyState = this.#resetPinStickyState();
+    // Its scroll read sees this instance's own unstuck.
+    const restoreOtherStickyState = StickyScrollTrigger.#resetStickyAround(this, from);
 
     return () => {
+      restoreOtherStickyState();
       restorePinStickyState();
       restoreSceneCoverStickyState();
     };
   }
 
   // Every read refresh() makes of its own layout happens with every wrapper and pin unstuck, since
-  // a stuck one shifts documentTop for everything inside it (see #resetSceneCoverStickyState).
+  // a stuck one shifts documentTop for everything inside it (see #resetSceneCoverStickyState), and
+  // with everything else that can be stuck around them where GSAP measures it (see
+  // #resetStickyAround).
   // Phase 1 reads what this refresh's padding can't move: every Scene/Cover layer and the
   // scroll-margin targets, all inside the shared container. Phase 2 follows the padding write and
   // reads what it can move: a cover's endTrigger outside the container, the document's height for
@@ -1049,6 +1277,26 @@ export default class StickyScrollTrigger {
   // on after the last read, which also spares every read a sticky layout (the cost dormancy.ts
   // avoids).
   #refreshGeometry(viewportHeight: number) {
+    let restoreAround = () => {};
+
+    readThenRestore(() => restoreAround(), () => this.#refreshOwnGeometry(viewportHeight, () => {
+      restoreAround = StickyScrollTrigger.#resetStickyAround(this, this.#measuredElements());
+    }));
+  }
+
+  // What refresh() reads the position of. A cover is a sibling of its trigger, so only the cover
+  // itself adds to what holds the trigger.
+  #measuredElements(): HTMLElement[] {
+    const read = [...this.#layers, ...this.#pinLayers].flatMap((layer) => [
+      layer.trigger,
+      layer.endTrigger,
+      ...('cover' in layer && layer.cover ? [layer.cover] : []),
+    ]);
+
+    return [this.#rootElement, ...read, ...(this.#scrollMarginSync?.targets() ?? [])];
+  }
+
+  #refreshOwnGeometry(viewportHeight: number, resetAround: () => void) {
     const active = this.#layers.filter((layer) => layer.wrapper !== null);
     const wrappers = active.flatMap(({ wrapper }) => (wrapper ? [wrapper] : []));
     const savedWrappers = wrappers.map(captureInlinePosition);
@@ -1071,6 +1319,8 @@ export default class StickyScrollTrigger {
     // a pin a start or end function killed meanwhile: its unwrap gave the caller's values back.
     wrappers.forEach(clearStickyForRead);
     pins.forEach(({ layer }) => clearStickyForRead(layer.trigger));
+    // Its scroll read and its trip to 0 lay out none of them sticky.
+    resetAround();
 
     let stickyTops: Map<HTMLElement, number>;
     let marginTops: Map<HTMLElement, number>;
@@ -1349,7 +1599,13 @@ export default class StickyScrollTrigger {
         let moved = false;
 
         live.forEach(({ index, liveEnd }) => {
-          const next = this.#evaluateLiveEnd(active, planned, index, liveEnd, scrollBefore);
+          const next = this.#evaluateLiveEnd(
+            active,
+            planned,
+            index,
+            liveEnd,
+            realScroll() ?? scrollBefore,
+          );
           const current = measured[index].end;
 
           // A function that changes what kind of value it returns between calls keeps the first.
@@ -1458,7 +1714,25 @@ export default class StickyScrollTrigger {
   refresh(): void {
     // A start or end function's refresh() leaves the measuring to the outermost run, which goes
     // again once, so a function that calls it on every evaluation can't recurse.
-    this.#refreshFrom(false);
+    // With nothing to measure (no layer, or the last kill's structure waiting), no trip either.
+    if (this.#depth > 0 || isRefreshing(this.#scrollTriggerClass) || this.#destroyed
+      || !this.#armed || pendingDisarms.has(this) || window.scrollY === 0
+      || this.#measuresInPlace()) {
+      this.#refreshFrom(false);
+
+      return;
+    }
+
+    // Measured at 0 as GSAP's own ScrollTrigger.refresh() does, then back.
+    readThenRestore(enterScrollZero(this.#scrollTriggerClass), () => this.#refreshFrom(false));
+  }
+
+  // Mid-scroll, even one that is its own trip's, a trip would stop the scroll. With nothing stuck
+  // around what refresh() reads but this instance's wrappers and pins, which it resets, the reads
+  // come out the same in place.
+  #measuresInPlace(): boolean {
+    return isScrollingOrUpdating(this.#scrollTriggerClass)
+      && !mayBeStuckAround(this.#measuredElements(), new Set(this.#ownedStickyElements()));
   }
 
   // A GSAP refresh a function starts measures right after its refreshInit, so the refresh() for
@@ -1525,11 +1799,14 @@ export default class StickyScrollTrigger {
     }
 
     // Reading the scroll forces a layout, so both reads wait until the table has demoted the far
-    // layers: with every wrapper sticky, that layout is the cost dormancy avoids.
-    this.#scrollMarginSync?.applyRamps();
-
-    // A failed rebuild leaves part of the layout unpadded, and the next refresh puts it back.
+    // layers: with every wrapper sticky, that layout is the cost dormancy avoids. A failed rebuild
+    // leaves part of the layout unpadded, and the next refresh puts it back.
     if (!failure && position !== null) this.#keepContent(position);
+
+    // For the scroll the page ends up at, the one keepContent kept included.
+    this.#scrollMarginSync?.applyRamps(
+      realScroll() ?? scrollRecord(this.#scrollTriggerClass)?.read(),
+    );
 
     if (failure) throw failure.error;
   }
@@ -1540,10 +1817,20 @@ export default class StickyScrollTrigger {
   // have rebuilt above this container and scrolled.
   #naturalScrollTop(layers: readonly Layer[]): ContentPosition {
     const measured = this.#measuredStructure;
-    const moved = measured && this.#outermostContainer && measured.changes !== structureChanges
-      ? documentTop(this.#outermostContainer) - measured.top
+    const container = this.#outermostContainer;
+    // Read at 0, as #measureLayers read it, a layer handler's catch-up included, whose other reads
+    // stay at the scroll it keeps.
+    const containerTop = (el: HTMLElement) => readThenRestore(
+      isRefreshing(this.#scrollTriggerClass) && layerHandlerDepth > 0
+        ? gsapScrollToZero(this.#scrollTriggerClass)
+        : StickyScrollTrigger.#resetStickyAround(this, [el]),
+      () => documentTop(el),
+    );
+    const moved = measured && container && measured.changes !== structureChanges
+      ? containerTop(container) - measured.top
       : 0;
-    const scroll = (scrollRecord(this.#scrollTriggerClass)?.read() ?? window.scrollY) - moved;
+    const scroll = (scrollRecord(this.#scrollTriggerClass)?.read() ?? scrollZeroReturn
+      ?? window.scrollY) - moved;
     const consumed = new Map<HTMLElement, number>();
 
     layers.forEach((layer) => {
@@ -1572,6 +1859,13 @@ export default class StickyScrollTrigger {
 
     if (record) {
       record.write(target);
+
+      return;
+    }
+
+    // A measurement at 0 goes back there once it is done, by the same half-pixel rule as below.
+    if (scrollZeroReturn !== null) {
+      if (Math.abs(scrollZeroReturn - target) >= 0.5) scrollZeroReturn = Math.round(target);
 
       return;
     }
@@ -1696,10 +1990,10 @@ export default class StickyScrollTrigger {
         const late = targets.filter((target) => !tops.has(target));
 
         if (late.length) {
-          const restoreStickyState = this.#resetStickyState();
-
-          late.forEach((target) => tops.set(target, documentTop(target)));
-          restoreStickyState();
+          readThenRestore(
+            this.#resetStickyState(late),
+            () => late.forEach((target) => tops.set(target, documentTop(target))),
+          );
         }
 
         return targets.map((target) => tops.get(target)!);
@@ -1894,8 +2188,8 @@ export default class StickyScrollTrigger {
         container: null,
         wrapper: null,
         padding: null,
-        start,
-        end,
+        start: withAfterFunction(start),
+        end: withAfterFunction(end),
         freezeStart: 0,
         freezeEnd: 0,
         engagedStart: 0,
@@ -1950,8 +2244,8 @@ export default class StickyScrollTrigger {
       endTrigger,
       cover: coverElement,
       wrapper: null,
-      start,
-      end,
+      start: withAfterFunction(start),
+      end: end === null ? null : withAfterFunction(end),
       freezeStart: 0,
       freezeEnd: 0,
       engagedStart: 0,
@@ -2054,9 +2348,9 @@ export default class StickyScrollTrigger {
       savedPosition: captureInlinePosition(trigger),
       outer: null,
       inner: null,
-      start: top === undefined ? start ?? 'top top' : topToStartClause(top),
+      start: withAfterFunction(top === undefined ? start ?? 'top top' : topToStartClause(top)),
       endTrigger,
-      end,
+      end: withAfterFunction(end),
     };
 
     this.#arm();
@@ -2154,10 +2448,10 @@ export default class StickyScrollTrigger {
     viewportHeight: number,
   ): number {
     const anchorOffset = resolveAnchorTop(clause, measureUsedHeight(element), viewportHeight);
-    const restoreStickyState = this.#resetStickyState();
-    const reachedAt = documentTop(element) - anchorOffset;
-
-    restoreStickyState();
+    const reachedAt = readThenRestore(
+      this.#resetStickyState([element]),
+      () => documentTop(element),
+    ) - anchorOffset;
 
     return this.#addDwellBeforeReach(element, reachedAt);
   }
@@ -2200,13 +2494,18 @@ export default class StickyScrollTrigger {
 
     if (owner) return owner.resolveScrollPosition(element, 'top top');
 
-    // A pin can sit outside its own container, and element may be one or sit inside one.
+    // A pin can sit outside its own container, and element may be one or sit inside one, or sit
+    // inside a sticky element of the page's own.
     const restores = instances.map((instance) => instance.#resetPinStickyState());
-    const top = documentTop(element);
 
-    restores.forEach((restore) => restore());
-
-    return top;
+    try {
+      return readThenRestore(
+        StickyScrollTrigger.#resetStickyAround(null, [element]),
+        () => documentTop(element),
+      );
+    } finally {
+      restores.forEach((restore) => restore());
+    }
   }
 
   // A thin wrapper that calls resolveScrollPosition for trigger/start and endTrigger/end together,

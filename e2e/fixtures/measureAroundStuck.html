@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>measureAroundStuck fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        height: 400px;
+      }
+      .pin {
+        height: 600px;
+      }
+      .gap {
+        height: 300px;
+      }
+      .outer {
+        height: 2400px;
+      }
+      .auth {
+        position: sticky;
+        top: 0;
+      }
+      .absolute,
+      #absoluteInPin {
+        position: absolute;
+        top: 150px;
+        height: 10px;
+      }
+      .tail {
+        height: 300vh;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Three instances, each measuring something another one, or the page, holds stuck at some
+         scroll: A's cover ends at #endInPin inside B's pin #pinB; B's root sits inside A's pin
+         #pinA; C's root sits inside the page's own sticky .auth, and so does .absolute, which .auth
+         places, stuck or not, as #pinB places #absoluteInPin. -->
+    <div class="rootA">
+      <section class="sceneA"></section>
+      <section class="base"></section>
+      <section></section>
+      <div id="pinA" class="pin">
+        <div class="gap"></div>
+        <div class="rootB"><section class="sceneB"></section></div>
+      </div>
+    </div>
+    <div id="pinB" class="pin">
+      <div class="gap"></div><div id="endInPin"></div><div id="absoluteInPin"></div>
+    </div>
+    <div class="outer">
+      <div class="auth">
+        <div class="rootC"><section class="sceneC"></section><div class="absolute"></div></div>
+      </div>
+    </div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const a = new StickyScrollTrigger('.rootA');
+      const b = new StickyScrollTrigger('.rootB');
+      const c = new StickyScrollTrigger('.rootC');
+      const toTail = { endTrigger: '.tail', end: 'top top' };
+
+      a.createStickyTrigger({ trigger: '.sceneA', end: '+=300' });
+      const coverVars = a.createOverlapScroll({
+        trigger: '.base',
+        endTrigger: '#endInPin',
+        end: 'top top',
+      });
+      a.createStickyPin({ trigger: '#pinA', ...toTail });
+      const sceneBVars = b.createStickyTrigger({ trigger: '.sceneB', end: '+=200' });
+      b.createStickyPin({ trigger: '#pinB', ...toTail });
+      const sceneCVars = c.createStickyTrigger({ trigger: '.sceneC', end: '+=200' });
+
+      [a, b, c].forEach((instance) => instance.refresh());
+
+      // Every value here is a document position, so it shouldn't depend on where the page is
+      // scrolled when it's taken.
+      window.__measureAt = (y) => {
+        window.scrollTo(0, y);
+
+        const resolved = {
+          sceneB: b.resolveScrollPosition('.sceneB', 'top top'),
+          sceneC: c.resolveScrollPosition('.sceneC', 'top top'),
+          absolute: c.resolveScrollPosition('.absolute', 'top top'),
+          absoluteInPin: StickyScrollTrigger.getScrollTop('#absoluteInPin', []),
+        };
+
+        [a, b, c].forEach((instance) => instance.refresh());
+
+        return {
+          ...resolved,
+          coverEnd: coverVars.end(),
+          sceneBStart: sceneBVars.start(),
+          sceneCStart: sceneCVars.start(),
+          stuck: ['#pinA', '#pinB', '.auth'].map((sel) =>
+            Math.round(document.querySelector(sel).getBoundingClientRect().top)),
+          absoluteOnPage: document.querySelector('.absolute').getBoundingClientRect().top + y,
+          absoluteInPinOnPage:
+            document.querySelector('#absoluteInPin').getBoundingClientRect().top + y,
+        };
+      };
+    </script>
+  </body>
+</html>

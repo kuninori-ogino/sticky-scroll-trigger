@@ -205,10 +205,8 @@ export const createScrollMarginSync = (
   let jsRamps: readonly SceneDwell[] = [];
   let jsHost: HTMLElement | null = null;
 
-  const applyJsRamp = () => {
+  const applyJsRamp = (scroll = window.scrollY) => {
     if (!jsHost) return;
-
-    const scroll = window.scrollY;
 
     jsRamps.forEach((scene, index) => {
       const consumed = Math.min(
@@ -220,7 +218,9 @@ export const createScrollMarginSync = (
     });
   };
 
-  if (usesJsRamp) window.addEventListener('scroll', applyJsRamp, { passive: true });
+  const onScroll = () => applyJsRamp();
+
+  if (usesJsRamp) window.addEventListener('scroll', onScroll, { passive: true });
 
   const restoreTarget = (target: HTMLElement) => {
     const snapshot = snapshots.get(target);
@@ -352,12 +352,13 @@ export const createScrollMarginSync = (
     // Writes the JS ramp's values for the current scroll, so the targets' calc() holds even if no
     // scroll event comes before the next scroll-into-view. Separate from sync() because reading the
     // scroll forces a layout, which refresh() puts off until dormancy has demoted the far layers.
-    applyRamps(): void {
-      applyJsRamp();
+    // `scroll` is the one a measurement at 0 goes back to.
+    applyRamps(scroll?: number): void {
+      applyJsRamp(scroll);
     },
 
     restore(): void {
-      if (usesJsRamp) window.removeEventListener('scroll', applyJsRamp);
+      if (usesJsRamp) window.removeEventListener('scroll', onScroll);
 
       release();
     },

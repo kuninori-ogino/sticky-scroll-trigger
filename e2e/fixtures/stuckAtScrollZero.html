@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>stuckAtScrollZero fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        height: 400px;
+      }
+      .outer {
+        height: 2400px;
+      }
+      .tail {
+        height: 300vh;
+      }
+      /* top: a top larger than its natural top sticks it at scroll 0 already. */
+      .top .auth {
+        position: sticky;
+        top: 120px;
+      }
+      /* bottom: bottom-sticky, stuck at scroll 0 against its containing block's top. */
+      .bottom .pre {
+        height: 800px;
+      }
+      .bottom .outer {
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+      }
+      .bottom .auth {
+        position: sticky;
+        bottom: 0;
+      }
+      /* fraction: the offset the hold places it at isn't a whole pixel. */
+      .fraction .pre {
+        height: 12.3px;
+      }
+      .fraction .auth {
+        position: sticky;
+        top: 133.4px;
+      }
+      /* contents: top's case, its parent display: contents. */
+      .contents .auth {
+        position: sticky;
+        top: 120px;
+      }
+      /* pin: another instance's pin with a top larger than its natural top, instead of the page's
+         own sticky element. */
+    </style>
+  </head>
+  <body>
+    <div class="pre"></div>
+    <div class="outer">
+      <div class="auth">
+        <div class="root"><section class="scene"></section><section class="plain"></section></div>
+      </div>
+    </div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      // The page's own sticky .auth (case=pin: another instance's pin) holds the instance, stuck
+      // already at scroll 0, where GSAP measures. gscene is GSAP's own trigger on the Scene's element, plain on the element after
+      // it. nested=1: the Scene's end function calls ScrollTrigger.refresh() on the next refresh,
+      // which measures GSAP's own triggers under the library's hold.
+      const params = new URLSearchParams(location.search);
+      const nested = params.get('nested') === '1';
+
+      document.body.className = params.get('case');
+
+      if (params.get('case') === 'contents') {
+        const contents = document.createElement('div');
+        const auth = document.querySelector('.auth');
+
+        contents.style.display = 'contents';
+        auth.before(contents);
+        contents.append(auth);
+      }
+
+      if (params.get('case') === 'pin') {
+        const pins = new StickyScrollTrigger('.outer');
+
+        ScrollTrigger.create(pins.createStickyPin({ trigger: '.auth', top: 100, end: '+=1500' }));
+      }
+
+      const sticky = new StickyScrollTrigger('.root');
+      let callRefresh = false;
+      const scene = ScrollTrigger.create(sticky.createStickyTrigger({
+        trigger: '.scene',
+        end: () => {
+          if (callRefresh) {
+            callRefresh = false;
+            ScrollTrigger.refresh();
+          }
+
+          return '+=200';
+        },
+      }));
+      const resolved = ScrollTrigger.create(sticky.createResolvedTrigger({
+        trigger: '.plain',
+        start: 'top top',
+        end: 'bottom top',
+      }));
+      const gscene = ScrollTrigger.create({ trigger: '.scene', start: 'top top', end: '+=1' });
+      const plain = ScrollTrigger.create({ trigger: '.plain', start: 'top top', end: 'bottom top' });
+
+      ScrollTrigger.refresh();
+
+      const round = (n) => Math.round(n * 10) / 10;
+      const read = () => ({
+        scene: round(scene.start),
+        gscene: round(gscene.start),
+        resolved: round(resolved.start),
+        plain: round(plain.start),
+        held: (document.querySelector('.auth').getAttribute('style') ?? '').includes('important'),
+      });
+
+      window.__read = read;
+      // At rest at `y`: what a direct resolveScrollPosition gives, and how many attribute writes
+      // .auth gets from it and from a refresh().
+      window.__directAt = async (y) => {
+        const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+        const auth = document.querySelector('.auth');
+        const observer = new MutationObserver(() => {});
+
+        window.scrollTo(0, y);
+        await frame();
+        // At rest once GSAP counts the scroll over.
+        while (ScrollTrigger.isScrolling()) await new Promise((resolve) => setTimeout(resolve, 50));
+        observer.observe(auth, { attributes: true });
+
+        const direct = round(sticky.resolveScrollPosition('.plain', 'top top'));
+
+        sticky.refresh();
+
+        const writes = observer.takeRecords().length;
+
+        observer.disconnect();
+
+        return { direct, writes };
+      };
+      window.__refreshAt = (y) => {
+        window.scrollTo(0, y);
+
+        if (nested) {
+          callRefresh = true;
+          sticky.refresh();
+        } else {
+          ScrollTrigger.refresh();
+        }
+
+        return read();
+      };
+      window.__ready = true;
+    </script>
+  </body>
+</html>

@@ -90,6 +90,11 @@ const endCallsPerRefresh = (controller: StickyScrollTrigger, end: ReturnType<typ
   return calls;
 };
 
+// Where each scrollTo call went, in order.
+const scrollTops = (scrollTo: { mock: { calls: unknown[][] } }) => (
+  scrollTo.mock.calls.map(([options]) => (options as ScrollToOptions).top)
+);
+
 // Runs the queued microtasks and the ones they queue, so a test checks what is done by the end of
 // the task. Work moved to a later task still shows as not done.
 const flushMicrotasks = async () => {
@@ -115,7 +120,12 @@ const runDispatch = async (dispatch: () => void) => {
   return uncaught;
 };
 
+// Each test starts past any page scroll an earlier one's events left counted.
+let clock = 1e12;
+
 beforeEach(() => {
+  clock += 1e6;
+  vi.spyOn(performance, 'now').mockImplementation(() => clock);
   FakeScrollTrigger.refresh.mockClear();
   // Cleared alongside the body each setup() swaps out, so a stylesheet one test installs can't
   // reach the next one.
@@ -1878,6 +1888,840 @@ describe('measuring while a pin is stuck', () => {
 // pass-through shape is checked here alongside the parts that are its own rather than
 // resolveScrollPosition's: the excluded-vars rejection, the start/end defaults, resolving end
 // against endTrigger, and a dwell end counted from the resolved start.
+// GSAP measures at 0, where an element the library doesn't place itself sits as it would unstuck.
+// Each read goes there and back within the task, or doesn't scroll at all. jsdom has no layout, so
+// an element held by something stuck gets a place that depends on the scroll.
+describe('measuring at scroll 0', () => {
+  let scroll = 0;
+  let scrolls: number[] = [];
+
+  // A frame on, an earlier test's own scroll event no longer waits to be skipped.
+  beforeEach(async () => {
+    await new Promise((resolve) => {
+      requestAnimationFrame(resolve);
+    });
+    scroll = 1200;
+    scrolls = [];
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => scroll);
+    vi.spyOn(window, 'scrollTo').mockImplementation((options) => {
+      scroll = (options as ScrollToOptions).top ?? scroll;
+      scrolls.push(scroll);
+    });
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  const carried = (el: HTMLElement, natural: number) => {
+    Object.defineProperty(el, 'offsetTop', {
+      configurable: true,
+      get: () => natural + (scroll > 0 ? 300 : 0),
+    });
+  };
+
+  const setupInPageSticky = () => {
+    document.body.innerHTML = `
+      <div class="auth" style="position: sticky; top: 0px">
+        <div class="root"><section class="scene"></section><section class="inside"></section></div>
+        <section class="outside"></section>
+      </div>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+
+    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
+
+    return controller;
+  };
+
+  // The same, with GSAP's class taken (a refresh, at 0 and back), and past GSAP's count of that
+  // trip.
+  const setupInPageStickyWithGsap = () => {
+    const controller = setupInPageSticky();
+    const { Cls } = makeClass({ rec: 0 });
+    const vars = controller.createStickyTrigger({ trigger: query('.inside'), end: '+=100' });
+
+    vars.onRefreshInit?.(Object.create(Cls.prototype) as ScrollTrigger);
+    clock += 1000;
+    scrolls = [];
+
+    return { controller, Cls, vars };
+  };
+
+  it('resolveScrollPosition measures inside the page\'s own sticky element at 0, writing nothing to it', () => {
+    const controller = setupInPageSticky();
+
+    carried(query('.inside'), 100);
+
+    expect(controller.resolveScrollPosition(query('.inside'), 'top top')).toBe(100);
+    expect(scrolls).toEqual([0, 1200]);
+    // As the author wrote it: never written to.
+    expect(query('.auth').getAttribute('style')).toBe('position: sticky; top: 0px');
+  });
+
+  // A read with every wrapper sticky lays out the whole nesting (see dormancy.ts).
+  it('reads the scroll with the instance\'s own wrappers unstuck', () => {
+    const controller = setupInPageSticky();
+    const stickyAtRead: number[] = [];
+
+    controller.refresh();
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => {
+      stickyAtRead.push(Array.from(document.querySelectorAll<HTMLElement>('.auth *'))
+        .filter((el) => el.style.position === 'sticky').length);
+
+      return scroll;
+    });
+    controller.resolveScrollPosition(query('.inside'), 'top top');
+
+    expect(stickyAtRead.length).toBeGreaterThan(0);
+    expect(stickyAtRead.every((count) => count === 0)).toBe(true);
+  });
+
+  it('getScrollTop measures inside the page\'s own sticky element at 0', () => {
+    const controller = setupInPageSticky();
+
+    carried(query('.outside'), 100);
+
+    expect(StickyScrollTrigger.getScrollTop(query('.outside'), [controller])).toBe(100);
+    expect(scrolls).toEqual([0, 1200]);
+  });
+
+  it('doesn\'t scroll with nothing but the instance\'s own wrappers around what it measures', () => {
+    const { controller } = setup();
+
+    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
+    controller.resolveScrollPosition(query('.inside'), 'top top');
+
+    expect(scrolls).toEqual([]);
+  });
+
+  it('doesn\'t scroll at 0', () => {
+    const controller = setupInPageSticky();
+
+    scroll = 0;
+    controller.resolveScrollPosition(query('.inside'), 'top top');
+
+    expect(scrolls).toEqual([]);
+  });
+
+  // GSAP counts the scroll event the trip to 0 and back fires as the page scrolling.
+  it('scrolls to 0 again while GSAP counts its own trip', () => {
+    const { controller, Cls } = setupInPageStickyWithGsap();
+
+    controller.resolveScrollPosition(query('.inside'), 'top top');
+    Cls.scrolling = true;
+    controller.resolveScrollPosition(query('.inside'), 'top top');
+
+    expect(scrolls).toEqual([0, 1200, 0, 1200]);
+  });
+
+  it('counts a user\'s scroll once the page has moved from where the trip left it', () => {
+    const { controller, Cls } = setupInPageStickyWithGsap();
+
+    controller.resolveScrollPosition(query('.inside'), 'top top');
+    Cls.scrolling = true;
+    scroll = 1300;
+    controller.resolveScrollPosition(query('.inside'), 'top top');
+    // Back where the trip left it, after a scroll of the user's.
+    scroll = 1200;
+    controller.resolveScrollPosition(query('.inside'), 'top top');
+
+    expect(scrolls).toEqual([0, 1200]);
+  });
+
+  // A trigger callback on the first scroll after a pause runs before GSAP marks the scroll.
+  it('doesn\'t scroll from inside GSAP\'s update', () => {
+    const { controller, Cls } = setupInPageStickyWithGsap();
+
+    Cls.isUpdating = true;
+    controller.resolveScrollPosition(query('.inside'), 'top top');
+
+    expect(scrolls).toEqual([]);
+  });
+
+  it('refresh() measures in place from inside GSAP\'s update with nothing else stuck around', () => {
+    const { controller } = setup();
+    const { Cls } = makeClass({ rec: 0 });
+
+    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' })
+      .onRefreshInit?.(Object.create(Cls.prototype) as ScrollTrigger);
+    scrolls = [];
+    Cls.isUpdating = true;
+    controller.refresh();
+
+    expect(scrolls).toEqual([]);
+  });
+
+  // The update that ends GSAP's refresh comes at rest.
+  it('scrolls to 0 from the update that ends GSAP\'s refresh', () => {
+    const { controller, Cls } = setupInPageStickyWithGsap();
+
+    Cls.isUpdating = true;
+    Cls.isRefreshing = true;
+
+    try {
+      controller.resolveScrollPosition(query('.inside'), 'top top');
+    } finally {
+      Cls.isRefreshing = false;
+    }
+
+    expect(scrolls).toEqual([0, 1200]);
+  });
+
+  // Past the time GSAP counts a trip for, a scroll it still counts is someone else's.
+  it('takes GSAP\'s word once its count of the trip is over', () => {
+    const { controller, Cls } = setupInPageStickyWithGsap();
+
+    controller.resolveScrollPosition(query('.inside'), 'top top');
+    clock += 500;
+    Cls.scrolling = true;
+    controller.resolveScrollPosition(query('.inside'), 'top top');
+
+    expect(scrolls).toEqual([0, 1200]);
+  });
+
+  // A trip to 0 would stop the user's scroll, so only the other instance's wrappers, the library's
+  // own, are reset; a pin is the author's element and stays as it is.
+  it('doesn\'t scroll while the page scrolls, and resets only another instance\'s wrappers', async () => {
+    document.body.innerHTML = `
+      <div class="root"><section class="scene"></section></div>
+      <div class="otherRoot">
+        <section class="otherScene"></section>
+        <div class="pin"><section class="inPin"></section></div>
+      </div>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const other = new StickyScrollTrigger(query('.otherRoot'));
+    const { Cls } = makeClass({ rec: 0 });
+
+    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' })
+      .onRefreshInit?.(Object.create(Cls.prototype) as ScrollTrigger);
+    other.createStickyTrigger({ trigger: query('.otherScene'), end: '+=100' });
+    other.createStickyPin({ trigger: query('.pin') });
+    other.refresh();
+    // The refresh's own scroll event is behind it.
+    await new Promise((resolve) => {
+      requestAnimationFrame(resolve);
+    });
+    scrolls = [];
+
+    const wrapper = query('.otherScene').parentElement!.parentElement!;
+    const pinStyles: string[] = [];
+
+    Object.defineProperty(query('.inPin'), 'offsetTop', {
+      configurable: true,
+      get: () => {
+        pinStyles.push(query('.pin').style.position);
+
+        return wrapper.style.position === 'sticky' ? 400 : 100;
+      },
+    });
+    clock += 1000;
+    Cls.scrolling = true;
+
+    expect(controller.resolveScrollPosition(query('.inPin'), 'top top')).toBe(100);
+    expect(scrolls).toEqual([]);
+    expect(pinStyles).toEqual(['sticky']);
+    expect(wrapper.style.position).toBe('sticky');
+  });
+
+  it('refresh() measures at 0 and scrolls back', () => {
+    const { controller } = setup();
+    const seen: number[] = [];
+
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: () => {
+        seen.push(window.scrollY);
+
+        return '+=100';
+      },
+    });
+    controller.refresh();
+
+    expect(new Set(seen)).toEqual(new Set([0]));
+    expect(scrolls[0]).toBe(0);
+    expect(scrolls.at(-1)).toBe(1200);
+  });
+
+  // A trip to 0 would stop the scroll, and the instance resets its own wrappers itself.
+  it('refresh() measures where the page is mid-scroll with nothing else stuck around', () => {
+    const { controller } = setup();
+    const { Cls } = makeClass({ rec: 0 });
+    const seen: number[] = [];
+    const vars = controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: () => {
+        seen.push(window.scrollY);
+
+        return '+=100';
+      },
+    });
+
+    vars.onRefreshInit?.(Object.create(Cls.prototype) as ScrollTrigger);
+    scrolls = [];
+    seen.length = 0;
+    Cls.scrolling = true;
+    controller.refresh();
+
+    expect(new Set(seen)).toEqual(new Set([1200]));
+    expect(scrolls).toEqual([]);
+  });
+
+  // In place reads the same, so GSAP's count of the library's own trip needs no trip either.
+  it('refresh() measures in place while GSAP counts the trip just made', () => {
+    const { controller, Cls } = setupInPageStickyWithGsap();
+
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      '<div class="otherRoot"><section class="otherScene"></section></div>',
+    );
+
+    const other = new StickyScrollTrigger(query('.otherRoot'));
+
+    other.createStickyTrigger({ trigger: query('.otherScene'), end: '+=100' })
+      .onRefreshInit?.(Object.create(Cls.prototype) as ScrollTrigger);
+    controller.resolveScrollPosition(query('.inside'), 'top top');
+    scrolls = [];
+    Cls.scrolling = true;
+    other.refresh();
+
+    expect(scrolls).toEqual([]);
+  });
+
+  it('refresh() still measures at 0 mid-scroll inside the page\'s own sticky element', () => {
+    const { controller, Cls } = setupInPageStickyWithGsap();
+
+    Cls.scrolling = true;
+    controller.refresh();
+
+    expect(scrolls).toEqual([0, 1200]);
+  });
+
+  // The page it comes back to is still scrolling: a kill right after waits for the scroll to end.
+  it('holds a kill right after refresh() went to 0 mid-scroll', async () => {
+    const { controller, Cls, vars } = setupInPageStickyWithGsap();
+
+    Cls.scrolling = true;
+    controller.refresh();
+    expect(scrolls).toEqual([0, 1200]);
+    scrolls = [];
+    vars.onKill?.(Object.create(Cls.prototype) as ScrollTrigger);
+    await flushMicrotasks();
+
+    expect(livePaddings()).toHaveLength(2);
+    expect(scrolls).toEqual([]);
+    controller.destroy();
+  });
+
+  // jsdom always runs the scroll-margin ramp in its JS form, which a scrollIntoView right after
+  // refresh() reads before any scroll event.
+  it('writes the JS ramp for the scroll refresh() goes back to', () => {
+    document.body.innerHTML = `
+      <div class="auth" style="position: sticky; top: 0px">
+        <div class="root"><section class="scene"></section><section id="target"></section></div>
+      </div>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+
+    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
+    controller.refresh();
+
+    const host = Array.from(document.querySelectorAll<HTMLElement>('*'))
+      .find((el) => el.getAttributeNames().some((name) => name.startsWith('data-sst')))!;
+    const id = host.getAttributeNames().find((name) => name.startsWith('data-sst'))!.slice(5);
+
+    expect(scrolls).toEqual([0, 1200]);
+    // The scene's whole dwell is behind a scroll of 1200.
+    expect(host.style.getPropertyValue(`--${id}-c0`)).toBe('100px');
+  });
+
+  // A kill's catch-up keeps the content: the page goes back short of where refresh() started.
+  it('writes the JS ramp for the scroll a kill\'s catch-up keeps', () => {
+    document.body.innerHTML = `
+      <div class="root"><section class="s0"></section><section class="s1"></section><section id="target"></section></div>
+    `;
+    Object.defineProperty(query('.s1'), 'offsetTop', { configurable: true, get: () => 1150 });
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const vars = ['.s0', '.s1'].map((trigger) => controller.createStickyTrigger({ trigger, end: '+=100' }));
+
+    controller.refresh();
+    vars[0].onKill?.(makeFakeSelf());
+    scrolls = [];
+    controller.refresh();
+
+    const host = Array.from(document.querySelectorAll<HTMLElement>('*'))
+      .find((el) => el.getAttributeNames().some((name) => name.startsWith('data-sst')))!;
+    const id = host.getAttributeNames().find((name) => name.startsWith('data-sst'))!.slice(5);
+
+    expect(scrolls).toEqual([0, 1100]);
+    expect(host.style.getPropertyValue(`--${id}-c0`)).toBe('0px');
+  });
+
+  // As outside a trip: the browser's anchoring may have kept the content already.
+  it('goes back to the scroll it started from when the kept one is within half a pixel', () => {
+    document.body.innerHTML = `
+      <div class="root"><section class="s0"></section><section class="s1"></section></div>
+    `;
+    Object.defineProperty(query('.s1'), 'offsetTop', { configurable: true, get: () => 1150 });
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const vars = ['.s0', '.s1'].map((trigger) => controller.createStickyTrigger({ trigger, end: '+=100' }));
+
+    scroll = 1200.4;
+    controller.refresh();
+    vars[1].onKill?.(makeFakeSelf());
+    scrolls = [];
+    controller.refresh();
+
+    expect(scrolls).toEqual([0, 1200.4]);
+  });
+
+  it('doesn\'t scroll for a refresh() with nothing to measure', () => {
+    const controller = setupInPageSticky();
+    const empty = new StickyScrollTrigger(query('.inside'));
+
+    controller.refresh();
+    scrolls = [];
+    empty.refresh();
+
+    expect(scrolls).toEqual([]);
+  });
+
+  // GSAP takes the scroll before its refreshInit and goes back there after measuring.
+  it('gives a GSAP refresh a start function starts the scroll refresh() measures away from', () => {
+    const { controller } = setup();
+    const scroller = { rec: 0 };
+    const { Cls, gsapRefresh } = makeClass(scroller);
+    const self = Object.create(Cls.prototype) as ScrollTrigger;
+    let armed = true;
+    const recorded: number[] = [];
+    const vars = controller.createStickyTrigger({
+      trigger: query('.scene'),
+      start: () => {
+        if (armed) {
+          armed = false;
+          scroller.rec = window.scrollY;
+          gsapRefresh(true);
+          recorded.push(scroller.rec);
+        }
+
+        return 'top top';
+      },
+      end: '+=100',
+    });
+
+    Cls.addEventListener('refreshInit', () => vars.onRefreshInit?.(self));
+    controller.refresh();
+
+    expect(recorded).toEqual([1200]);
+  });
+
+  // A GSAP refresh goes back to its record once it has measured, in the middle of refresh()'s.
+  it('reads at 0 again after a function that scrolled', () => {
+    const { controller } = setup();
+    const seen: number[] = [];
+
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      start: () => {
+        window.scrollTo({ top: 1200, behavior: 'instant' });
+
+        return 'top top';
+      },
+      end: () => {
+        seen.push(window.scrollY);
+
+        return '+=100';
+      },
+    });
+    controller.refresh();
+
+    expect(new Set(seen)).toEqual(new Set([0]));
+  });
+
+  it('reads at 0 again after an end function that scrolled', () => {
+    const { controller } = setup();
+    const seen: number[] = [];
+
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: () => {
+        window.scrollTo({ top: 1200, behavior: 'instant' });
+
+        return '+=100';
+      },
+    });
+    controller.createStickyTrigger({
+      trigger: query('.inside'),
+      end: () => {
+        seen.push(window.scrollY);
+
+        return '+=100';
+      },
+    });
+    controller.refresh();
+
+    expect(new Set(seen)).toEqual(new Set([0]));
+  });
+
+  for (const site of ['cover start', 'cover end', 'pin start', 'pin end']) {
+    it(`reads at 0 again after a ${site} function that scrolled`, () => {
+      document.body.innerHTML = `
+        <div class="root">
+          <section class="scene"></section>
+          <section class="under"></section>
+          <section class="cover"></section>
+        </div>
+        <section class="pin"></section>
+        <section class="lastPin"></section>
+      `;
+
+      const controller = new StickyScrollTrigger(query('.root'));
+      const seen: number[] = [];
+
+      const scrolling = <T>(value: T) => () => {
+        window.scrollTo({ top: 1200, behavior: 'instant' });
+
+        return value;
+      };
+
+      controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
+      controller.createOverlapScroll({
+        trigger: query('.under'),
+        cover: query('.cover'),
+        ...(site === 'cover start' ? { start: scrolling('bottom bottom') } : {}),
+        ...(site === 'cover end' ? { end: scrolling('+=100') } : {}),
+      });
+      controller.createStickyPin({
+        trigger: query('.pin'),
+        ...(site === 'pin start' ? { start: scrolling('top top') } : {}),
+        ...(site === 'pin end' ? { end: scrolling('bottom top') } : {}),
+      });
+      controller.createStickyPin({
+        trigger: query('.lastPin'),
+        end: () => {
+          seen.push(window.scrollY);
+
+          return 'bottom top';
+        },
+      });
+      controller.refresh();
+
+      expect(new Set(seen)).toEqual(new Set([0]));
+    });
+  }
+
+  // GSAP scrolls to 0 only after its whole refreshInit dispatch, so the listeners after the layer
+  // handler see its record.
+  it('measures at 0 inside GSAP\'s refresh and goes back to GSAP\'s record', () => {
+    const { controller } = setup();
+    const { Cls, gsapRefresh } = makeClass({ rec: 1200 });
+    const self = Object.create(Cls.prototype) as ScrollTrigger;
+    const seen: number[] = [];
+    const vars = controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: () => {
+        seen.push(window.scrollY);
+
+        return '+=100';
+      },
+    });
+
+    Cls.addEventListener('refreshInit', () => vars.onRefreshInit?.(self));
+    gsapRefresh(true);
+
+    expect(new Set(seen)).toEqual(new Set([0]));
+    expect(scrolls).toEqual([0, 1200]);
+  });
+
+  // A GSAP refresh a function starts takes the scroll as it is, 0 here, as its record: the outer
+  // refresh, which shares it, would then go back to the top.
+  it('keeps GSAP\'s record through a GSAP refresh a start function starts inside it', () => {
+    const { controller } = setup();
+    const scroller = { rec: 1200 };
+    const { Cls, gsapRefresh } = makeClass(scroller);
+    const self = Object.create(Cls.prototype) as ScrollTrigger;
+    const seen: number[] = [];
+    let armed = true;
+    const vars = controller.createStickyTrigger({
+      trigger: query('.scene'),
+      start: () => {
+        if (armed) {
+          armed = false;
+          scroller.rec = window.scrollY;
+          gsapRefresh(true);
+          // GSAP goes back to its record once it has measured.
+          window.scrollTo({ top: scroller.rec, behavior: 'instant' });
+          Cls.isRefreshing = true;
+        }
+
+        return 'top top';
+      },
+      end: () => {
+        seen.push(window.scrollY);
+
+        return '+=100';
+      },
+    });
+
+    Cls.addEventListener('refreshInit', () => vars.onRefreshInit?.(self));
+    gsapRefresh(true);
+
+    expect(scroller.rec).toBe(1200);
+    expect(new Set(seen)).toEqual(new Set([0]));
+  });
+
+  // The evaluation's GSAP refresh goes back to the real scroll first; its own handler then reads at
+  // 0 again.
+  it('reads at 0 in a GSAP refresh an end function starts inside GSAP\'s refresh', () => {
+    const { controller } = setup();
+    const scroller = { rec: 1200 };
+    const { Cls, gsapRefresh } = makeClass(scroller);
+    const self = Object.create(Cls.prototype) as ScrollTrigger;
+    const seenInNested: number[] = [];
+    let calls = 0;
+    let nested = false;
+    const vars = controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: () => {
+        calls += 1;
+
+        // Call 2 is the evaluation of the first refresh.
+        if (calls === 2) {
+          scroller.rec = window.scrollY;
+          nested = true;
+          gsapRefresh(true);
+          nested = false;
+          Cls.isRefreshing = true;
+        }
+
+        return '+=100';
+      },
+    });
+
+    controller.createStickyTrigger({
+      trigger: query('.inside'),
+      end: () => {
+        if (nested) seenInNested.push(window.scrollY);
+
+        return '+=100';
+      },
+    });
+    Cls.addEventListener('refreshInit', () => vars.onRefreshInit?.(self));
+    gsapRefresh(true);
+
+    expect(seenInNested.length).toBeGreaterThan(0);
+    expect(new Set(seenInNested)).toEqual(new Set([0]));
+    expect(scroller.rec).toBe(1200);
+  });
+
+  // GSAP goes back to its record, then runs every trigger's onRefresh before its 'refresh' event.
+  it('measures at 0 again once GSAP\'s refresh has gone back to its record', () => {
+    document.body.innerHTML = `
+      <div class="auth" style="position: sticky; top: 0px">
+        <div class="root"><section class="scene"></section><section class="inside"></section></div>
+      </div>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const { Cls } = makeClass({ rec: 1200 });
+    const self = Object.create(Cls.prototype) as ScrollTrigger;
+    const vars = controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
+
+    carried(query('.inside'), 100);
+    Cls.isRefreshing = true;
+
+    try {
+      vars.onRefreshInit?.(self);
+      window.scrollTo({ top: 1200, behavior: 'instant' });
+
+      // 100 at 0, plus the Scene's dwell; 300 more as it sits.
+      expect(controller.resolveScrollPosition(query('.inside'), 'top top')).toBe(200);
+    } finally {
+      Cls.isRefreshing = false;
+    }
+  });
+
+  // The catch-up keeps the content at the scroll it is at; only the measurement after it reads at
+  // 0.
+  it('runs a kill\'s catch-up inside GSAP\'s refresh where the scroll is', () => {
+    document.body.innerHTML = `
+      <div class="auth" style="position: sticky; top: 0px">
+        <div class="root"><section class="s1"></section><section class="s2"></section></div>
+      </div>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const { Cls } = makeClass({ rec: 1200 });
+    const self = Object.create(Cls.prototype) as ScrollTrigger;
+    const vars = ['.s1', '.s2'].map((trigger) => controller.createStickyTrigger({ trigger, end: '+=100' }));
+
+    vars[0].onRefreshInit?.(self);
+    scrolls = [];
+    vars[1].onKill?.(self);
+    Cls.isRefreshing = true;
+
+    try {
+      vars[0].onRefreshInit?.(self);
+    } finally {
+      Cls.isRefreshing = false;
+    }
+
+    // Back to the record the catch-up moved up by the dwell taken out.
+    expect(scrolls).toEqual([0, 1100]);
+  });
+
+  it('writes the JS ramp for GSAP\'s record a kill\'s catch-up moved inside GSAP\'s refresh', () => {
+    document.body.innerHTML = `
+      <div class="auth" style="position: sticky; top: 0px">
+        <div class="root"><section class="s0"></section><section class="s1"></section><section id="target"></section></div>
+      </div>
+    `;
+    Object.defineProperty(query('.s1'), 'offsetTop', { configurable: true, get: () => 1150 });
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const { Cls } = makeClass({ rec: 1200 });
+    const self = Object.create(Cls.prototype) as ScrollTrigger;
+    const vars = ['.s0', '.s1'].map((trigger) => controller.createStickyTrigger({ trigger, end: '+=100' }));
+
+    vars[1].onRefreshInit?.(self);
+    vars[0].onKill?.(self);
+    Cls.isRefreshing = true;
+
+    try {
+      vars[1].onRefreshInit?.(self);
+    } finally {
+      Cls.isRefreshing = false;
+    }
+
+    const host = Array.from(document.querySelectorAll<HTMLElement>('*'))
+      .find((el) => el.getAttributeNames().some((name) => name.startsWith('data-sst')))!;
+    const id = host.getAttributeNames().find((name) => name.startsWith('data-sst'))!.slice(5);
+
+    expect(scroll).toBe(1100);
+    expect(host.style.getPropertyValue(`--${id}-c0`)).toBe('0px');
+  });
+
+  // From an onRefresh, after GSAP has measured and gone back to its record: nothing would scroll
+  // back from 0 again.
+  it('leaves the scroll where GSAP went back to for a function run after GSAP has measured', () => {
+    const { controller } = setup();
+    const { Cls, gsapRefresh } = makeClass({ rec: 1200 });
+    const self = Object.create(Cls.prototype) as ScrollTrigger;
+    let nest = false;
+    const vars = controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: () => {
+        if (nest) {
+          nest = false;
+          gsapRefresh(true);
+          Cls.isRefreshing = true;
+        }
+
+        return '+=100';
+      },
+    });
+
+    Cls.isRefreshing = true;
+
+    try {
+      vars.onRefreshInit?.(self);
+      window.scrollTo({ top: 1200, behavior: 'instant' });
+      nest = true;
+      controller.refresh();
+
+      expect(scroll).toBe(1200);
+    } finally {
+      Cls.isRefreshing = false;
+    }
+  });
+
+  // A GSAP refresh a function starts goes back to the real scroll before the function returns.
+  it('goes back to where refresh() started from after another instance\'s refresh() inside it', () => {
+    document.body.innerHTML = `
+      <div class="root"><section class="scene"></section></div>
+      <div class="otherRoot"><section class="otherScene"></section></div>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const other = new StickyScrollTrigger(query('.otherRoot'));
+    const seen: number[] = [];
+    let armed = false;
+
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      start: () => {
+        if (armed) {
+          armed = false;
+          window.scrollTo({ top: 1200, behavior: 'instant' });
+          other.refresh();
+        }
+
+        return 'top top';
+      },
+      end: () => {
+        seen.push(window.scrollY);
+
+        return '+=100';
+      },
+    });
+    other.createStickyTrigger({ trigger: query('.otherScene'), end: '+=100' });
+    armed = true;
+    controller.refresh();
+
+    expect(new Set(seen)).toEqual(new Set([0]));
+    expect(scroll).toBe(1200);
+  });
+
+  it('reads at 0 in a function whose GSAP refresh went back to the real scroll', () => {
+    document.body.innerHTML = `
+      <div class="auth" style="position: sticky; top: 0px">
+        <div class="root"><section class="scene"></section><section class="inside"></section></div>
+      </div>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const read: number[] = [];
+    let armed = false;
+
+    carried(query('.inside'), 100);
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      start: () => {
+        if (armed) {
+          armed = false;
+          window.scrollTo({ top: 1200, behavior: 'instant' });
+          read.push(StickyScrollTrigger.getScrollTop(query('.inside'), [controller]));
+        }
+
+        return 'top top';
+      },
+      end: '+=100',
+    });
+    armed = true;
+    controller.refresh();
+
+    expect(read).toEqual([100]);
+    expect(scroll).toBe(1200);
+  });
+
+  it('doesn\'t scroll inside GSAP\'s refresh from the top', () => {
+    const { controller } = setup();
+    const { Cls, gsapRefresh } = makeClass({ rec: 0 });
+    const self = Object.create(Cls.prototype) as ScrollTrigger;
+    const vars = controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
+
+    scroll = 0;
+    Cls.addEventListener('refreshInit', () => vars.onRefreshInit?.(self));
+    gsapRefresh(true);
+
+    expect(scrolls).toEqual([]);
+  });
+});
+
 describe('createResolvedTrigger()', () => {
   it('returns Vars that includes pass-through options like trigger/scrub as-is', () => {
     const { query, controller } = setup();
@@ -4128,9 +4972,10 @@ describe('an end function called again in the layout GSAP shows it', () => {
     });
 
     calls = 0;
+    scrollTo.mockClear();
     controller.refresh();
 
-    expect(scrollTo.mock.calls).toEqual([[{ top: 500, behavior: 'instant' }]]);
+    expect(scrollTops(scrollTo)).toEqual([0, 0, 500]);
     expect(y).toBe(500);
   });
 
@@ -4224,15 +5069,15 @@ describe('an end function called again in the layout GSAP shows it', () => {
       return scroller;
     };
 
-    // GSAP takes the scroll before its refreshInit, in the evaluation's shorter page, and goes back
-    // there after measuring to run the triggers' callbacks.
+    // GSAP takes the scroll before its refreshInit, in the evaluation's shorter page at 0, and goes
+    // back there after measuring to run the triggers' callbacks. Its scroll function goes to whole
+    // pixels, and its cache with it.
     it.each([
-      ['cut back', 100, 500, 500, 500],
-      ['cut back to 0', 250, 500, 500, 500],
-      // GSAP's scroll function goes to whole pixels.
-      ['cut back from a fraction of a pixel', 100, 500.4, 500.4, 500],
-      ['not cut back, at half a pixel', 0, 500.5, 600, 500.5],
-    ])('gives the GSAP refresh the scroll of the page refresh() left when the evaluation is %s', (_, cut, start, top, left) => {
+      ['cut back', 100, 500, 500],
+      ['cut back to 0', 250, 500, 500],
+      ['cut back from a fraction of a pixel', 100, 500.4, 500.4],
+      ['not cut back, at half a pixel', 0, 500.5, 600],
+    ])('gives the GSAP refresh the scroll of the page refresh() left when the evaluation is %s', (_, cut, start, top) => {
       clampingScroll(cut, start, top);
 
       const scroller = makeScroller();
@@ -4255,11 +5100,12 @@ describe('an end function called again in the layout GSAP shows it', () => {
       arm();
       controller.refresh();
 
-      expect(seen).toEqual([{ scroll: left, rec: left, cache: left }]);
+      expect(seen).toEqual([{ scroll: start, rec: start, cache: Math.round(start) }]);
     });
 
     // A top-level GSAP refresh takes the scroll before the listener and goes back there, as far as
-    // the page then reaches. The function's layout cuts the scroll to 200.
+    // the page then reaches. The function's layout cuts the scroll to 200; the listener after the
+    // handler sees the record, as at the top level.
     it.each([
       ['scrolls', () => window.scrollTo({ top: 100 }), { scroll: 500, rec: 500 }],
       ['shortens the page', (shorten: (px: number) => void) => shorten(50), { scroll: 450, rec: 450 }],
@@ -4287,6 +5133,37 @@ describe('an end function called again in the layout GSAP shows it', () => {
       controller.refresh();
 
       expect(seen).toEqual([left]);
+    });
+
+    // The same from inside GSAP's refresh, whose layer handler measures at 0.
+    it('gives the GSAP refresh the exact scroll GSAP\'s refresh measures away from, at half a pixel', () => {
+      clampingScroll(0, 500.5, 600);
+
+      const scroller = makeScroller();
+      const seen: { scroll: number; rec: number }[] = [];
+      let gsap: (complete?: boolean) => void = () => {};
+      let nested = false;
+      const act = onEvaluation(() => {
+        scroller.record();
+        nested = true;
+        gsap(true);
+        nested = false;
+        Cls.isRefreshing = true;
+      });
+      const { Cls, arm, gsapRefresh } = setupGsap((refresh) => {
+        gsap = refresh;
+        act();
+      }, scroller);
+
+      Cls.addEventListener('refreshInit', () => {
+        if (nested) seen.push({ scroll: window.scrollY, rec: scroller.rec });
+      });
+      arm();
+      scroller.record();
+      gsapRefresh(true);
+
+      // The record exact; the scroll in whole pixels, as GSAP's scroll function went there.
+      expect(seen).toEqual([{ scroll: 501, rec: 500.5 }]);
     });
 
     it('leaves the page as refresh() left it after a GSAP refresh that threw before its end', () => {
@@ -4830,6 +5707,23 @@ describe('nestedStickyOptimization', () => {
     expect(added.length).toBeGreaterThan(0);
     controller.destroy();
     added.forEach((listener) => expect(remove).toHaveBeenCalledWith('scroll', listener));
+  });
+
+  // A refresh() that shortens the page lands short of the scroll it went back to.
+  it('leaves the table in its state for the scroll refresh() got back to', () => {
+    const { controller, wrapper } = setupPinned('always');
+
+    vi.spyOn(window, 'scrollTo').mockImplementation((options) => {
+      scroll = Math.min((options as ScrollToOptions).top ?? scroll, 0);
+    });
+    scroll = 5000;
+    controller.refresh();
+
+    const afterRefresh = wrapper.style.cssText;
+
+    window.dispatchEvent(new Event('scroll'));
+    expect(wrapper.style.cssText).toBe(afterRefresh);
+    controller.destroy();
   });
 
   // The table still holds a killed level's wrapper as demoted, and would write sticky back onto it.
@@ -5549,21 +6443,20 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
     it('scrolls the batch\'s rebuild back to the content at the viewport\'s top', async () => {
       const { Cls } = makeClass({ rec: 2500 });
       const { controller, vars, self } = setupScenes(Cls);
-      const scrollTo = scrollToSpy();
+      const scrollTo = followScrollTo(2500);
 
-      vi.spyOn(window, 'scrollY', 'get').mockReturnValue(2500);
       vars[0].onKill?.(self);
       vars[1].onKill?.(self);
       expect(scrollTo).not.toHaveBeenCalled();
 
       await flushMicrotasks();
       expect(livePaddings()).toHaveLength(1);
-      expect(scrollTo.mock.calls).toEqual([[{ top: 2300, behavior: 'instant' }]]);
+      expect(scrollTops(scrollTo)).toEqual([2300]);
 
       // The batch is done: a refresh after it is a resize's and keeps the scroll.
       dwell = 50;
       controller.refresh();
-      expect(scrollTo).toHaveBeenCalledTimes(1);
+      expect(scrollTops(scrollTo)).toEqual([2300, 0, 2300]);
     });
 
     // GSAP's dispatch runs each trigger's onRefreshInit, then the listeners added since.
@@ -5681,7 +6574,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       await flushMicrotasks();
 
       expect(livePaddings()).toHaveLength(1);
-      expect(scrollTo).not.toHaveBeenCalled();
+      expect(scrollTops(scrollTo)).toEqual([0, 2500]);
     });
 
     // Nested instances: the outer one's layers were there all along and put nothing back.
@@ -5878,12 +6771,12 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       vars[0].onKill?.(self);
       controller.refresh();
-      expect(scrollTo).toHaveBeenLastCalledWith({ top: 2400, behavior: 'instant' });
+      expect(scrollTops(scrollTo)).toEqual([0, 2400]);
 
       vars[1].onKill?.(self);
       await flushMicrotasks();
       expect(livePaddings()).toHaveLength(1);
-      expect(scrollTo).toHaveBeenLastCalledWith({ top: 2300, behavior: 'instant' });
+      expect(scrollTops(scrollTo)).toEqual([0, 2400, 2300]);
     });
 
     it('batches a kill made during the batch\'s own rebuild', async () => {
@@ -5904,20 +6797,19 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       await flushMicrotasks();
 
       expect(livePaddings()).toHaveLength(1);
-      expect(scrollTo).toHaveBeenLastCalledWith({ top: 2300, behavior: 'instant' });
+      expect(scrollTops(scrollTo)).toEqual([2400, 2300]);
     });
 
     it('leaves the scroll alone in a refresh no kill started', () => {
       const { Cls } = makeClass({ rec: 2500 });
       const { controller } = setupScenes(Cls);
-      const scrollTo = scrollToSpy();
+      const scrollTo = followScrollTo(2500);
 
-      vi.spyOn(window, 'scrollY', 'get').mockReturnValue(2500);
       dwell = 50;
       controller.refresh();
 
       expect(paddingTotal()).toBe(150);
-      expect(scrollTo).not.toHaveBeenCalled();
+      expect(scrollTops(scrollTo)).toEqual([0, 2500]);
     });
   });
 
@@ -5957,7 +6849,8 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
   // GSAP holds its own refresh for the end of a scroll; a scroll mid-fling would stop the fling.
   describe('while GSAP reports a scroll', () => {
     beforeEach(() => {
-      vi.useFakeTimers();
+      // performance.now stays on the shared clock, past the trips earlier tests made.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     });
 
     afterEach(() => {
@@ -5986,6 +6879,118 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       expect(livePaddings()).toHaveLength(2);
       expect(scrollTo.mock.calls).toEqual([[{ top: 2400, behavior: 'instant' }]]);
       expect(Cls.refresh).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    // GSAP counts the scroll event of the library's own trip to 0 as a scroll, for 200-450 ms.
+    const gsapRefreshTrip = (
+      Cls: { isRefreshing: boolean },
+      vars: ReturnType<typeof setupScenes>['vars'],
+      self: ScrollTrigger,
+    ) => {
+      Cls.isRefreshing = true;
+      vars.forEach((layerVars) => layerVars.onRefreshInit?.(self));
+      Cls.isRefreshing = false;
+    };
+
+    // refresh() on another instance on the page, which trips to 0 at rest.
+    const refreshElsewhere = () => {
+      document.body.insertAdjacentHTML(
+        'beforeend',
+        '<div class="otherRoot"><section class="otherScene"></section></div>',
+      );
+
+      const other = new StickyScrollTrigger(query('.otherRoot'));
+
+      other.createStickyTrigger({ trigger: query('.otherScene'), end: '+=100' });
+      other.refresh();
+    };
+
+    it('runs a kill right after the library\'s own trip at rest at once', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      gsapRefreshTrip(Cls, vars, self);
+      expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'instant' });
+      scrollTo.mockClear();
+      Cls.scrolling = true;
+      vars[0].onKill?.(self);
+      await flushMicrotasks();
+
+      expect(livePaddings()).toHaveLength(2);
+      expect(scrollTo.mock.calls).toEqual([[{ top: 2400, behavior: 'instant' }]]);
+      expect(Cls.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('holds a kill right after the library\'s own trip mid-scroll', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      Cls.scrolling = true;
+      gsapRefreshTrip(Cls, vars, self);
+      expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'instant' });
+      scrollTo.mockClear();
+      vars[0].onKill?.(self);
+      await flushMicrotasks();
+
+      expect(livePaddings()).toHaveLength(3);
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    it('holds a kill once the page has moved from the library\'s own trip', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      gsapRefreshTrip(Cls, vars, self);
+      window.scrollTo({ top: 2510, behavior: 'instant' });
+      scrollTo.mockClear();
+      Cls.scrolling = true;
+      vars[0].onKill?.(self);
+      await flushMicrotasks();
+
+      expect(livePaddings()).toHaveLength(3);
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    it('holds a kill once GSAP\'s count of the library\'s own trip is over', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      gsapRefreshTrip(Cls, vars, self);
+      clock += 500;
+      scrollTo.mockClear();
+      Cls.scrolling = true;
+      vars[0].onKill?.(self);
+      await flushMicrotasks();
+
+      expect(livePaddings()).toHaveLength(3);
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    it('runs a held batch once the library\'s own trip is the only scroll left', async () => {
+      const { Cls } = makeClass({ rec: 2500 });
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      Cls.scrolling = true;
+      vars[0].onKill?.(self);
+      await flushMicrotasks();
+      // The user's scroll stops; before the poll, another instance's refresh() trip restarts
+      // GSAP's count.
+      Cls.scrolling = false;
+      refreshElsewhere();
+      expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'instant' });
+      Cls.scrolling = true;
+      scrollTo.mockClear();
+      vi.advanceTimersByTime(100);
+
+      // The other instance's one too.
+      expect(livePaddings()).toHaveLength(3);
+      expect(scrollTo.mock.calls).toEqual([[{ top: 2400, behavior: 'instant' }]]);
       expect(vi.getTimerCount()).toBe(0);
     });
 
@@ -6074,7 +7079,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       controller.refresh();
 
       expect(livePaddings()).toHaveLength(2);
-      expect(scrollTo.mock.calls).toEqual([[{ top: 2400, behavior: 'instant' }]]);
+      expect(scrollTops(scrollTo)).toEqual([2400]);
     });
 
     // That function scrolls too, which mid-fling would stop it.
@@ -6158,7 +7163,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         controller.refresh();
 
         expect(paddingTotal()).toBe(300);
-        expect(scrollTo).not.toHaveBeenCalled();
+        expect(scrollTops(scrollTo)).toEqual([]);
 
         Cls.scrolling = false;
         vi.advanceTimersByTime(100);
@@ -6166,7 +7171,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         expect(livePaddings()).toHaveLength(0);
         expect(query('.root').parentElement).toBe(query('.host'));
-        expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
+        expect(scrollTops(scrollTo)).toEqual([2200]);
         expect(Cls.refresh).toHaveBeenCalledTimes(1);
       });
 
@@ -6178,6 +7183,10 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
           return `+=${dwell}`;
         });
+
+        // Takes GSAP's class, which tells it the page scrolls.
+        vars[0].onRefreshInit?.(self);
+
         const scrollTo = followScrollTo(2500);
 
         act = () => {
@@ -6191,7 +7200,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         await flushMicrotasks();
 
         expect(livePaddings()).toHaveLength(3);
-        expect(scrollTo).not.toHaveBeenCalled();
+        expect(scrollTops(scrollTo)).toEqual([]);
       });
 
       // GSAP measures in that refresh, and nothing refreshes it again once the scroll stops.
@@ -6260,7 +7269,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         // As at rest: the setup puts the dwell back, so the content isn't kept.
         expect(livePaddings()).toHaveLength(1);
-        expect(scrollTo).not.toHaveBeenCalled();
+        expect(scrollTops(scrollTo)).toEqual([]);
 
         Cls.scrolling = false;
         await flushMicrotasks();
@@ -6401,6 +7410,34 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         expect(query('.root').parentElement).toBe(query('.host'));
         expect(vi.getTimerCount()).toBe(0);
         expect(scrollTo).not.toHaveBeenCalled();
+      });
+
+      it('keeps the content on destroy() with only the library\'s own trip since the scroll', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { controller, vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(2500);
+
+        document.body.insertAdjacentHTML(
+          'beforeend',
+          '<div class="otherRoot"><section class="otherScene"></section></div>',
+        );
+
+        const other = new StickyScrollTrigger(query('.otherRoot'));
+
+        other.createStickyTrigger({ trigger: query('.otherScene'), end: '+=100' });
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        Cls.scrolling = false;
+        other.refresh();
+        expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'instant' });
+        scrollTo.mockClear();
+        Cls.scrolling = true;
+        controller.destroy();
+        await flushMicrotasks();
+
+        expect(livePaddings()).toHaveLength(1);
+        expect(scrollTo.mock.calls).toEqual([[{ top: 2200, behavior: 'instant' }]]);
+        other.destroy();
       });
 
       // As the held kill would have: the scroll has stopped, the poll just hasn't seen it yet.
@@ -6839,7 +7876,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       controller.refresh();
 
       expect(livePaddings()).toHaveLength(3);
-      expect(scrollTo).not.toHaveBeenCalled();
+      expect(scrollTops(scrollTo)).toEqual([0, 50]);
     });
 
     // An inner trigger at its outer's top: s2's freeze starts where s1's natural start ties.
@@ -6920,7 +7957,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         dwell = 30;
         await flushMicrotasks();
 
-        expect(scrollTo.mock.calls).toEqual([[{ top: 960, behavior: 'instant' }]]);
+        expect(scrollTops(scrollTo)).toEqual([0, 1150, 960]);
       });
 
       // As before any rebuild elsewhere: what moved it (a stuck ancestor, say) didn't move its
@@ -6966,7 +8003,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         dwell = 30;
         await flushMicrotasks();
 
-        expect(scrollTo.mock.calls).toEqual([[{ top: 1130, behavior: 'instant' }]]);
+        expect(scrollTops(scrollTo)).toEqual([0, 1150, 1130]);
       });
     });
 
@@ -7066,6 +8103,43 @@ describe('an instance that measured earlier in the same GSAP refresh', () => {
     gsap.gsapRefresh(true);
 
     expect(lower.start()).toBe(1300);
+  });
+
+  // A listener between the handlers kills a layer: the later handler only catches up, and the
+  // earlier instance, inside a sticky element of the page's own, measures again at 0.
+  it('measures again at 0 for a later handler that only caught up', () => {
+    let scroll = 0;
+
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => scroll);
+    vi.spyOn(window, 'scrollTo').mockImplementation((options) => {
+      scroll = (options as ScrollToOptions).top ?? scroll;
+    });
+    document.body.innerHTML = `
+      <div class="upper"><div class="root"><section class="u1"></section><section class="u2"></section></div></div>
+      <div class="lower" style="position: sticky; top: 0px"><div class="root"><section></section></div></div>
+    `;
+
+    const gsap = makeClass({ rec: 1200 });
+    const upper = new StickyScrollTrigger(query('.upper .root'));
+    const lower = new StickyScrollTrigger(query('.lower .root'));
+    const upperVars = ['.u1', '.u2'].map((trigger) => upper.createStickyTrigger({ trigger, end: '+=100' }));
+    const lowerVars = lower.createStickyTrigger({ trigger: query('.lower section'), end: '+=200' });
+
+    // Stuck at any scroll but the top.
+    tops.lower = () => 1000 + paddingIn('upper') + (scroll > 0 ? 300 : 0);
+    upper.refresh();
+    lower.refresh();
+    listen(gsap, lowerVars);
+
+    const self = Object.create(gsap.Cls.prototype) as ScrollTrigger;
+
+    gsap.listeners.push(() => upperVars[1].onKill?.(self));
+    listen(gsap, upperVars[0]);
+    scroll = 1200;
+    gsap.gsapRefresh(true);
+    scroll = 0;
+
+    expect((lowerVars.start as () => number)()).toBe(1000 + paddingIn('upper'));
   });
 
   it('measures again when a later handler moves an endTrigger outside its container', () => {

@@ -15,6 +15,7 @@ import {
   isRefreshing,
   removeGsapListener,
   revertAfterMeasure,
+  scrollRecord,
 } from './gsap';
 import type { ScrollTriggerClassLike } from './gsap';
 
@@ -349,13 +350,23 @@ const onGsapRefreshDone = (): void => {
   if (wasRefreshing && liveClients().length) rebuildSafely();
 };
 
+// The scroll GSAP's refresh goes back to: the record it took before its refreshInit, which a
+// listener ahead of the table's that scrolls to 0 to measure leaves alone. None (0) when GSAP took
+// none, in a refresh while its triggers are reverted (ScrollTrigger.js:274; a matchMedia switch
+// records first, 1370), and then the scroll as it is.
+const gsapRefreshScroll = (): number => {
+  const refreshing = Array.from(gsapClasses).find((cls) => isRefreshing(cls));
+
+  return scrollRecord(refreshing)?.read() ?? window.scrollY;
+};
+
 // GSAP calls render(-1) on what each refreshInit listener returns, once every trigger is measured.
 // Also where a GSAP refresh begins: no instance's refresh() may run inside it (its triggers
 // disabled, say), and GSAP still measures every plain trigger against the layout for 0.
 const onGsapRefreshInit = () => {
   if (gsapPhase === 'idle') {
     gsapPhase = 'measuring';
-    scrollBeforeGsapRefresh = window.scrollY;
+    scrollBeforeGsapRefresh = gsapRefreshScroll();
     queueMicrotask(onGsapRefreshDone);
 
     if (records.length) update(0);
@@ -806,6 +817,27 @@ export const setGsapRefreshReturn = (scroll: number): void => {
 
 // Promotes every demoted element and empties the table, for a refresh() that couldn't rebuild it.
 export const clearDormancy = clearTable;
+
+// For a measurement that scrolls to 0 as GSAP's refresh does: what sits past its freeze goes to
+// where it sits there, and nothing goes sticky.
+export const dormancyAtScrollZero = (): void => {
+  records.forEach((record) => {
+    if (record.state === 'after') applyState(record, 'before');
+  });
+};
+
+// What the table has moved down past its freeze: off its place at scroll 0, where it sits at the
+// top of its travel.
+export const movedPastFreeze = (): ReadonlySet<HTMLElement> =>
+  new Set(records.filter((record) => record.state === 'after' && record.travel > 0)
+    .map((record) => record.el));
+
+// The state for `scroll` once that measurement scrolls back, or for 0 while GSAP measures.
+export const dormancyAfterScrollZero = (scroll: number): void => {
+  if (!records.length) return;
+
+  update(gsapPhase === 'measuring' ? 0 : scroll);
+};
 
 // Promotes the given elements for good and drops them from the table, before something else puts
 // back its own values (a pin unwrapping its trigger).

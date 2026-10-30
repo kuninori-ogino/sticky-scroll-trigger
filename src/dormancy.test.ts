@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  dormancyAfterScrollZero,
+  dormancyAtScrollZero,
+  movedPastFreeze,
   invertStuckUnion,
   isWebKit,
   mergeIntervals,
@@ -704,12 +707,14 @@ describe('rebuildDormancy', () => {
   });
 
   // A fake ScrollTrigger class that keeps its listeners by event type.
-  const fakeGsap = () => {
+  // rec: the scroll record GSAP took before its refreshInit.
+  const fakeGsap = (rec = 0) => {
     const listeners: Record<string, () => unknown> = {};
 
     return {
       isRefreshing: true,
       listeners,
+      getScrollFunc: () => ({ rec }),
       addEventListener: (type: string, callback: () => unknown) => {
         listeners[type] = callback;
       },
@@ -797,6 +802,63 @@ describe('rebuildDormancy', () => {
     setGsapRefreshReturn(3500);
     result.render(-1);
     expect(el.style.top).toBe('500px');
+  });
+
+  // A refreshInit listener ahead of the table's scrolled to 0 to measure, as GSAP is about to.
+  it('applies the state for GSAP\'s record when a listener ahead has scrolled to 0', () => {
+    const el = setupSingle();
+    const refreshing = fakeGsap(3500);
+
+    addClient([el]);
+    scroll = 3500;
+    rebuildDormancy(refreshing);
+    refreshing.listeners.refresh();
+    scroll = 0;
+    refreshInit(refreshing).render(-1);
+    expect(el.style.top).toBe('500px');
+  });
+
+  // GSAP takes none in a refresh while its triggers are reverted.
+  it('applies the state for the scroll as it is when GSAP took no record', () => {
+    const el = setupSingle();
+    const refreshing = fakeGsap();
+
+    addClient([el]);
+    scroll = 3500;
+    rebuildDormancy(refreshing);
+    refreshing.listeners.refresh();
+    refreshInit(refreshing).render(-1);
+    expect(el.style.top).toBe('500px');
+  });
+
+  // After GSAP has gone back to its record, a measurement goes back where it was told to, which a
+  // kill's catch-up can move.
+  it('applies the state for the scroll a measurement goes back to after GSAP has measured', () => {
+    const el = setupSingle();
+    const refreshing = fakeGsap(3500);
+
+    addClient([el]);
+    scroll = 3500;
+    rebuildDormancy(refreshing);
+    refreshing.listeners.refresh();
+    refreshInit(refreshing).render(-1);
+    expect(el.style.top).toBe('500px');
+
+    dormancyAfterScrollZero(0);
+    expect(el.style.top).toBe('0px');
+  });
+
+  it('keeps the state for 0 after a measurement at 0 inside GSAP\'s refresh', () => {
+    const el = setupSingle();
+    const refreshing = fakeGsap();
+
+    addClient([el]);
+    scroll = 3500;
+    rebuildDormancy(refreshing);
+    refreshing.listeners.refresh();
+    refreshInit(refreshing);
+    dormancyAfterScrollZero(3500);
+    expect(el.style.top).toBe('0px');
   });
 
   it('puts the current scroll\'s state back on GSAP\'s refresh event when no restore ran', () => {
@@ -975,6 +1037,50 @@ describe('rebuildDormancy', () => {
 });
 
 // A refresh() writes sticky back on the elements it owns, over a demoted one's relative.
+// A measurement outside GSAP's refresh scrolls to 0 and back within the task, as GSAP's does.
+describe('a measurement at scroll 0', () => {
+  it('puts what sits past its freeze where it sits at 0, then back', () => {
+    const el = setupSingle();
+
+    addClient([el]);
+    scroll = 3500;
+    rebuildDormancy(gsap);
+    dormancyAtScrollZero();
+    expect(el.style.cssText).toBe('position: relative; top: 0px; z-index: 0; will-change: opacity;');
+
+    dormancyAfterScrollZero(3500);
+    expect(el.style.top).toBe('500px');
+  });
+
+  // What a read outside the table asks to know whether it must go to 0.
+  it('names what it moved past its freeze, and nothing at 0', () => {
+    const el = setupSingle();
+
+    addClient([el]);
+    scroll = 3500;
+    rebuildDormancy(gsap);
+    expect([...movedPastFreeze()]).toEqual([el]);
+
+    dormancyAtScrollZero();
+    expect([...movedPastFreeze()]).toEqual([]);
+  });
+
+  // Stuck at 0 is the state for 0, but making it sticky is the layout the table avoids.
+  it('makes nothing sticky', () => {
+    document.body.innerHTML = '<div id="parent"><div id="el" style="position: sticky; top: 0px"></div></div>';
+    place(byId('parent'), 0, 600);
+    place(byId('el'), 0, 100);
+
+    const el = byId('el');
+
+    addClient([el]);
+    scroll = 3500;
+    rebuildDormancy(gsap);
+    dormancyAtScrollZero();
+    expect(el.style.position).toBe('relative');
+  });
+});
+
 describe('an element a refresh() wrote sticky again while demoted', () => {
   const demoteThenRewrite = () => {
     const el = setupSingle();

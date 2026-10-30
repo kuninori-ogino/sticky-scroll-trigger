@@ -5,13 +5,13 @@
 // The part of the class the nested-sticky table listens to.
 export interface ScrollTriggerClassLike {
   isRefreshing?: boolean;
+  getScrollFunc?(element: Window): unknown;
   addEventListener?(type: 'refresh' | 'refreshInit', callback: () => unknown): void;
   removeEventListener?(type: 'refresh' | 'refreshInit', callback: () => unknown): void;
 }
 
 export type ScrollTriggerClass = {
   refresh(safe?: boolean): void;
-  getScrollFunc?(element: Window): unknown;
   isScrolling?(): boolean;
   isUpdating?: unknown;
 } & ScrollTriggerClassLike;
@@ -63,7 +63,7 @@ type ScrollRecord = { read(): number; write(value: number): void };
 // before its refreshInit (ScrollTrigger.js:1179) and doesn't go back to a record of 0 (1233),
 // which counts as none unless `zero`.
 export const scrollRecord = (
-  cls: ScrollTriggerClass | null | undefined,
+  cls: ClassArg,
   zero = false,
 ): ScrollRecord | null => {
   if (!cls || !isRefreshing(cls)) return null;

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>killAfterTrip fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        height: 400px;
+      }
+      .tail {
+        height: 6000px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- At rest at 2500, every layer's freeze is above the viewport. A refresh measures at 0 and
+         comes back, a scroll event GSAP counts as the page scrolling for 200-450 ms. -->
+    <div class="root"><section class="s0"></section><section class="s1"></section><section></section></div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const sticky = new StickyScrollTrigger('.root');
+      const s0 = ScrollTrigger.create(sticky.createStickyTrigger({ trigger: '.s0', end: '+=300' }));
+
+      ScrollTrigger.create(sticky.createStickyTrigger({ trigger: '.s1', end: '+=300' }));
+      ScrollTrigger.refresh();
+
+      const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+
+      // The scroll right after killing s0, once GSAP has seen the scroll event of the refresh
+      // (`refresh`: 'library' or 'gsap') at rest at 2500.
+      window.__killAfterRefresh = async (refresh) => {
+        window.scrollTo(0, 2500);
+        await frame();
+
+        while (ScrollTrigger.isScrolling()) await new Promise((resolve) => setTimeout(resolve, 50));
+
+        if (refresh === 'library') sticky.refresh();
+        else ScrollTrigger.refresh();
+
+        await frame();
+        await frame();
+
+        const counted = ScrollTrigger.isScrolling();
+
+        s0.kill();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        return { counted, scrollY: Math.round(window.scrollY) };
+      };
+      window.__ready = true;
+    </script>
+  </body>
+</html>

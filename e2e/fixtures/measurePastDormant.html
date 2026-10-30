@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>measurePastDormant fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        height: 300px;
+      }
+      .tail {
+        height: 6000px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Far below B, its nested-sticky table moves every wrapper past its freeze, down by its
+         travel, none of them sticky; #target sits inside them all, and A reads it, and ends a cover
+         on it. order=ab creates A first, so its layer handler comes before B's table in GSAP's
+         refreshInit dispatch. -->
+    <div class="rootA"><section class="sceneA"></section><section class="base"></section><section class="cover"></section></div>
+    <div class="rootB"></div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const rootB = document.querySelector('.rootB');
+
+      for (let i = 0; i < 8; i++) rootB.append(document.createElement('section'));
+
+      const target = document.createElement('div');
+
+      target.id = 'target';
+      rootB.lastElementChild.append(target);
+
+      let a;
+      let cover;
+      const createA = () => {
+        a = new StickyScrollTrigger('.rootA');
+        ScrollTrigger.create(a.createStickyTrigger({ trigger: '.sceneA', end: '+=300' }));
+        cover = ScrollTrigger.create(a.createOverlapScroll({
+          trigger: '.base',
+          cover: '.cover',
+          endTrigger: target,
+          end: 'top top',
+        }));
+      };
+      const createB = () => {
+        const b = new StickyScrollTrigger(rootB, { nestedStickyOptimization: 'always' });
+
+        [...rootB.children].forEach((trigger) => {
+          ScrollTrigger.create(b.createStickyTrigger({ trigger, end: '+=200' }));
+        });
+      };
+
+      if (new URLSearchParams(location.search).get('order') === 'ab') {
+        createA();
+        createB();
+      } else {
+        createB();
+        createA();
+      }
+
+      ScrollTrigger.refresh();
+
+      const atRest = async (y) => {
+        window.scrollTo(0, y);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+
+        while (ScrollTrigger.isScrolling()) await new Promise((resolve) => setTimeout(resolve, 50));
+      };
+
+      // A's read of #target at rest at `y`, and how many of the elements around it B's table has
+      // moved past their freeze.
+      window.__readAt = async (y) => {
+        await atRest(y);
+
+        let moved = 0;
+
+        for (let el = target.parentElement; el; el = el.parentElement) {
+          if (el.style.position === 'relative' && parseFloat(el.style.top) > 0) moved += 1;
+        }
+
+        return { read: Math.round(a.resolveScrollPosition(target, 'top top')), moved };
+      };
+      // The end GSAP gives the cover after a refresh of its own at rest at `y`.
+      window.__coverEndAt = async (y) => {
+        await atRest(y);
+        ScrollTrigger.refresh();
+
+        return Math.round(cover.end);
+      };
+      window.__ready = true;
+    </script>
+  </body>
+</html>

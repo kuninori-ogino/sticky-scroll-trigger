@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>measureAcrossNested fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        height: 300px;
+      }
+      .tail {
+        height: 4000px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- A's cover ends at #end, inside the last of B's 32 Scene layers, so every A read is held
+         across B's whole nested wrapper chain. -->
+    <div class="rootA"><section class="sceneA"></section><section class="base"></section><section></section></div>
+    <div class="rootB"></div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const rootB = document.querySelector('.rootB');
+
+      for (let i = 0; i < 32; i++) rootB.append(document.createElement('section'));
+
+      const end = document.createElement('div');
+
+      end.id = 'end';
+      rootB.lastElementChild.append(end);
+
+      const b = new StickyScrollTrigger(rootB);
+
+      [...rootB.children].forEach((trigger) => {
+        ScrollTrigger.create(b.createStickyTrigger({ trigger, end: '+=200' }));
+      });
+
+      const a = new StickyScrollTrigger('.rootA');
+
+      ScrollTrigger.create(a.createStickyTrigger({ trigger: '.sceneA', end: '+=300' }));
+      ScrollTrigger.create(a.createOverlapScroll({ trigger: '.base', endTrigger: '#end', end: 'top top' }));
+      // GSAP's refresh builds the nested-sticky table, which keeps WebKit's layout of the chain quick.
+      ScrollTrigger.refresh();
+
+      window.__refreshAt = (y) => {
+        window.scrollTo(0, y);
+
+        const start = performance.now();
+
+        a.refresh();
+
+        return performance.now() - start;
+      };
+    </script>
+  </body>
+</html>

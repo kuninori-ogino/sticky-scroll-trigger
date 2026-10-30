@@ -198,6 +198,15 @@ export const stripStickyPositions = (elements: readonly HTMLElement[]): (() => v
   return () => elements.forEach((el, i) => restoreInlinePosition(el, saved[i]));
 };
 
+// Reads, then restores what was set up for the read (a reset's return), on a throw too.
+export const readThenRestore = <T>(restore: () => void, read: () => T): T => {
+  try {
+    return read();
+  } finally {
+    restore();
+  }
+};
+
 // Puts a block of each height right after its element and returns a function that takes them out.
 export const insertSpacers = (
   spacers: readonly { after: HTMLElement; height: number }[],

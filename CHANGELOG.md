@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Killing some of an instance's `createStickyTrigger` layers, with at least one left, no longer reloads `<iframe>` elements or drops focus inside the shared container, including a layer that kills itself mid-scroll with `once: true` or in `onLeave`. The rebuild after the kill moved the container's contents, which GSAP's own pins don't do; the killed layers' wrappers now stay in place, no longer sticky and with no dwell, until the next rebuild (see [`refresh()`](README.md#refresh))
+- A resize or `refresh()` partway down the page now gives the same start and end positions as a fresh load when something it measures sits inside a stuck element it doesn't own: another instance's pin or layer (a cover's `endTrigger`, or the shared container itself), or a `position: sticky` element of the page's own around the container. Those positions, and what `resolveScrollPosition` and `getScrollTop` returned, came out late by however far that element was stuck, so effects started and ended late until a refresh at a scroll where nothing was stuck
 
 ## [0.14.0] - 2026-10-27
 
