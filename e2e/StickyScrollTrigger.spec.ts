@@ -2922,11 +2922,14 @@ interface KillKeepsStateWindow {
 }
 
 // Another layer's kill, or s1's own mid-scroll (onLeave, once: true), leaves s3's iframe loaded
-// once and its input focused, as GSAP's own pins do: the killed level stays in place.
+// once and its input focused, as GSAP's own pins do: the killed level stays in place. So does
+// killing the last Scene layer while a cover or a pin stays.
 for (const [mode, name] of [
   ['', 'killing another layer'],
   ['self', 'a layer killing itself in onLeave'],
   ['once', 'a once: true layer'],
+  ['cover', 'killing the last Scene layer with a cover left'],
+  ['pin', 'killing the last Scene layer with a pin left'],
 ]) {
   test(`${name} keeps an iframe and focus inside the container`, async ({ page }) => {
     await page.goto(`/fixtures/killKeepsState.html${mode ? `?${mode}` : ''}`);

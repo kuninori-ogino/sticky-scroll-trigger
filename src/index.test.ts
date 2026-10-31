@@ -936,11 +936,14 @@ describe('batching kill()', () => {
     expect(livePaddings()).toHaveLength(3);
   });
 
-  // With no Scene layer left there's no structure to keep, so the batch takes it down.
-  it('killing every Scene layer while a pin stays puts root back after the batch', async () => {
+  // With no Scene layer left, taking the structure down would still move root's subtree.
+  it.each(['cover', 'pin', 'pin outside root'])('killing every Scene layer while a %s stays leaves root in place', async (left) => {
     document.body.innerHTML = `
       <div class="host">
-        <div class="root"><section class="s1"></section><section class="s2"></section></div>
+        <div class="root">
+          <section class="s1"></section><section class="s2"></section>
+          <section class="s3"></section><section class="s4"></section>
+        </div>
         <div class="pin"></div>
       </div>`;
 
@@ -948,13 +951,22 @@ describe('batching kill()', () => {
     const vars = ['.s1', '.s2'].map((sel) =>
       controller.createStickyTrigger({ trigger: query(sel), end: '+=100' }));
 
-    controller.createStickyPin({ trigger: query('.pin') });
+    if (left === 'cover') {
+      controller.createOverlapScroll({ trigger: query('.s3') });
+    } else {
+      controller.createStickyPin({ trigger: query(left === 'pin' ? '.s3' : '.pin'), end: '+=100' });
+    }
+
     controller.refresh();
+
+    const wrapper = query('.root').parentElement;
+
     vars.forEach((entry) => entry.onKill?.(fakeSelf));
     await flushMicrotasks();
 
-    expect(query('.root').parentElement).toBe(query('.host'));
-    expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(0);
+    expect(query('.root').parentElement).toBe(wrapper);
+    expect(document.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(2);
+    expect(livePaddings()).toHaveLength(0);
   });
 
   // The refresh() the function runs makes s1's level inert after the outer one has planned its

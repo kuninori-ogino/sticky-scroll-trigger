@@ -40,11 +40,14 @@
       document.querySelector('.s3').appendChild(iframe);
 
       // ?self: s1 kills itself in onLeave; ?once: s1 has once: true. Otherwise the page kills s1.
+      // ?cover / ?pin: s1 is the only Scene layer and s2 a cover's or a pin's trigger (in ?cover,
+      // s3 is its cover).
       const params = new URLSearchParams(location.search);
       const once = params.has('once');
       const self = once || params.has('self');
       const sticky = new StickyScrollTrigger(root);
-      const triggers = ['.s1', '.s2', '.s3'].map((sel) =>
+      const left = ['cover', 'pin'].find((mode) => params.has(mode));
+      const triggers = (left ? ['.s1'] : ['.s1', '.s2', '.s3']).map((sel) =>
         ScrollTrigger.create(
           sticky.createStickyTrigger({
             trigger: sel,
@@ -54,6 +57,9 @@
           }),
         ),
       );
+
+      if (left === 'cover') ScrollTrigger.create(sticky.createOverlapScroll({ trigger: '.s2' }));
+      if (left === 'pin') ScrollTrigger.create(sticky.createStickyPin({ trigger: '.s2', end: '+=200' }));
 
       ScrollTrigger.refresh();
 

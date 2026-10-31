@@ -794,13 +794,12 @@ export default class StickyScrollTrigger {
     this.#built = false;
   }
 
-  // Whether every change since the build is a removal, with a Scene layer left to hold the
-  // structure.
+  // Whether every change since the build is a removal. With only covers or pins left, taking the
+  // structure down would move the container's subtree as a rebuild does.
   #onlyRemoved(): boolean {
     const built = new Set(this.#builtLayers);
 
-    return this.#layers.every((layer) => built.has(layer))
-      && this.#layers.some((layer) => layer.kind === 'scene');
+    return this.#layers.every((layer) => built.has(layer));
   }
 
   // Rebuilding would move the container's subtree, which reloads iframes and drops focus inside
@@ -848,9 +847,10 @@ export default class StickyScrollTrigger {
 
   // Defers the kills' refresh() to a microtask, or to a GSAP refresh later in the task, so kills
   // within the same task coalesce into one: rebuilding per kill would be O(n^2). That refresh()
-  // makes the killed Scene levels inert while a Scene layer is left (see #makeRemovedInert), and
-  // otherwise rebuilds. The last kill tears down without a rebuild instead (see #disarmIfEmpty),
-  // which moves the subtree once. While the page scrolls, both wait for the scroll to stop.
+  // makes the killed Scene levels inert (see #makeRemovedInert), and rebuilds only if a layer was
+  // also added or a trigger moved. The last kill tears down without a rebuild instead (see
+  // #disarmIfEmpty), which moves the subtree once. While the page scrolls, both wait for the
+  // scroll to stop.
   //
   // GSAP doesn't re-read function-valued start/end until ScrollTrigger.refresh() is called, so
   // refresh() alone would leave GSAP's cache holding stale freezeStart/freezeEnd. The microtask
