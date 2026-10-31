@@ -5750,7 +5750,7 @@ describe('nestedStickyOptimization', () => {
     for (const at of [5000, 0]) {
       scroll = at;
       window.dispatchEvent(new Event('scroll'));
-      expect(inert[0].style.cssText).toBe('');
+      expect(inert[0].style.cssText).toBe('transition: none !important;');
     }
 
     controller.destroy();
@@ -5808,11 +5808,14 @@ describe('nestedStickyOptimization', () => {
 
     const { controller, sceneVars } = setupPinned('always');
     const stickyAtRead: number[] = [];
+    const pinAtRead: string[] = [];
 
     window.dispatchEvent(new Event('scroll'));
     vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => {
+      // The pin trigger is never demoted: sticky, or static while a measurement reads.
+      pinAtRead.push(query('.pin').style.position);
       stickyAtRead.push(Array.from(document.querySelectorAll<HTMLElement>('*'))
-        .filter((el) => el.style.position === 'sticky').length);
+        .filter((el) => el.style.position === 'sticky' && !el.matches('.pin')).length);
 
       return scroll;
     });
@@ -5836,6 +5839,7 @@ describe('nestedStickyOptimization', () => {
 
     expect(stickyAtRead.length).toBeGreaterThan(0);
     expect(stickyAtRead.every((count) => count === 0)).toBe(true);
+    expect(pinAtRead).not.toContain('relative');
     // The scene's whole dwell is behind a scroll of 5000.
     expect(host.style.getPropertyValue(`--${id}-c0`)).toBe('100px');
     controller.destroy();
@@ -5881,7 +5885,10 @@ describe('nestedStickyOptimization', () => {
     sceneVars.onRefreshInit?.(fakeSelf);
     scroll = 5000;
     window.dispatchEvent(new Event('scroll'));
-    expect(query('.pin').style.position).toBe('relative');
+
+    const wrapper = query('.root').parentElement!;
+
+    expect(wrapper.style.position).toBe('relative');
     end = 'max';
     // Past the end of the task, so the build scans the document again.
     await flushMicrotasks();
@@ -5902,7 +5909,7 @@ describe('nestedStickyOptimization', () => {
     try {
       expect(() => controller.refresh()).toThrow(/'max' keyword/);
       // Not left relative without the z-index/will-change the refresh took back.
-      expect(query('.pin').style.position).toBe('sticky');
+      expect(wrapper.style.position).toBe('sticky');
       await flushMicrotasks();
     } finally {
       process.off('uncaughtException', onUncaught);
@@ -5914,10 +5921,10 @@ describe('nestedStickyOptimization', () => {
     controller.destroy();
   });
 
-  // The other instance's pin stays relative while this one fails: emptying the table gives it back
-  // whole, z-index/will-change included.
+  // The other instance's wrapper stays relative while this one fails: emptying the table gives it
+  // back whole, z-index/will-change included.
   it('gives up the table when only rebuilding it throws, and reports that error off the stack', async () => {
-    const { controller } = setupPinned('always');
+    const { controller, wrapper } = setupPinned('always');
 
     document.body.insertAdjacentHTML(
       'beforeend',
@@ -5928,7 +5935,7 @@ describe('nestedStickyOptimization', () => {
 
     other.createStickyTrigger({ trigger: query('.otherScene'), end: '+=100' });
     window.dispatchEvent(new Event('scroll'));
-    expect(query('.pin').style.position).toBe('relative');
+    expect(wrapper.style.position).toBe('relative');
     // Past the end of the task, so the build scans the document again.
     await flushMicrotasks();
 
@@ -5948,7 +5955,7 @@ describe('nestedStickyOptimization', () => {
     try {
       // A caller like #scheduleCatchUp carries on to GSAP's refresh: the error comes off the stack.
       expect(() => other.refresh()).not.toThrow();
-      expect(query('.pin').style.cssText).toBe('position: sticky; top: 0px;');
+      expect(wrapper.style.cssText).toBe('transition: none !important; position: sticky; top: 0px;');
       await flushMicrotasks();
     } finally {
       process.off('uncaughtException', onUncaught);
@@ -6008,11 +6015,12 @@ describe('nestedStickyOptimization', () => {
     })).toThrow('nestedStickyOptimization must be \'auto\', \'always\' or \'off\', got null');
   });
 
-  it('demotes this instance\'s wrappers and pins on refresh() with always', () => {
+  // A pin trigger is the page's own element: see DormancyClient.
+  it('demotes this instance\'s wrappers on refresh() with always, never its pin triggers', () => {
     const { controller, wrapper } = setupPinned('always');
 
     expect(wrapper.style.position).toBe('relative');
-    expect(query('.pin').style.position).toBe('relative');
+    expect(query('.pin').style.cssText).toBe('position: sticky; top: 0px;');
     controller.destroy();
   });
 
@@ -6024,10 +6032,10 @@ describe('nestedStickyOptimization', () => {
     controller.destroy();
   });
 
-  it('gives a killed pin\'s trigger back without anything demotion wrote', () => {
-    const { controller, pinVars } = setupPinned('always');
+  it('gives a killed pin\'s trigger back whole with always', () => {
+    const { controller, pinVars, wrapper } = setupPinned('always');
 
-    expect(query('.pin').style.position).toBe('relative');
+    expect(wrapper.style.position).toBe('relative');
     pinVars.onKill?.(fakeSelf);
 
     expect(query('.pin').style.cssText).toBe('');

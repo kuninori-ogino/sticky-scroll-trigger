@@ -595,6 +595,7 @@ export default class StickyScrollTrigger {
       this.#dormancyClient = {
         mode: optimization,
         ownedElements: () => this.#ownedStickyElements(),
+        demotableElements: () => this.#builtWrappers(),
       };
     }
   }
@@ -771,10 +772,11 @@ export default class StickyScrollTrigger {
 
   // Every element this instance has made sticky: the wrappers still built, and the wrapped pins.
   #ownedStickyElements(): HTMLElement[] {
-    return [
-      ...this.#builtLayers.flatMap((layer) => (layer.wrapper ? [layer.wrapper] : [])),
-      ...this.#wrappedPinTriggers(),
-    ];
+    return [...this.#builtWrappers(), ...this.#wrappedPinTriggers()];
+  }
+
+  #builtWrappers(): HTMLElement[] {
+    return this.#builtLayers.flatMap((layer) => (layer.wrapper ? [layer.wrapper] : []));
   }
 
   #wrappedPinTriggers(): HTMLElement[] {
@@ -1176,7 +1178,6 @@ export default class StickyScrollTrigger {
   #unwrapPinLayer(layer: PinLayer): boolean {
     if (!layer.outer) return false;
 
-    releaseDormant([layer.trigger]);
     unwrapPin(layer.outer, layer.trigger, layer.savedPosition);
     layer.outer = null;
     layer.inner = null;
@@ -1196,9 +1197,7 @@ export default class StickyScrollTrigger {
   // The wrappers the DOM holds, as #engagedWindows counts them: a killed layer's stay until its
   // catch-up runs.
   #resetSceneCoverStickyState(): () => void {
-    return stripStickyPositions(
-      this.#builtLayers.flatMap(({ wrapper }) => (wrapper ? [wrapper] : [])),
-    );
+    return stripStickyPositions(this.#builtWrappers());
   }
 
   // Snapshots and resets every wrapped pin's own sticky state, returning a function that puts it

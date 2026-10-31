@@ -36,16 +36,20 @@ const BUFFER_STEP_PX = 25;
 type State = 'in' | 'before' | 'after';
 
 // What one instance contributes. ownedElements() lists the elements the library made sticky: the
-// Scene/Cover wrappers and the pin triggers. Only those are ever demoted. The table holds it
-// weakly, so an instance dropped without destroy() can still be collected.
+// Scene/Cover wrappers and the pin triggers. demotableElements() lists the wrappers, the only ones
+// ever demoted: a pin trigger is the page's own, so a demotion would stay on it under the page's
+// CSS (a transition on top). The table holds it weakly, so an instance dropped without destroy()
+// can still be collected.
 export interface DormancyClient {
   mode: 'auto' | 'always';
   ownedElements(): readonly HTMLElement[];
+  demotableElements(): readonly HTMLElement[];
 }
 
 interface LiveClient {
   client: DormancyClient;
   owned: readonly HTMLElement[];
+  demotable: readonly HTMLElement[];
 }
 
 interface StickyRecord {
@@ -237,10 +241,10 @@ const stateAt = (record: StickyRecord, scroll: number): State => {
 };
 
 // Puts back what this module wrote, each property only while it still holds the value written: a
-// different value written since (gsap.set on a pin trigger, a refresh() writing sticky again)
-// stays, and an identical one can't be told apart. static is ours only after the static
-// measurement (afterMeasure), relative and the rest only on a demoted record. A refresh() writes
-// position and top together, so once the position isn't ours, the top isn't either.
+// different value written since (a refresh() writing sticky again) stays, and an identical one
+// can't be told apart. static is ours only after the static measurement (afterMeasure), relative
+// and the rest only on a demoted record. A refresh() writes position and top together, so once the
+// position isn't ours, the top isn't either.
 const promote = (record: StickyRecord, afterMeasure = false): void => {
   const { style } = record.el;
   const demoted = record.state !== 'in';
@@ -300,8 +304,7 @@ const listen = (on: boolean): void => {
   else window.removeEventListener('scroll', onScroll);
 };
 
-// Gives every demoted record back and empties the table. A detached one too: an author's pin
-// trigger taken off the page would otherwise keep what demotion wrote when it comes back.
+// Gives every demoted record back and empties the table, a detached one too.
 const clearTable = (): void => {
   records.forEach((record) => promote(record));
   records = [];
@@ -492,7 +495,9 @@ const liveClients = (): LiveClient[] => {
 
     const owned = client.ownedElements();
 
-    if (owned.some((el) => el.isConnected)) live.push({ client, owned });
+    if (owned.some((el) => el.isConnected)) {
+      live.push({ client, owned, demotable: client.demotableElements() });
+    }
   });
 
   return live;
@@ -597,7 +602,8 @@ export const rebuildDormancy = (scrollTriggerClass: ScrollTriggerClassLike | nul
   // old table would write its stale sticky values over the ones the refresh just wrote.
   if (!gsapRefreshing()) endGsapRefresh();
 
-  if (!gsapClasses.size || bodyScrolls()) {
+  // Pins only: nothing to switch, so no scan.
+  if (!gsapClasses.size || bodyScrolls() || !live.some(({ demotable }) => demotable.length)) {
     clearTable();
 
     return;
@@ -711,11 +717,12 @@ export const rebuildDormancy = (scrollTriggerClass: ScrollTriggerClassLike | nul
   const active = new Set(live.map(({ client }) => client).filter(
     (client) => client.mode === 'always' || (depths.get(client) ?? 0) >= AUTO_MIN_DEPTH,
   ));
+  const wrappers = new Set(live.flatMap((entry) => entry.demotable));
 
   all.forEach((record) => {
     const client = owned.get(record.el);
 
-    record.demotable = client !== undefined && active.has(client);
+    record.demotable = client !== undefined && active.has(client) && wrappers.has(record.el);
   });
 
   // Before clearTable below, so records an earlier build demoted go back too.
@@ -840,7 +847,7 @@ export const dormancyAfterScrollZero = (scroll: number): void => {
 };
 
 // Promotes the given elements for good and drops them from the table, before something else puts
-// back its own values (a pin unwrapping its trigger).
+// back its own values (a removed Scene level made inert).
 export const releaseDormant = (elements: readonly HTMLElement[]): void => {
   const released = new Set(elements);
 

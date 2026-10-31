@@ -79,7 +79,8 @@
       // runs its range to the page's end), ?important=1 holds the outer pin sticky with !important,
       // ?importantTop=1 overrides its top with !important, ?authorTop=auto leaves the author sticky
       // element with no inset, ?coverEnd=max|outside gives the pincover cover layer a 'max' end or
-      // one against an element outside the container.
+      // one against an element outside the container, ?transition= puts that transition on every div
+      // in .host, pin triggers and the library's own elements included.
       const params = new URLSearchParams(location.search);
       const layout = params.get('layout') ?? 'scenes';
       const mode = params.get('mode') ?? 'always';
@@ -91,6 +92,9 @@
 
       if (params.get('importantTop') === '1') {
         document.head.insertAdjacentHTML('beforeend', '<style>#pinOut { top: 140px !important; }</style>');
+      }
+      if (params.get('transition')) {
+        document.head.insertAdjacentHTML('beforeend', `<style>.host div { transition: ${params.get('transition')}; }</style>`);
       }
       if (params.get('authorTop') === 'auto') {
         document.head.insertAdjacentHTML('beforeend', '<style>.authorSticky { top: auto; }</style>');

@@ -223,6 +223,17 @@ export const insertSpacers = (
   return () => inserted.forEach((spacer) => spacer.remove());
 };
 
+// An element the structure adds, with transition: none !important so a broad page rule (* or
+// .section div, !important or not) can't animate what the library writes: a wrapper's top would
+// slide on each demotion instead of landing where the table computed it.
+const createStructureElement = (): HTMLDivElement => {
+  const el = document.createElement('div');
+
+  el.style.setProperty('transition', 'none', 'important');
+
+  return el;
+};
+
 // Scene layer: wraps inner in one level of stickyContainer{ stickyWrapper, stickyPadding }
 // and moves it inside the wrapper. With holdTrailingMargin, an empty flow-root after inner keeps a
 // bottom margin ending inner (its own or its content's) in the wrapper, where it can't move the end
@@ -232,9 +243,9 @@ export const wrapScene = (inner: HTMLElement, holdTrailingMargin: boolean) => {
     throw new Error(`StickyScrollTrigger: ${describeElement(inner)} is not attached to the document`);
   }
 
-  const container = document.createElement('div');
-  const wrapper = document.createElement('div');
-  const padding = document.createElement('div');
+  const container = createStructureElement();
+  const wrapper = createStructureElement();
+  const padding = createStructureElement();
 
   padding.setAttribute('aria-hidden', 'true');
   padding.style.pointerEvents = 'none';
@@ -244,7 +255,7 @@ export const wrapScene = (inner: HTMLElement, holdTrailingMargin: boolean) => {
   container.appendChild(padding);
 
   if (holdTrailingMargin) {
-    const sentinel = document.createElement('div');
+    const sentinel = createStructureElement();
 
     sentinel.style.display = 'flow-root';
     wrapper.appendChild(sentinel);
@@ -264,7 +275,7 @@ export const wrapCover = (trigger: HTMLElement): HTMLDivElement => {
     );
   }
 
-  const wrapper = document.createElement('div');
+  const wrapper = createStructureElement();
 
   parent.insertBefore(wrapper, parent.firstChild);
 
@@ -301,8 +312,8 @@ export const wrapPin = (trigger: HTMLElement) => {
     );
   }
 
-  const outer = document.createElement('div');
-  const inner = document.createElement('div');
+  const outer = createStructureElement();
+  const inner = createStructureElement();
 
   outer.style.display = 'flow-root';
   trigger.parentNode.insertBefore(outer, trigger);

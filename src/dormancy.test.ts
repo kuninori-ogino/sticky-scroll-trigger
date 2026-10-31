@@ -77,8 +77,17 @@ const scrollTo = (y: number) => {
 
 const clients: DormancyClient[] = [];
 
-const addClient = (elements: HTMLElement[], mode: DormancyClient['mode'] = 'always') => {
-  const client: DormancyClient = { mode, ownedElements: () => elements };
+// Every element demotable unless `demotable` names the ones that are.
+const addClient = (
+  elements: HTMLElement[],
+  mode: DormancyClient['mode'] = 'always',
+  demotable: HTMLElement[] = elements,
+) => {
+  const client: DormancyClient = {
+    mode,
+    ownedElements: () => elements,
+    demotableElements: () => demotable,
+  };
 
   clients.push(client);
   registerDormancyClient(client);
@@ -118,6 +127,19 @@ const setupSingle = () => {
   place(byId('el'), 2000, 100);
 
   return byId('el');
+};
+
+// Two owned levels: outer stuck for 300px from 1000, inner further down in its own parent, from
+// 3000 with 200px of travel.
+const setupNested = () => {
+  document.body.innerHTML = `
+    <div id="outerParent"><div id="outer" style="position: sticky; top: 0px">
+      <div id="innerParent"><div id="inner" style="position: sticky; top: 0px"></div></div>
+    </div></div>`;
+  place(byId('outerParent'), 1000, 400);
+  place(byId('outer'), 1000, 100);
+  place(byId('innerParent'), 3000, 300);
+  place(byId('inner'), 3000, 100);
 };
 
 describe('rebuildDormancy', () => {
@@ -198,14 +220,7 @@ describe('rebuildDormancy', () => {
   });
 
   it('places a nested element\'s range after its sticky ancestor\'s', () => {
-    document.body.innerHTML = `
-      <div id="outerParent"><div id="outer" style="position: sticky; top: 0px">
-        <div id="innerParent"><div id="inner" style="position: sticky; top: 0px"></div></div>
-      </div></div>`;
-    place(byId('outerParent'), 1000, 400);
-    place(byId('outer'), 1000, 100);
-    place(byId('innerParent'), 3000, 300);
-    place(byId('inner'), 3000, 100);
+    setupNested();
     addClient([byId('outer'), byId('inner')]);
     rebuildDormancy(gsap);
 
@@ -218,6 +233,35 @@ describe('rebuildDormancy', () => {
     expect(byId('inner').style.position).toBe('sticky');
     scrollTo(4101);
     expect(byId('inner').style.top).toBe('200px');
+  });
+
+  // A pin trigger: see DormancyClient.
+  it('never demotes an owned element it isn\'t told it may, and still places what\'s inside after it', () => {
+    setupNested();
+
+    const inner = byId('inner');
+    const rects = vi.mocked(Element.prototype.getBoundingClientRect);
+    const read = rects.getMockImplementation()!;
+    const outerAtRead: string[] = [];
+
+    // Still static while the measurement reads what it holds.
+    rects.mockImplementation(function (this: Element) {
+      if (this === inner) outerAtRead.push(byId('outer').style.position);
+
+      return read.call(this);
+    });
+    addClient([byId('outer'), inner], 'always', [inner]);
+    rebuildDormancy(gsap);
+
+    expect(outerAtRead.length).toBeGreaterThan(0);
+    expect(outerAtRead.every((position) => position === 'static')).toBe(true);
+    expect(byId('outer').style.cssText).toBe('position: sticky; top: 0px;');
+    expect(byId('inner').style.position).toBe('relative');
+    scrollTo(2700);
+    expect(byId('inner').style.position).toBe('sticky');
+    scrollTo(4101);
+    expect(byId('inner').style.top).toBe('200px');
+    expect(byId('outer').style.cssText).toBe('position: sticky; top: 0px;');
   });
 
   it('never demotes an element it doesn\'t own, or one owned by an instance left out', () => {
@@ -606,6 +650,18 @@ describe('rebuildDormancy', () => {
 
     expect(deep.every((el) => el.style.position === 'relative')).toBe(true);
     expect(byId('el').style.position).toBe('sticky');
+  });
+
+  // A pin-only page.
+  it('skips the whole-document scan when no client has an element it may switch', () => {
+    const el = setupSingle();
+    const scan = vi.spyOn(document, 'querySelectorAll');
+
+    addClient([el], 'always', []);
+    rebuildDormancy(gsap);
+
+    expect(scan).not.toHaveBeenCalledWith('*');
+    expect(el.style.cssText).toBe('position: sticky; top: 0px;');
   });
 
   it('skips the whole-document scan for auto clients nested less than 7 deep', () => {
@@ -1146,14 +1202,7 @@ describe('rebuildDormancy after a teardown', () => {
   // The torn-down instance's wrapper held the one left still for 300px; without it, inner reaches
   // the top at 3000 rather than 3300.
   it('rebuilds the ranges of the instances left', async () => {
-    document.body.innerHTML = `
-      <div id="outerParent"><div id="outer" style="position: sticky; top: 0px">
-        <div id="innerParent"><div id="inner" style="position: sticky; top: 0px"></div></div>
-      </div></div>`;
-    place(byId('outerParent'), 1000, 400);
-    place(byId('outer'), 1000, 100);
-    place(byId('innerParent'), 3000, 300);
-    place(byId('inner'), 3000, 100);
+    setupNested();
 
     const torn = addClient([byId('outer')]);
 

@@ -2393,9 +2393,11 @@ const sweepNestedSticky = async (page: Page, query: string, count: number) => {
 // position and the paint order exactly as full sticky has them. The demoted count keeps the
 // comparison from passing with nothing demoted.
 // pinEnd=+=20000 runs the inner pin's range to the page's end, which every wrapper above it would
-// carry past the end if moved down; important=1 holds a pin sticky against the switch, and
-// importantTop=1 overrides the top it would be switched at; authorTop=auto leaves the author sticky
-// element with no inset, which never sticks.
+// carry past the end if moved down; important=1 holds a pin trigger sticky against the static
+// measurement, and importantTop=1 gives it a top the library didn't write, both of which leave it
+// unmodeled; authorTop=auto leaves the author sticky element with no inset, which never sticks;
+// transition puts one on the pin triggers and the library's wrappers, which would make a demotion
+// slide, !important or not.
 for (const layout of [
   'scenes',
   'pincover',
@@ -2404,6 +2406,8 @@ for (const layout of [
   'pincover&pinEnd=%2B%3D20000',
   'pincover&important=1',
   'pincover&importantTop=1',
+  'scenes&transition=all%201s%20!important',
+  'pincover&transition=all%201s',
 ]) {
   test(`nestedStickyOptimization moves nothing on the ${layout} layout`, async ({ page }) => {
     test.slow();
@@ -2480,7 +2484,8 @@ for (const [created, reenter] of [[true, false], [true, true], [false, false]]) 
   });
 }
 
-test('destroy() gives back everything demotion wrote on a pin trigger', async ({ page }) => {
+// A pin trigger is the page's own element: a demotion would stay on it, under the page's CSS.
+test('nestedStickyOptimization never demotes a pin trigger, and destroy() gives it back as it was', async ({ page }) => {
   await sweepNestedSticky(page, 'layout=pincover&mode=always', 2);
 
   const before = await page.evaluate(async () => {
@@ -2489,14 +2494,17 @@ test('destroy() gives back everything demotion wrote on a pin trigger', async ({
 
     await w.__sweep([0]);
 
-    const demoted = pin.style.position;
+    const atZero = pin.style.position;
+    const demoted = w.__demoted().length;
 
     w.__sticky.destroy();
 
-    return { demoted, after: pin.style.cssText };
+    return { atZero, demoted, after: pin.style.cssText };
   });
 
-  expect(before.demoted).toBe('relative');
+  // The wrappers around it are demoted at 0.
+  expect(before.demoted).toBeGreaterThan(0);
+  expect(before.atZero).toBe('sticky');
   expect(before.after).toBe('z-index: 3;');
 });
 

@@ -118,6 +118,12 @@ describe('describeElement', () => {
   });
 });
 
+// See createStructureElement.
+const transitionOff = (el: HTMLElement) => [
+  el.style.getPropertyValue('transition'),
+  el.style.getPropertyPriority('transition'),
+];
+
 describe('wrapScene', () => {
   it('wraps inner in container{wrapper[inner], padding} and inserts it at the original position', () => {
     document.body.innerHTML
@@ -160,6 +166,16 @@ describe('wrapScene', () => {
     expect(padding.style.pointerEvents).toBe('none');
   });
 
+  it('turns transitions off on everything it adds', () => {
+    document.body.innerHTML = '<div><div id="inner"></div></div>';
+
+    const { container, wrapper, padding } = wrapScene(document.getElementById('inner')!, true);
+
+    [container, wrapper, padding, wrapper.lastElementChild as HTMLElement].forEach((el) => {
+      expect(transitionOff(el)).toEqual(['none', 'important']);
+    });
+  });
+
   it('throws for an inner not attached to the document', () => {
     expect(() => wrapScene(document.createElement('div'), false)).toThrow(/not attached to the document/);
   });
@@ -181,6 +197,17 @@ describe('wrapPin', () => {
     ]);
     expect(outer.firstElementChild).toBe(inner);
     expect(inner.firstElementChild).toBe(trigger);
+  });
+
+  it('turns transitions off on outer and inner, not on trigger', () => {
+    document.body.innerHTML = '<div><div id="trigger"></div></div>';
+
+    const trigger = document.getElementById('trigger')!;
+    const { outer, inner } = wrapPin(trigger);
+
+    expect(transitionOff(outer)).toEqual(['none', 'important']);
+    expect(transitionOff(inner)).toEqual(['none', 'important']);
+    expect(trigger.getAttribute('style')).toBeNull();
   });
 
   it('throws for a trigger not attached to the document', () => {
@@ -257,6 +284,12 @@ describe('wrapCover', () => {
     expect(ids(wrapper)).toEqual(['a', 'b', 'base']);
     expect(host.children[0]).toBe(wrapper);
     expect(ids(host).slice(1)).toEqual(['cover', 'tail']);
+  });
+
+  it('turns transitions off on the wrapper', () => {
+    const { base } = setup();
+
+    expect(transitionOff(wrapCover(base))).toEqual(['none', 'important']);
   });
 
   it('throws for a base not attached to the document', () => {
