@@ -6,6 +6,7 @@
  * A value cleared to measure past it is written again by the caller, even when unchanged.
  */
 
+import { restoreInlinePosition } from './dom';
 import type { InlinePosition } from './dom';
 
 export const commitSticky = (el: HTMLElement, topPx: number): void => {
@@ -15,8 +16,7 @@ export const commitSticky = (el: HTMLElement, topPx: number): void => {
 
 // Rolls a clear back after a pass that throws.
 export const commitPosition = (el: HTMLElement, saved: InlinePosition): void => {
-  el.style.position = saved.position;
-  el.style.top = saved.top;
+  restoreInlinePosition(el, saved);
 };
 
 export const commitHeight = (el: HTMLElement, height: string): void => {

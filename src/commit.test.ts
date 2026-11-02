@@ -110,6 +110,16 @@ describe('commitPosition', () => {
     expect(el.style.top).toBe('8px');
   });
 
+  it('puts an !important value back as one', () => {
+    const el = element('position: relative !important; top: 8px !important');
+    const saved = captureInlinePosition(el);
+
+    clearStickyForRead(el);
+    commitPosition(el, saved);
+
+    expect(el.style.cssText).toBe('position: relative !important; top: 8px !important;');
+  });
+
   it('puts back empty values, leaving no sticky behind', () => {
     const el = element();
     const saved = captureInlinePosition(el);

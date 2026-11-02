@@ -3321,6 +3321,49 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
     expect(trigger.style.top).toBe('8px');
   });
 
+  it('onKill puts an !important inline top back as one', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+
+    trigger.style.setProperty('top', '8px', 'important');
+
+    const vars = controller.createStickyPin({ trigger, endTrigger: query('.scene'), top: 39 });
+
+    controller.refresh();
+
+    expect(trigger.style.top).toBe('39px');
+
+    vars.onKill?.(fakeSelf);
+
+    expect(trigger.style.cssText).toBe('top: 8px !important;');
+  });
+
+  it('a first refresh() that throws leaves an !important inline top as it was', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+
+    trigger.style.setProperty('top', '8px', 'important');
+    controller.createStickyPin({ trigger, endTrigger: query('.scene'), end: 'max' });
+
+    expect(() => controller.refresh()).toThrow(/'max'/);
+    expect(trigger.style.cssText).toBe('top: 8px !important;');
+  });
+
+  it('getScrollTop() keeps an !important top set while the pin holds its trigger', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+    const outside = document.createElement('div');
+
+    document.body.append(outside);
+    controller.createStickyPin({ trigger, endTrigger: query('.scene'), top: 39 });
+    controller.refresh();
+    trigger.style.setProperty('top', '8px', 'important');
+    StickyScrollTrigger.getScrollTop(outside, [controller]);
+
+    expect(trigger.style.top).toBe('8px');
+    expect(trigger.style.getPropertyPriority('top')).toBe('important');
+  });
+
   it('a pin killed from a later pin\'s end function keeps its trigger\'s inline position', () => {
     const { query, controller } = setup();
     const trigger = query('.inside');

@@ -240,10 +240,27 @@ describe('wrapPin', () => {
 
     trigger.style.position = 'sticky';
     trigger.style.top = '39px';
-    unwrapPin(outer, trigger, { position: 'relative', top: '8px' });
+    unwrapPin(outer, trigger, {
+      position: { value: 'relative', priority: '' },
+      top: { value: '8px', priority: '' },
+    });
 
     expect(trigger.style.position).toBe('relative');
     expect(trigger.style.top).toBe('8px');
+  });
+
+  it('unwrapPin puts an !important inline top back as one', () => {
+    document.body.innerHTML = '<div id="host"><div id="trigger" style="top: 8px !important"></div></div>';
+
+    const trigger = document.getElementById('trigger')!;
+    const saved = captureInlinePosition(trigger);
+    const { outer } = wrapPin(trigger);
+
+    trigger.style.position = 'sticky';
+    trigger.style.top = '39px';
+    unwrapPin(outer, trigger, saved);
+
+    expect(trigger.style.cssText).toBe('top: 8px !important;');
   });
 });
 
@@ -252,6 +269,8 @@ describe('wrapPin', () => {
 // outer and inner out of the layout always puts them back. The sizes themselves are e2e's (the
 // "a pinned ... keeps its own box and its siblings in place" tests).
 describe('fitPinsToItems', () => {
+  const NO_POSITION = captureInlinePosition(document.createElement('div'));
+
   const rendered = (trigger: HTMLElement) => {
     trigger.getClientRects = () => [new DOMRect()] as unknown as DOMRectList;
   };
@@ -400,7 +419,7 @@ describe('fitPinsToItems', () => {
 
     document.getElementById('host')!.style.display = 'flex';
     fitPinsToItems([pin]);
-    unwrapPin(pin.outer, pin.trigger, { position: '', top: '' });
+    unwrapPin(pin.outer, pin.trigger, NO_POSITION);
 
     expect(pin.trigger.style.cssText).toBe('max-width: 50%;');
   });
@@ -412,7 +431,7 @@ describe('fitPinsToItems', () => {
 
     expect(pin.trigger.style.maxWidth).toBe('30px');
 
-    unwrapPin(pin.outer, pin.trigger, { position: '', top: '' });
+    unwrapPin(pin.outer, pin.trigger, NO_POSITION);
 
     expect(pin.trigger.style.cssText).toBe('max-width: 50% !important;');
   });
@@ -424,7 +443,7 @@ describe('fitPinsToItems', () => {
     pin.trigger.style.height = '7px';
     // The value written, made !important since.
     pin.trigger.style.setProperty('width', '30px', 'important');
-    unwrapPin(pin.outer, pin.trigger, { position: '', top: '' });
+    unwrapPin(pin.outer, pin.trigger, NO_POSITION);
 
     expect(pin.trigger.style.cssText).toBe('width: 30px !important; height: 7px;');
   });
@@ -441,7 +460,7 @@ describe('fitPinsToItems', () => {
     expect(() => fitPinsToItems([pin])).toThrow('read failed');
     expect(pin.trigger.style.width).toBe('30px');
 
-    unwrapPin(pin.outer, pin.trigger, { position: '', top: '' });
+    unwrapPin(pin.outer, pin.trigger, NO_POSITION);
 
     expect(pin.trigger.style.cssText).toBe('');
   });

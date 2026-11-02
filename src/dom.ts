@@ -180,22 +180,6 @@ const resetStickyPosition = (el: HTMLElement): void => {
   el.style.top = '';
 };
 
-// An element's inline position/top, captured to put back after a clear or overwrite.
-export interface InlinePosition {
-  position: string;
-  top: string;
-}
-
-export const captureInlinePosition = (el: HTMLElement): InlinePosition => ({
-  position: el.style.position,
-  top: el.style.top,
-});
-
-const restoreInlinePosition = (el: HTMLElement, saved: InlinePosition): void => {
-  el.style.position = saved.position;
-  el.style.top = saved.top;
-};
-
 // An element's inline value for one property, with its priority so an !important one goes back as
 // one.
 export interface InlineValue {
@@ -207,6 +191,22 @@ export const captureInline = (el: HTMLElement, property: string): InlineValue =>
   value: el.style.getPropertyValue(property),
   priority: el.style.getPropertyPriority(property),
 });
+
+// An element's inline position/top, captured to put back after a clear or overwrite.
+export interface InlinePosition {
+  position: InlineValue;
+  top: InlineValue;
+}
+
+export const captureInlinePosition = (el: HTMLElement): InlinePosition => ({
+  position: captureInline(el, 'position'),
+  top: captureInline(el, 'top'),
+});
+
+export const restoreInlinePosition = (el: HTMLElement, saved: InlinePosition): void => {
+  el.style.setProperty('position', saved.position.value, saved.position.priority);
+  el.style.setProperty('top', saved.top.value, saved.top.priority);
+};
 
 // Returns the value as the browser keeps it, for restoreIfWritten to compare.
 export const writeInline = (el: HTMLElement, property: string, value: string): string => {
