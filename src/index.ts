@@ -9,6 +9,7 @@ import {
   compareDocumentOrder,
   describeElement,
   documentTop,
+  fitPinsToItems,
   insertSpacers,
   liftAboveStickyWrapper,
   measureDocumentHeightWithoutPinRanges,
@@ -53,6 +54,7 @@ import type { ScrollTriggerClass } from './gsap';
 import {
   clearHeightForRead,
   clearStickyForRead,
+  commitCssText,
   commitHeight,
   commitInert,
   commitPosition,
@@ -1136,19 +1138,21 @@ export default class StickyScrollTrigger {
   // page the height it had without one. outer can't simply keep its natural height once the
   // refresh is done: inner holds the pin range, which runs far past trigger itself.
   //
-  // While inner is cleared, though, that natural height is the margin box already, since outer is
-  // a formatting context and trigger's margins land inside it instead of collapsing out. So the
-  // measurement below clears and reads back instead of adding up trigger's own height and margins,
-  // and the browser resolves the box at full precision, through whatever box-sizing, borders,
-  // floats or line boxes trigger happens to have.
+  // While inner is cleared, though, a block-flow pin's natural height is the margin box already,
+  // since outer is a formatting context and trigger's margins land inside it instead of collapsing
+  // out. So that pin's measurement clears and reads back instead of adding up trigger's own height
+  // and margins, and the browser resolves the box at full precision, through whatever box-sizing,
+  // borders, floats or line boxes trigger happens to have.
   //
   // This has to run before #refreshGeometry measures, since the height it writes is part of
   // the flow. Left to #planPinLayers, it would measure every Scene layer against the previous
   // refresh's height whenever a trigger's own height had changed, with no later pass to correct
   // it.
   #reservePinSpace() {
-    const wrapped = this.#pinLayers.flatMap(({ outer, inner }) =>
-      outer && inner ? [{ outer, inner, range: inner.style.height }] : [],
+    const wrapped = this.#pinLayers.flatMap(({ outer, inner, trigger }) =>
+      outer && inner
+        ? [{ outer, inner, trigger, savedStyle: outer.style.cssText, range: inner.style.height }]
+        : [],
     );
 
     // Every pin is cleared before any is measured, so a pin nested inside another's trigger
@@ -1159,9 +1163,26 @@ export default class StickyScrollTrigger {
       clearHeightForRead(inner);
     });
 
-    // Read in full before anything is written back, so all the writes share one reflow instead of
-    // forcing one per pin.
-    const reserved = wrapped.map(({ outer }) => measureUsedHeight(outer));
+    let reserved: number[];
+
+    try {
+      // An item pin's outer is sized from trigger's own box instead: the line stretches outer's
+      // natural height whatever trigger's.
+      const itemHeights = fitPinsToItems(wrapped);
+
+      // Read in full before anything is written back, so all the writes share one reflow
+      // instead of forcing one per pin.
+      reserved = wrapped.map(({ outer }, index) => itemHeights[index] ?? measureUsedHeight(outer));
+    } catch (error) {
+      // outer goes back whole, item box and cleared height with it: the last refresh's box is the
+      // better guess. trigger keeps whichever box fitPinsToItems left on it.
+      wrapped.forEach(({ outer, inner, savedStyle, range }) => {
+        commitCssText(outer, savedStyle);
+        commitHeight(inner, range);
+      });
+
+      throw error;
+    }
 
     wrapped.forEach(({ outer }, index) => {
       commitHeight(outer, `${reserved[index]}px`);

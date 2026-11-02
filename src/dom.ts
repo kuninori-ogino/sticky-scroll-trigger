@@ -127,10 +127,10 @@ const measureBorderWidth = (borderStyle: string, width: string): number => (
   borderStyle === 'none' || borderStyle === 'hidden' ? 0 : parseFloat(width)
 );
 
-// The height an element is currently using, at full precision, where offsetHeight rounds to whole
-// pixels. Reading it off the computed style keeps a transform out of the number, unlike
-// getBoundingClientRect: a scaled element still occupies its untransformed height in the flow, the
-// layout-not-paint measurement documentTop and offsetHeight both take.
+// The height (or width) an element is currently using, at full precision, where offsetHeight
+// rounds to whole pixels. Reading it off the computed style keeps a transform out of the number,
+// unlike getBoundingClientRect: a scaled element still occupies its untransformed height in the
+// flow, the layout-not-paint measurement documentTop and offsetHeight both take.
 // That computed height follows box-sizing, so a content-box element's padding and borders are
 // added back to reach the border box; all of them arrive resolved to px, percentages included. An
 // element with no used height at all (an inline box, a display:none subtree, outside the document)
@@ -140,23 +140,30 @@ const measureBorderWidth = (borderStyle: string, width: string): number => (
 // it reports (Safari's "always show scrollbars"), leaving the sum a whole scrollbar short. Where
 // offsetHeight is 0 the comparison is skipped, since jsdom reports 0 for everything and would
 // otherwise reject every measurement here.
-export const measureUsedHeight = (el: HTMLElement): number => {
-  const rounded = el.offsetHeight;
+const measureUsedSize = (el: HTMLElement, axis: 'height' | 'width'): number => {
+  const rounded = axis === 'height' ? el.offsetHeight : el.offsetWidth;
   const style = getComputedStyle(el);
-  const height = parseFloat(style.height);
+  const size = parseFloat(style[axis]);
 
-  if (!Number.isFinite(height)) return rounded;
+  if (!Number.isFinite(size)) return rounded;
 
+  const [start, end] = axis === 'height' ? (['Top', 'Bottom'] as const) : (['Left', 'Right'] as const);
   const measured = style.boxSizing === 'border-box'
-    ? height
-    : height
-      + parseFloat(style.paddingTop)
-      + parseFloat(style.paddingBottom)
-      + measureBorderWidth(style.borderTopStyle, style.borderTopWidth)
-      + measureBorderWidth(style.borderBottomStyle, style.borderBottomWidth);
+    ? size
+    : size
+      + parseFloat(style[`padding${start}`])
+      + parseFloat(style[`padding${end}`])
+      + measureBorderWidth(style[`border${start}Style`], style[`border${start}Width`])
+      + measureBorderWidth(style[`border${end}Style`], style[`border${end}Width`]);
 
   return rounded > 0 && Math.abs(measured - rounded) >= 1 ? rounded : measured;
 };
+
+export const measureUsedHeight = (el: HTMLElement): number => measureUsedSize(el, 'height');
+
+const measureUsedWidth = (el: HTMLElement): number => measureUsedSize(el, 'width');
+const marginBoxHeight = (el: HTMLElement, style: CSSStyleDeclaration) =>
+  measureUsedHeight(el) + parseFloat(style.marginTop) + parseFloat(style.marginBottom);
 
 export const compareDocumentOrder = (a: HTMLElement, b: HTMLElement): number => {
   const position = a.compareDocumentPosition(b);
@@ -324,6 +331,248 @@ export const wrapPin = (trigger: HTMLElement) => {
   return { outer, inner };
 };
 
+// Where trigger sits among its siblings, which outer takes over with trigger's place. GSAP's
+// pin-spacer copies most of these (_propNamesToCopy, where placeSelf and gridArea stand for the
+// longhands) but not flexGrow or clear, without which a grown flex item or a cleared float moves.
+// The offsets, margins and z-index it also copies stay on trigger. The flex longhands are what
+// outer goes by until a refresh() can measure trigger (one in a hidden tab, say), flex: 0 0 auto
+// after.
+const PIN_ITEM_PROPERTIES = [
+  'flexGrow',
+  'flexShrink',
+  'flexBasis',
+  'alignSelf',
+  'justifySelf',
+  'order',
+  'gridColumnStart',
+  'gridColumnEnd',
+  'gridRowStart',
+  'gridRowEnd',
+  'cssFloat',
+  'clear',
+  'verticalAlign',
+] as const;
+
+// The box outer is laid out in: its parent, or past a display: contents parent, the nearest
+// ancestor that has a box.
+const layoutContainer = (outer: HTMLElement): HTMLElement | null => {
+  let parent = outer.parentElement;
+
+  while (parent && getComputedStyle(parent).display === 'contents') parent = parent.parentElement;
+
+  return parent;
+};
+
+const FLOATS = ['left', 'right', 'inline-start', 'inline-end'];
+
+type ItemLayout = 'flex' | 'grid' | 'float' | 'inline';
+
+const hasOwnBox = (style: CSSStyleDeclaration) =>
+  style.display !== 'none' && style.display !== 'contents';
+const isBlockLevel = (style: CSSStyleDeclaration) =>
+  hasOwnBox(style) && !style.display.startsWith('inline');
+
+// How trigger is laid out where outer stands: as a flex or grid item, a float, an inline-level box
+// in a line (inline-block, say), or (null) in block flow, or with no box of its own at all.
+const itemLayout = (outer: HTMLElement, style: CSSStyleDeclaration): ItemLayout | null => {
+  if (!hasOwnBox(style)) return null;
+
+  const container = layoutContainer(outer);
+  const display = container ? getComputedStyle(container).display : '';
+
+  if (display.includes('flex')) return 'flex';
+
+  if (display.includes('grid')) return 'grid';
+
+  if (FLOATS.includes(style.cssFloat)) return 'float';
+
+  // An atomic box only (inline-block, inline-flex...): a plain inline one is a run of text that can
+  // wrap over lines, with no box of its own to hold.
+  return style.display.startsWith('inline-') ? 'inline' : null;
+};
+
+// outer's own display: a box in a line where trigger was one, a block otherwise, a formatting
+// context either way so trigger's margins stay inside it.
+const outerDisplay = (layout: ItemLayout | null) =>
+  (layout === 'inline' ? 'inline-block' : 'flow-root');
+
+interface WrappedPin {
+  outer: HTMLDivElement;
+  inner: HTMLDivElement;
+  trigger: HTMLElement;
+}
+
+// trigger's own box as the item, held on it in px as GSAP's _swapPinIn holds a pin's (max-width and
+// max-height at the width and height), so its percentages, a stretched height or a flexed width
+// don't resolve again inside outer.
+const TRIGGER_BOX = [
+  'width',
+  'max-width',
+  'height',
+  'max-height',
+  'padding-top',
+  'padding-right',
+  'padding-bottom',
+  'padding-left',
+  'margin-top',
+  'margin-right',
+  'margin-bottom',
+  'margin-left',
+] as const;
+
+interface HeldBox {
+  // With their priority, so an !important one goes back as one.
+  authored: { value: string; priority: string }[];
+  written: string[];
+}
+
+const heldBoxes = new WeakMap<HTMLElement, HeldBox>();
+
+const holdTriggerBox = (trigger: HTMLElement, values: readonly string[]) => {
+  const { style } = trigger;
+  const authored = TRIGGER_BOX.map((property) => ({
+    value: style.getPropertyValue(property),
+    priority: style.getPropertyPriority(property),
+  }));
+
+  TRIGGER_BOX.forEach((property, i) => {
+    style.setProperty(property, values[i]);
+  });
+  heldBoxes.set(trigger, {
+    authored,
+    // As read back, which is how a later comparison sees them.
+    written: TRIGGER_BOX.map((property) => style.getPropertyValue(property)),
+  });
+};
+
+// Puts trigger's own inline values back, each only while it still holds the value written: one set
+// since (gsap.set, say) stays. Returns what was held, if anything.
+const releaseTriggerBox = (trigger: HTMLElement): string[] | undefined => {
+  const held = heldBoxes.get(trigger);
+
+  if (!held) return undefined;
+
+  const { style } = trigger;
+
+  TRIGGER_BOX.forEach((property, i) => {
+    const { value, priority } = held.authored[i];
+    const ours = style.getPropertyValue(property) === held.written[i]
+      && !style.getPropertyPriority(property);
+
+    if (ours) style.setProperty(property, value, priority);
+  });
+  heldBoxes.delete(trigger);
+
+  return held.written;
+};
+
+// Makes each pin's outer take trigger's place as the flex or grid item, float or inline-level box
+// trigger was, and returns the height to reserve for each (undefined for a pin in block flow, whose
+// outer measures as it stands). Expects outer's and inner's heights cleared; if a read throws,
+// outer is the caller's to restore.
+//
+// Sized by its content, outer would shrink a flex item, float or inline-block to trigger's text,
+// reserve only a stretched item's content and break an inline-level trigger's line. So trigger's
+// margin box is read as the item, with outer and inner set to display: contents (moving trigger
+// out instead would reload an iframe inside it and drop focus), and held on outer in px, as GSAP's
+// pin-spacer holds it; a grid item's outer takes its width from its cell. trigger's own box is
+// held on it too (TRIGGER_BOX).
+//
+// All reads come before the writes that follow them, for every pin at once, so a refresh costs a
+// fixed number of style and layout passes.
+export const fitPinsToItems = (pins: readonly WrappedPin[]): (number | undefined)[] => {
+  // Released first, so trigger's box is read as its own rules make it.
+  const held = pins.map(({ trigger }) => releaseTriggerBox(trigger));
+
+  try {
+    return fitReleasedPins(pins);
+  } catch (error) {
+    // Held again, to match the outer the caller puts back.
+    pins.forEach(({ trigger }, i) => {
+      const values = held[i];
+
+      if (values) holdTriggerBox(trigger, values);
+    });
+
+    throw error;
+  }
+};
+
+const fitReleasedPins = (pins: readonly WrappedPin[]): (number | undefined)[] => {
+  // Live, so the reads below see the layout as it stands by then.
+  const styles = pins.map(({ trigger }) => getComputedStyle(trigger));
+  const layouts = pins.map(({ outer }, i) => itemLayout(outer, styles[i]));
+  // A trigger with no box under a hidden ancestor (a hidden tab's), or off the document, has none
+  // to hold yet, so outer goes by the properties alone until a refresh() can measure one.
+  const rendered = pins.map(({ trigger }, i) =>
+    !!layouts[i] && trigger.getClientRects().length > 0);
+  // In block flow only a block-level trigger's clear moves outer (an inline one's, or one with no
+  // box, applies to nothing); the rest go back to unset.
+  const copied = styles.map((style, i) => PIN_ITEM_PROPERTIES.map((property) =>
+    (layouts[i] || (property === 'clear' && isBlockLevel(style)) ? style[property] : '')));
+  const items = pins.flatMap((pin, index) => {
+    const layout = layouts[index];
+
+    return layout && rendered[index] ? [{ ...pin, index, layout }] : [];
+  });
+
+  pins.forEach(({ outer }, i) => {
+    outer.style.width = '';
+    PIN_ITEM_PROPERTIES.forEach((property, j) => {
+      outer.style[property] = copied[i][j];
+    });
+    outer.style.display = rendered[i] ? 'contents' : outerDisplay(layouts[i]);
+  });
+  items.forEach(({ inner }) => {
+    inner.style.display = 'contents';
+  });
+
+  let boxes: { width: number | undefined; height: number; triggerBox: string[] }[];
+
+  try {
+    boxes = items.map(({ trigger, index, layout }) => {
+      const style = styles[index];
+
+      return {
+        width: layout === 'grid'
+          ? undefined
+          : measureUsedWidth(trigger)
+            + parseFloat(style.marginLeft)
+            + parseFloat(style.marginRight),
+        height: marginBoxHeight(trigger, style),
+        triggerBox: TRIGGER_BOX.map((property) =>
+          style.getPropertyValue(property.replace(/^max-/, ''))),
+      };
+    });
+  } finally {
+    items.forEach(({ outer, inner, layout }) => {
+      outer.style.display = outerDisplay(layout);
+
+      inner.style.display = '';
+    });
+  }
+
+  const reserved: (number | undefined)[] = pins.map(() => undefined);
+
+  // A box that didn't come out in px is left to outer's own measurement, and trigger to its own
+  // rules.
+  items.forEach(({ outer, trigger, layout, index }, i) => {
+    const { width, height, triggerBox } = boxes[i];
+
+    if (!Number.isFinite(height) || (width !== undefined && !Number.isFinite(width))) return;
+
+    if (layout === 'flex') outer.style.flex = '0 0 auto';
+
+    if (width !== undefined) outer.style.width = `${width}px`;
+
+    reserved[index] = height;
+
+    if (triggerBox.every((value) => value.endsWith('px'))) holdTriggerBox(trigger, triggerBox);
+  });
+
+  return reserved;
+};
+
 export const unwrapPin = (
   outer: HTMLDivElement,
   trigger: HTMLElement,
@@ -332,6 +581,7 @@ export const unwrapPin = (
   const parent = outer.parentNode;
 
   restoreInlinePosition(trigger, saved);
+  releaseTriggerBox(trigger);
 
   if (parent) parent.insertBefore(trigger, outer);
 

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A `createStickyPin` trigger in a flex or grid container, a floated one, or an `inline-block` now keeps its own box and no longer moves the elements around it: its wrapper holds the box the container gave the trigger, and the trigger's width, height, padding and margins are held in px as GSAP holds a pin's, so the neighbor of a `flex: 0 0 200px` sidebar keeps its width and a sidebar the row stretched keeps its full height. The wrapper used to size to the trigger's content, so the pin shrank to its text and the sibling took the rest of the row, a trigger placed by `grid-area` or `order` moved, a floated one stopped floating and pushed what followed down, one with `clear` sat beside the float before it, and an `inline-block` one broke its line (see [`createStickyPin`](README.md#createstickypinoptions))
+
 ## [0.15.0] - 2026-11-01
 
 - Killing some of an instance's `createStickyTrigger` layers, with at least one left, no longer reloads `<iframe>` elements or drops focus inside the shared container, including a layer that kills itself mid-scroll with `once: true` or in `onLeave`. The rebuild after the kill moved the container's contents, which GSAP's own pins don't do; the killed layers' wrappers now stay in place, no longer sticky and with no dwell, until the next rebuild (see [`refresh()`](README.md#refresh))

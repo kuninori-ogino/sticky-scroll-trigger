@@ -1,7 +1,7 @@
 /**
  * The values refresh() writes: sticky tops, Scene paddings, pin reserves and ranges. Structure,
- * cover lifts, teardown and measurements that undo their own writes go through dom.ts and
- * structure.ts.
+ * cover lifts, the item boxes a pin's outer and trigger hold (fitPinsToItems), teardown and
+ * measurements that undo their own writes go through dom.ts and structure.ts.
  *
  * A value cleared to measure past it is written again by the caller, even when unchanged.
  */
@@ -21,6 +21,12 @@ export const commitPosition = (el: HTMLElement, saved: InlinePosition): void => 
 
 export const commitHeight = (el: HTMLElement, height: string): void => {
   el.style.height = height;
+};
+
+// Rolls a pin's outer back whole (reserve and item box) after a pass that throws. Through CSSOM,
+// which a strict Content Security Policy still applies; it ignores setAttribute('style').
+export const commitCssText = (el: HTMLElement, cssText: string): void => {
+  el.style.cssText = cssText;
 };
 
 // A Scene level a kill leaves in the DOM: no longer sticky, and no dwell.

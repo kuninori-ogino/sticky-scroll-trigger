@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   clearHeightForRead,
   clearStickyForRead,
+  commitCssText,
   commitHeight,
   commitInert,
   commitPosition,
@@ -118,5 +119,20 @@ describe('commitPosition', () => {
 
     expect(el.style.position).toBe('');
     expect(el.style.top).toBe('');
+  });
+});
+
+describe('commitCssText', () => {
+  // jsdom applies no Content Security Policy, which would ignore a setAttribute('style') here.
+  it('puts the inline style back whole, through CSSOM', () => {
+    const el = element('height: 5px; width: 20px');
+    const saved = el.style.cssText;
+    const setAttribute = vi.spyOn(el, 'setAttribute');
+
+    el.style.cssText = 'display: contents; flex: 0 0 auto';
+    commitCssText(el, saved);
+
+    expect(el.style.cssText).toBe('height: 5px; width: 20px;');
+    expect(setAttribute).not.toHaveBeenCalled();
   });
 });

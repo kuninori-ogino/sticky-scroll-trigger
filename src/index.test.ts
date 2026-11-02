@@ -2928,6 +2928,44 @@ describe('createStickyPin()', () => {
     expect(outer.style.height).toBe('60px');
   });
 
+  // Throwing inside fitPinsToItems, and after it has written a box that's no longer an item's.
+  it.each([
+    ['reading the item\'s box', (trigger: HTMLElement) => {
+      trigger.getClientRects = () => {
+        throw new Error('read failed');
+      };
+    }],
+    ['reading outer\'s height', (trigger: HTMLElement) => {
+      trigger.getClientRects = () => [] as unknown as DOMRectList;
+      Object.defineProperty(trigger.parentElement!.parentElement!, 'offsetHeight', {
+        get: () => {
+          throw new Error('read failed');
+        },
+      });
+    }],
+  ])('puts outer back whole, and inner\'s height, when %s throws', (_, sabotage) => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+
+    styleOuter('112.5px');
+    query('.root').style.display = 'flex';
+    trigger.getClientRects = () => [new DOMRect()] as unknown as DOMRectList;
+    controller.createStickyPin({ trigger, endTrigger: query('.scene') });
+    controller.refresh();
+
+    const inner = trigger.parentElement!;
+    const outer = inner.parentElement!;
+    const before = [outer.getAttribute('style'), inner.style.height];
+
+    expect(outer.style.width).toBe('0px');
+
+    trigger.style.order = '3';
+    sabotage(trigger);
+
+    expect(() => controller.refresh()).toThrow('read failed');
+    expect([outer.getAttribute('style'), inner.style.height]).toEqual(before);
+  });
+
   // trigger's own top margin collapses through inner and stops at outer, which contain:layout
   // makes a formatting context, so a pinned trigger rests at exactly the top its start clause
   // names. An overflow or contain on inner would make it a formatting context too, and the margin

@@ -1308,6 +1308,205 @@ test('pins in two instances held past the end let the page shrink', async ({ pag
   expect(height).toBe(1500);
 });
 
+// pinItemBox.html's hooks. Boxes are [left, document top, width, height] by element id.
+type PinItemBoxes = Record<string, number[]>;
+interface PinItemBoxWindow {
+  __ready: boolean;
+  __natural: PinItemBoxes;
+  __pageWidth: number;
+  __boxes: () => PinItemBoxes;
+  __ranges: () => Record<string, number[]>;
+  __refresh: () => void;
+}
+
+const loadPinItemBox = async (page: Page, query: string) => {
+  await page.goto(`/fixtures/pinItemBox.html?${query}`);
+  await page.waitForFunction(() => (window as never as PinItemBoxWindow).__ready);
+
+  // Read after a second refresh(), which finds inner as the first one left it.
+  return page.evaluate(() => {
+    const win = window as never as PinItemBoxWindow;
+
+    win.__refresh();
+
+    const boxes = win.__boxes();
+
+    window.scrollTo(0, 400);
+
+    return {
+      natural: win.__natural,
+      boxes,
+      pageWidth: [win.__pageWidth, document.documentElement.scrollWidth],
+      pinTopAt400: document.getElementById('pin')!.getBoundingClientRect().top,
+      ranges: win.__ranges(),
+    };
+  });
+};
+
+// Sub-pixel layout can round a width a hair differently once outer holds it in px.
+const expectBoxes = (actual: PinItemBoxes, expected: PinItemBoxes, label: string) => {
+  expect(Object.keys(actual), label).toEqual(Object.keys(expected));
+  Object.entries(expected).forEach(([id, box]) => {
+    box.forEach((value, i) => expect(actual[id][i], `${label} #${id}[${i}]`).toBeCloseTo(value, 0));
+  });
+};
+
+// Every box but the pins' own.
+const withoutPins = (boxes: PinItemBoxes) =>
+  Object.fromEntries(Object.entries(boxes).filter(([id]) => id !== 'pin' && id !== 'pinB'));
+
+// A pin's wrappers take trigger's place among its siblings. Without outer holding trigger's box
+// there, a flex item shrinks to its text and the sibling takes the rest, a stretched item reserves
+// only its content, and a float stops floating; without trigger holding its own, its percentages,
+// a stretched height or a flexed width resolve again inside outer.
+for (const [layout, description, query] of [
+  ['basis', 'flex item with a fixed basis', ''],
+  ['percent', 'flex item with a percentage width', ''],
+  ['grow', 'growing flex item', ''],
+  ['start', 'flex item not stretched', ''],
+  ['margin', 'flex item with margins', ''],
+  ['autoMargin', 'flex item pushed by an auto margin', ''],
+  ['widthGrow', 'flex item grown past the width it declares', ''],
+  ['widthShrink', 'flex item shrunk below the width it declares', ''],
+  ['heightPercent', 'flex item with a percentage height', ''],
+  ['column', 'item growing down a flex column', ''],
+  ['grid', 'grid item', ''],
+  ['gridArea', 'grid item placed by area', ''],
+  ['gridLines', 'grid item on explicit grid lines', ''],
+  ['gridPercent', 'grid item with a percentage width', ''],
+  ['childMargin', 'flex item whose child has margins', 'content=childMargin'],
+  ['percent', 'flex item inside a display: contents element', 'contents=1'],
+  ['percentAuto', 'flex item with a percentage width wrapping text', 'content=text'],
+  ['widthGrowAuto', 'flex item grown past its width wrapping text', 'content=text'],
+  ['percentRight', 'flex item with a percentage width after its sibling', ''],
+  ['float', 'float', ''],
+  ['floatPercent', 'float with a percentage width', ''],
+  ['floatClear', 'float clearing the one before it', ''],
+  ['blockClear', 'block clearing a float', ''],
+  ['inlineBlock', 'inline-block', ''],
+  ['hidden', 'flex item hidden with display: none', ''],
+  ['block', 'block with margins', ''],
+]) {
+  test(`a pinned ${description} keeps its own box and its siblings in place`, async ({ page }) => {
+    const result = await loadPinItemBox(page, `layout=${layout}&${query}`);
+
+    // #child's top margin collapses through trigger inside outer, where the item held it, moving
+    // trigger's own box down off its content (README "createStickyPin").
+    if (layout === 'childMargin') {
+      expectBoxes(withoutPins(result.boxes), withoutPins(result.natural), layout);
+    } else {
+      expectBoxes(result.boxes, result.natural, layout);
+    }
+
+    // A float's outer held too wide moves no sibling's box, only the page's width, so that's
+    // checked too.
+    expect(result.pageWidth[1], `${layout} page width`).toBe(result.pageWidth[0]);
+  });
+}
+
+// What README "createStickyPin" recommends for keeping an item's own box: the item stays the
+// page's own element, and a plain div inside it is the pin, so nothing has to stand in for it.
+for (const layout of ['basis', 'percent', 'autoMargin', 'widthGrow', 'heightPercent', 'gridLines', 'floatPercent']) {
+  test(`a div pinned inside a ${layout} item keeps every box`, async ({ page }) => {
+    const result = await loadPinItemBox(page, `layout=${layout}&wrap=1`);
+
+    expectBoxes(result.boxes, result.natural, layout);
+    expect(result.pinTopAt400).toBeCloseTo(0, 0);
+  });
+}
+
+for (const pins of ['pin,pinB', 'pinB,pin']) {
+  test(`two pins in one flex row keep their siblings in place, created as ${pins}`, async ({ page }) => {
+    const result = await loadPinItemBox(page, `layout=two&pins=${pins}`);
+
+    expectBoxes(result.boxes, result.natural, pins);
+  });
+}
+
+test('a pinned flex item leaves a Scene layer below as it was, created either side of it', async ({
+  page,
+}) => {
+  const scenes = [];
+
+  for (const scene of ['before', 'after']) {
+    const result = await loadPinItemBox(page, `layout=basis&scene=${scene}`);
+
+    expectBoxes(withoutPins(result.boxes), withoutPins(result.natural), scene);
+    expect(result.boxes.pin[2]).toBeCloseTo(200, 0);
+    expect(result.pinTopAt400).toBeCloseTo(0, 0);
+    scenes.push(result.ranges.scene);
+  }
+
+  expect(scenes[1]).toEqual(scenes[0]);
+  expect(scenes[0]).toEqual([1400, 1700]);
+});
+
+// A trigger in a hidden part of the page has no box to hold, so outer goes by the flex properties
+// it copied until a refresh() can measure one.
+test('a flex item pinned while hidden keeps its width once shown, and its siblings on refresh()', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/pinItemBox.html?layout=basis&hide=1');
+  await page.waitForFunction(() => (window as never as PinItemBoxWindow).__ready);
+
+  // Shown and read in one task, so no refresh() comes in between.
+  const { shown, refreshed, natural } = await page.evaluate(() => {
+    const win = window as never as PinItemBoxWindow;
+
+    document.getElementById('wrap')!.style.display = '';
+
+    const width = win.__boxes().pin[2];
+
+    win.__refresh();
+
+    return { shown: width, refreshed: win.__boxes(), natural: win.__natural };
+  });
+
+  expect(shown).toBeCloseTo(200, 0);
+  expectBoxes(withoutPins(refreshed), withoutPins(natural), 'hide');
+});
+
+// outer holds the item's box in px, as GSAP's pin-spacer does, so the box is the one the container
+// gave trigger at the last refresh().
+test('a pinned flex item takes the box a resized container gives it on refresh()', async ({ page }) => {
+  for (const layout of ['basis', 'percent', 'grow']) {
+    const { natural } = await loadPinItemBox(page, `layout=${layout}&width=900`);
+    const { boxes } = await loadPinItemBox(page, `layout=${layout}&narrow=1`);
+
+    expectBoxes(withoutPins(boxes), withoutPins(natural), layout);
+  }
+});
+
+// The box is read with the wrappers out of the layout, not with trigger moved out of them.
+test('refresh() of a pinned flex item keeps an iframe and focus inside it', async ({ page }) => {
+  await loadPinItemBox(page, 'layout=basis&content=iframe');
+
+  const result = await page.evaluate(async () => {
+    const input = document.getElementById('input') as HTMLInputElement;
+    const wrapped = document.getElementById('pin')!.parentElement!.id !== 'row';
+    let loads = 0;
+    let blurs = 0;
+
+    document.querySelector('iframe')!.addEventListener('load', () => loads++);
+    input.focus();
+    input.value = 'abc';
+    input.setSelectionRange(1, 2);
+    input.addEventListener('blur', () => blurs++);
+    (window as never as PinItemBoxWindow).__refresh();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    return {
+      wrapped,
+      loads,
+      blurs,
+      focused: document.activeElement === input,
+      selection: [input.selectionStart, input.selectionEnd],
+    };
+  });
+
+  expect(result).toEqual({ wrapped: true, loads: 0, blurs: 0, focused: true, selection: [1, 2] });
+});
+
 // The element side of createStickyPin's start clause resolves against trigger's own height:
 // 'bottom bottom' has to become a sticky top of viewportHeight - 60, a number the clause never
 // states. jsdom reports every height as 0, so that term only shows up in a real browser.

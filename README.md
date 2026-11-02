@@ -295,6 +295,22 @@ Clauses resolve exactly as they do elsewhere, including the one-token forms that
 
 `trigger` keeps its own space in the page: every [`refresh()`](#refresh) sizes its wrapper to `trigger`'s margin box, so registering a pin doesn't shorten the document or move what follows. The wrapping does change margin collapsing, though. `trigger`'s vertical margins stop at that wrapper instead of collapsing with its siblings', and no sizing can give that back, since the collapsing partner sits outside it. A `margin-bottom: 30px` above a `trigger` with `margin-top: 20px` occupies 30px unpinned and 50px pinned.
 
+In a flex or grid container, floated, or inline-level (`inline-block`, say), the wrapper takes over `trigger`'s place, and `trigger` keeps its own box inside it, as with GSAP's pin-spacer: every `refresh()` reads the box the container gives `trigger`, holds it on the wrapper in px (a grid item's width is left to the grid), and writes `trigger`'s width, height, padding and margins in px, as GSAP writes a pin's (`max-width` and `max-height` too, at the width and height). A `clear` on `trigger` applies to the wrapper too, wherever it applied to `trigger`.
+
+Those values stay as last read until the next `refresh()`, which a window resize runs on its own; a container resized any other way, or content or a class that changes `trigger`'s size, needs one, and so does a `trigger` that had no box when it last ran (inside a hidden tab, say), which until then sits by its own flex or grid properties alone. Each `refresh()` puts `trigger`'s own inline values for those properties back before it reads, and a kill or `destroy()` puts them back for good; a value set on one of them since the last `refresh()` (with `gsap.set`, say) is kept instead. A CSS `transition` on any of them plays on `trigger` each time a `refresh()` changes them, through sizes that are neither the old one nor the new.
+
+Two differences remain, since `trigger` is now a box inside the wrapper rather than the container's item. Its content's vertical margins can collapse through its top or bottom edge where it has no padding or border there, shifting `trigger`'s own box, background included, by that margin while the content stays put. And an `inline-block` `trigger` with `vertical-align: middle`, `text-top` or `bottom` sits lower, aligned in a line of the wrapper's own instead of the one around it; `baseline` and `top` line up as before, and what follows doesn't move. To avoid these, pin an element inside the item instead:
+
+```html
+<!-- the flex item, styled as before -->
+<aside class="sidebar">
+  <!-- createStickyPin({ trigger: '.sidebar__pin' }) -->
+  <div class="sidebar__pin">…</div>
+</aside>
+```
+
+The item keeps its place and size, background included, and only what's inside it is pinned, where GSAP's `pin: true` on the item moves the item's whole box.
+
 Internally, the element wrapping `trigger` renders beyond its own section's bounds, into the visual area of following elements. Make sure the ancestor section containing `trigger` isn't hidden behind a later section in DOM order (e.g. via `position: relative; z-index: ...`).
 
 See the repository's `ARCHITECTURE.md` ("How `createStickyPin` accounts for nested-sticky lag") for how a pin's release allows for the dwell of Scene layers between `trigger` and `endTrigger`, and why `trigger` needs two nested wrapper divs.

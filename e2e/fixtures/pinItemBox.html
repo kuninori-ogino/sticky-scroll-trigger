@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinItemBox fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .head {
+        height: 200px;
+      }
+      .tail {
+        height: 3000px;
+      }
+      .after {
+        height: 400px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="head"></div>
+    <div id="wrap"></div>
+    <div class="tail"></div>
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      // One layout per page load, a row holding #pin and #main (and #pinB for two), with the row's
+      // style, then #pin's, then #main's. ?pins= lists which of pin/pinB to pin, in creation order;
+      // ?scene=before|after adds a Scene layer on #after, created before or after the pins.
+      // ?width= sets the row's width from the start, ?narrow=1 sets it to 900px after the pins'
+      // first refresh() and refreshes again.
+      const layouts = {
+        basis: ['display: flex; height: 1200px', 'flex: 0 0 200px', 'flex: 1'],
+        percent: ['display: flex; height: 1200px; padding: 0 40px', 'width: 25%', 'flex: 1'],
+        grow: ['display: flex; height: 1200px', 'flex: 1', 'flex: 3'],
+        start: ['display: flex; align-items: flex-start', 'flex: 0 0 200px; height: 300px', 'flex: 1; height: 1200px'],
+        margin: ['display: flex; height: 1200px; gap: 24px', 'flex: 0 0 200px; margin: 20px', 'flex: 1'],
+        autoMargin: ['display: flex; height: 1200px', 'flex: 0 0 200px; margin-left: auto; height: 300px', 'flex: 0 0 300px; order: -1'],
+        column: ['display: flex; flex-direction: column; height: 1200px', 'flex: 1', 'flex: 0 0 100px'],
+        grid: ['display: grid; grid-template-columns: 200px 1fr; height: 1200px', '', ''],
+        gridArea: ['display: grid; grid-template-columns: 1fr 200px; grid-template-areas: &quot;main side&quot;; height: 1200px', 'grid-area: side', 'grid-area: main'],
+        gridPercent: ['display: grid; grid-template-columns: 400px 1fr; height: 1200px', 'width: 50%', ''],
+        gridLines: ['display: grid; grid-template-columns: 1fr 200px; height: 1200px', 'grid-column: 2; grid-row: 1', 'grid-column: 1; grid-row: 1'],
+        childMargin: ['display: flex; height: 1200px', 'flex: 0 0 200px', 'flex: 1'],
+        float: ['', 'float: left; width: 200px; height: 300px', 'height: 1200px; margin-left: 220px'],
+        block: ['', 'height: 300px; margin: 30px 0', 'height: 900px'],
+        two: ['display: flex; height: 1200px', 'flex: 0 0 200px', 'flex: 1'],
+        widthGrow: ['display: flex; height: 1200px', 'width: 100px; flex-grow: 1', 'flex: 0 0 600px'],
+        widthShrink: ['display: flex; height: 1200px', 'width: 1500px', 'flex: 0 0 300px'],
+        percentAuto: ['display: flex', 'width: 25%', 'flex: 1'],
+        widthGrowAuto: ['display: flex', 'width: 100px; flex-grow: 1', 'flex: 0 0 600px'],
+        percentRight: ['display: flex; height: 1200px', 'width: 25%; order: 2', 'flex: 1'],
+        heightPercent: ['display: flex; height: 1200px', 'flex: 0 0 200px; height: 50%', 'flex: 1'],
+        floatPercent: ['', 'float: left; width: 25%; height: 300px', 'display: flow-root; height: 1200px'],
+        floatClear: ['', 'float: left; clear: left; width: 200px; height: 300px', 'height: 1200px'],
+        blockClear: ['', 'clear: both; height: 300px', 'height: 1200px'],
+        hidden: ['display: flex', 'display: none; flex: 0 0 200px; margin: auto', 'flex: 1; height: 100px'],
+        inlineBlock: ['', 'display: inline-block; width: 200px; height: 300px', 'display: inline-block; width: 300px; height: 100px'],
+      };
+      const params = new URLSearchParams(location.search);
+      const name = params.get('layout');
+      const [rowStyle, pinStyle, mainStyle] = layouts[name];
+      const content = {
+        childMargin: '<p id="child" style="margin: 40px 0; height: 50px"></p>',
+        text: 'lorem ipsum dolor sit amet '.repeat(60),
+      }[params.get('content')] ?? 'pin';
+      const pinB = name === 'two' ? '<aside id="pinB" style="width: 25%">pinB</aside>' : '';
+      // floatClear and blockClear have a float of their own ahead of #pin, which #pin clears.
+      const lead = ['floatClear', 'blockClear'].includes(name) ? '<div id="lead" style="float: left; width: 200px; height: 100px"></div>' : '';
+      // ?contents=1 puts #pin inside a display: contents element, still an item of the row.
+      // ?wrap=1 gives the layout's item style to #item instead, with #pin a plain div inside it.
+      const [open, close] = [
+        params.get('contents') ? '<div style="display: contents">' : '',
+        params.get('contents') ? '</div>' : '',
+      ];
+      const item = params.get('wrap')
+        ? `<aside id="item" style="${pinStyle}"><div id="pin">${content}</div></aside>`
+        : `<aside id="pin" style="${pinStyle}">${content}</aside>`;
+
+      document.getElementById('wrap').innerHTML = `<div class="root">
+          <div id="row" style="${rowStyle}${params.get('width') ? `; width: ${params.get('width')}px` : ''}">
+            ${lead}${open}${item}${close}
+            <main id="main" style="${mainStyle}">main</main>${pinB}
+          </div>
+          <section id="after" class="after"></section>
+        </div>`;
+
+      const ids = ['lead', 'item', 'pin', 'pinB', 'main', 'after', 'child'].filter((id) => document.getElementById(id));
+      const boxes = () => Object.fromEntries(ids.map((id) => {
+        const rect = document.getElementById(id).getBoundingClientRect();
+
+        return [id, [rect.left, rect.top + window.scrollY, rect.width, rect.height]];
+      }));
+
+      window.__natural = boxes();
+      window.__pageWidth = document.documentElement.scrollWidth;
+
+      // ?hide=1 builds the pins with the page's content hidden, for the test to show again.
+      if (params.get('hide')) document.getElementById('wrap').style.display = 'none';
+
+      const sticky = new StickyScrollTrigger('.root');
+      const scene = () => ScrollTrigger.create(sticky.createStickyTrigger({ trigger: '#after', end: '+=300' }));
+      const triggers = {};
+
+      if (params.get('scene') === 'before') triggers.scene = scene();
+
+      (params.get('pins') ?? 'pin').split(',').forEach((id) => {
+        triggers[id] = ScrollTrigger.create(sticky.createStickyPin({ trigger: `#${id}`, end: '+=300' }));
+      });
+
+      if (params.get('scene') === 'after') triggers.scene = scene();
+
+      ScrollTrigger.refresh();
+
+      if (params.get('narrow')) {
+        document.getElementById('row').style.width = '900px';
+        ScrollTrigger.refresh();
+      }
+
+      // ?content=iframe adds an iframe and an input to #pin once it's wrapped, and waits for the frame.
+      if (params.get('content') === 'iframe') {
+        const frame = document.createElement('iframe');
+        const loaded = new Promise((resolve) => frame.addEventListener('load', resolve, { once: true }));
+
+        frame.srcdoc = 'frame';
+        frame.style.cssText = 'width: 150px; height: 80px';
+        document.getElementById('pin').append(frame, Object.assign(document.createElement('input'), { id: 'input' }));
+        await loaded;
+      }
+
+      window.__boxes = boxes;
+      window.__ranges = () => Object.fromEntries(
+        Object.entries(triggers).map(([id, trigger]) => [id, [trigger.start, trigger.end]]),
+      );
+      window.__refresh = () => {
+        sticky.refresh();
+        ScrollTrigger.refresh();
+      };
+      window.__ready = true;
+    </script>
+  </body>
+</html>
