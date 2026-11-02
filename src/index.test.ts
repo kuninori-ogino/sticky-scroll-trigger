@@ -4422,9 +4422,13 @@ describe('refresh() pass ordering', () => {
 
     let written = false;
     const readsAfter: string[] = [];
+    const anchorStyle = query('#anchor').style;
+    const { setProperty } = anchorStyle;
 
-    traceStyleProperty(query('#anchor'), 'scrollMarginTop', () => {
-      written = true;
+    vi.spyOn(anchorStyle, 'setProperty').mockImplementation((property, ...rest) => {
+      if (property === 'scroll-margin-top') written = true;
+
+      setProperty.call(anchorStyle, property, ...rest);
     });
     (['offsetTop', 'offsetHeight', 'offsetParent'] as const).forEach((key) => {
       const { get } = Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)!;

@@ -88,6 +88,8 @@
  * far off the caller wants to land, and what the element's own CSS already says.
  */
 
+import { captureInline, restoreIfWritten, writeInline } from './dom';
+import type { InlineValue } from './dom';
 import { TIE_TOLERANCE_PX } from './freezeWindow';
 
 // Reserved custom property for nudging where a target lands, independent of both the dwell
@@ -102,14 +104,17 @@ export interface SceneDwell {
   freezeEnd: number;
 }
 
-// A target element's own inline scroll-margin-top, as it was before this module first wrote to it.
-// Restores the element on destroy, and lets a later sync() put a target back to its pre-module
-// state before re-reading the author's computed value (see sync's two-pass comment for why that
-// re-read happens every time).
+// A target's own inline scroll-margin-top from before the library's last write over it, that write
+// as the browser keeps it, and the instance that made it. Shared by every instance, so a target
+// moved into another instance's container still reads as a library write, and only the instance
+// that wrote last hands it back.
 interface TargetSnapshot {
-  inline: string;
+  authored: InlineValue;
+  written: string;
+  owner: string;
 }
 
+const snapshots = new WeakMap<HTMLElement, TargetSnapshot>();
 let nextInstanceSuffix = 0;
 // A fixed browser capability, so this only needs computing once, at load.
 const supportsScrollDrivenAnimations = typeof CSS !== 'undefined'
@@ -193,7 +198,6 @@ export const createScrollMarginSync = (
   // would ever want them, so the listener is never attached rather than left firing as a no-op
   // until destroy().
   const usesJsRamp = !usesCssRamp && targetSelector !== null;
-  const snapshots = new WeakMap<HTMLElement, TargetSnapshot>();
   // Elements currently carrying a value written here, so a target that stops matching the
   // selector (its id removed, say) gets handed back rather than left with a stale correction.
   let written = new Set<HTMLElement>();
@@ -225,7 +229,9 @@ export const createScrollMarginSync = (
   const restoreTarget = (target: HTMLElement) => {
     const snapshot = snapshots.get(target);
 
-    target.style.scrollMarginTop = snapshot ? snapshot.inline : '';
+    if (snapshot?.owner === instanceId) {
+      restoreIfWritten(target, 'scroll-margin-top', snapshot.authored, snapshot.written);
+    }
   };
 
   const stopRamps = () => {
@@ -304,16 +310,23 @@ export const createScrollMarginSync = (
       // only keeps the caller's sticky resets ahead of every write of this module's own.
       const naturalTops = measureNaturalTops(targets);
 
-      // Pass 1: snapshot each target on first sight, then put every previously-written one back to
-      // its pre-module inline value, so pass 2 can read the author's own scroll-margin-top fresh.
-      // Without the reset, pass 2 would read back this module's own calc() and mistake it for the
-      // author's value, leaving every sync() stuck on whatever that value was the first time (a
-      // header height that changes at a breakpoint, or via JS, would never be picked up again).
+      // Pass 1: put every target still holding a library write back to the author's inline value,
+      // so pass 2 reads the author's scroll-margin-top instead of our calc() (a header height
+      // changed at a breakpoint would go unnoticed). Any other inline value, one set by JS since
+      // the last sync included, is the author's and becomes the snapshot.
       targets.forEach((target) => {
         const existing = snapshots.get(target);
 
-        if (!existing) snapshots.set(target, { inline: target.style.scrollMarginTop });
-        else if (written.has(target)) target.style.scrollMarginTop = existing.inline;
+        if (existing
+          && restoreIfWritten(target, 'scroll-margin-top', existing.authored, existing.written)) {
+          return;
+        }
+
+        snapshots.set(target, {
+          authored: captureInline(target, 'scroll-margin-top'),
+          written: '',
+          owner: instanceId,
+        });
       });
 
       const consumed = ramps
@@ -336,9 +349,14 @@ export const createScrollMarginSync = (
           return `clamp(0px, (${margin}px - var(${OFFSET_PROPERTY}, 0px)) * 1000000,`
             + ` ${freezeEnd - freezeStart}px)`;
         }).join(' + ');
+        const snapshot = snapshots.get(target)!;
 
-        target.style.scrollMarginTop
-          = `calc(${authorPx}px + var(${OFFSET_PROPERTY}, 0px) + ${consumed} - (${lag}))`;
+        snapshot.written = writeInline(
+          target,
+          'scroll-margin-top',
+          `calc(${authorPx}px + var(${OFFSET_PROPERTY}, 0px) + ${consumed} - (${lag}))`,
+        );
+        snapshot.owner = instanceId;
       });
 
       const next = new Set(targets);

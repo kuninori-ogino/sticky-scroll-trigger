@@ -227,6 +227,49 @@ describe('sync', () => {
     );
   });
 
+  it('picks up an inline scroll-margin-top set since the last sync, and hands that one back', () => {
+    const root = query('.root');
+    const sync = createSync();
+
+    query('#after').style.scrollMarginTop = '40px';
+    sync.sync([dwell(0, 800)], root, naturalTops);
+    query('#after').style.scrollMarginTop = '120px';
+    sync.sync([dwell(0, 800)], root, naturalTops);
+
+    expect(query('#after').style.scrollMarginTop).toBe(
+      correction(root, { top: 400, windows: [[0, 800]], authorPx: 120 }),
+    );
+
+    sync.restore();
+
+    expect(query('#after').style.scrollMarginTop).toBe('120px');
+  });
+
+  // Folding the other instance's calc() in would count its dwell on top of this one's.
+  it('reads the author\'s value under another instance\'s correction on a target moved in', () => {
+    const rootA = query('.root');
+    const rootB = document.createElement('div');
+    const after = query('#after');
+    const syncA = createSync('div[id]', rootA);
+    const syncB = createSync('div[id]', rootB);
+
+    document.body.appendChild(rootB);
+    after.style.scrollMarginTop = '40px';
+    syncA.sync([dwell(0, 800)], rootA, naturalTops);
+    rootB.appendChild(after);
+    syncB.sync([dwell(0, 300)], rootB, naturalTops);
+    syncA.sync([dwell(0, 800)], rootA, naturalTops);
+
+    expect(after.style.scrollMarginTop).toBe(
+      correction(rootB, { top: 400, windows: [[0, 300]], authorPx: 40 }),
+    );
+
+    syncA.restore();
+    syncB.restore();
+
+    expect(after.style.scrollMarginTop).toBe('40px');
+  });
+
   // A target that stops matching (its id removed, say) has to be handed back rather than left
   // carrying a correction nothing updates any more.
   it('restores a target that no longer matches the selector', () => {
@@ -279,6 +322,28 @@ describe('restore', () => {
 
     expect(query('#before').style.scrollMarginTop).toBe('');
     expect(query('#after').style.scrollMarginTop).toBe('40px');
+  });
+
+  it('leaves an inline value set since the last sync where it is', () => {
+    const sync = createSync();
+
+    query('#after').style.scrollMarginTop = '40px';
+    sync.sync([dwell(0, 800)], query('.root'), naturalTops);
+    query('#after').style.scrollMarginTop = '120px';
+    sync.restore();
+
+    expect(query('#after').style.scrollMarginTop).toBe('120px');
+  });
+
+  it('puts an !important inline value back as one', () => {
+    const sync = createSync();
+
+    query('#after').style.setProperty('scroll-margin-top', '40px', 'important');
+    sync.sync([dwell(0, 800)], query('.root'), naturalTops);
+    sync.restore();
+
+    expect(query('#after').style.getPropertyValue('scroll-margin-top')).toBe('40px');
+    expect(query('#after').style.getPropertyPriority('scroll-margin-top')).toBe('important');
   });
 
   // Asserted on the call rather than on behavior, because a leaked listener is invisible from the
