@@ -691,6 +691,19 @@ describe('liftAboveStickyWrapper', () => {
     expect(lifted('tail')).toBe('-/-');
   });
 
+  it('puts back the inline static or auto it wrote over, !important included', () => {
+    document.body.innerHTML
+      = '<div id="host"><div id="cover" style="position: static !important; z-index: auto"></div></div>';
+
+    const restore = liftAboveStickyWrapper(byId('cover'));
+
+    expect(lifted('cover')).toBe('relative/1');
+
+    restore();
+
+    expect(byId('cover').style.cssText).toBe('position: static !important; z-index: auto;');
+  });
+
   // A caller may restyle the covering side after registration (gsap.set, say), and the restore has
   // no business taking that value back.
   it('leaves a value written since the lift alone', () => {

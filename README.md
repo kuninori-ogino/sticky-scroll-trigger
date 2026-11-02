@@ -195,7 +195,7 @@ Registers an overlap-scroll effect (`trigger` gets pinned while its siblings fro
 
 A `trigger` shorter than the viewport that also sits within a viewport height of the document top makes that default resolve to a negative freeze-window start, so part of the rise plays before scroll 0. The freeze window is not clamped here; see [Position syntax](#position-syntax) for why and how to avoid it.
 
-`createOverlapScroll` adjusts `position`/`z-index` on the covering side only when needed, never overrides explicit values, and restores its changes on GSAP `kill()`. The restore clears a property only while it still holds the value the lift wrote, so a different value you set on the covering side afterwards (a `gsap.set()`, say) survives.
+`createOverlapScroll` sets `position`/`z-index` on the covering side only where they compute to `static`/`auto`, so it never overrides other values, and restores its changes on GSAP `kill()`. The restore puts back the element's own inline value, `!important` included, and only while the property still holds the value the lift wrote, so a different value you set on the covering side afterwards (a `gsap.set()`, say) survives.
 
 Every [`refresh()`](#refresh) runs that check again over the covering side as it stands: it raises an element added since, and hands back a property your own CSS has turned on in the meantime. Where the covering side holds a `createStickyPin` `trigger`, the pin's own wrapper rises in its place and the pinned element is left alone.
 

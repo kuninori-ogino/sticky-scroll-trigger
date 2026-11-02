@@ -3708,6 +3708,26 @@ describe('cover z-order lift re-sync', () => {
     expect(cover.style.zIndex).toBe('1');
   });
 
+  it('keeps lifting a cover whose inline static and auto override the stylesheet', () => {
+    document.body.innerHTML = `
+      <style>.cover { position: absolute; z-index: 9; }</style>
+      <div class="root">
+        <section class="base"></section>
+        <section class="cover" style="position: static; z-index: auto"></section>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+
+    controller.createOverlapScroll({ trigger: query('.base'), cover: query('.cover') });
+    controller.refresh();
+
+    expect(getComputedStyle(query('.cover')).position).toBe('relative');
+
+    controller.destroy();
+
+    expect(query('.cover').style.cssText).toBe('position: static; z-index: auto;');
+  });
+
   it('keeps a z-index the caller writes inline after registration', () => {
     const { controller } = setupCover();
     const cover = query('.cover');
