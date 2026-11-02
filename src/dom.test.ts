@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  captureInline,
   captureInlinePosition,
   compareDocumentOrder,
   describeElement,
@@ -14,11 +15,13 @@ import {
   resolveElement,
   resolveEndTrigger,
   resolveRoot,
+  restoreIfWritten,
   unwrapCover,
   unwrapPin,
   wrapCover,
   wrapPin,
   wrapScene,
+  writeInline,
 } from './dom';
 
 // jsdom has no layout engine, so offsetTop/offsetParent/clientTop/offsetHeight are always 0/null,
@@ -473,6 +476,22 @@ describe('fitPinsToItems', () => {
     expect(fitPinsToItems([pin])).toEqual([undefined]);
     expect(pin.outer.style.display).toBe('flow-root');
     expect(pin.outer.style.clear).toBe('');
+  });
+});
+
+describe('restoreIfWritten', () => {
+  // A browser keeps a value in its own form, so the comparison uses writeInline's read-back.
+  it('recognizes its own write in the form the browser keeps it', () => {
+    const el = document.createElement('div');
+
+    el.style.marginTop = '5px';
+
+    const saved = captureInline(el, 'margin-top');
+    const written = writeInline(el, 'margin-top', '0');
+
+    expect(written).toBe('0px');
+    expect(restoreIfWritten(el, 'margin-top', saved, written)).toBe(true);
+    expect(el.style.marginTop).toBe('5px');
   });
 });
 

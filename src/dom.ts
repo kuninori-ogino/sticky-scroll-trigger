@@ -196,6 +196,44 @@ const restoreInlinePosition = (el: HTMLElement, saved: InlinePosition): void => 
   el.style.top = saved.top;
 };
 
+// An element's inline value for one property, with its priority so an !important one goes back as
+// one.
+export interface InlineValue {
+  value: string;
+  priority: string;
+}
+
+export const captureInline = (el: HTMLElement, property: string): InlineValue => ({
+  value: el.style.getPropertyValue(property),
+  priority: el.style.getPropertyPriority(property),
+});
+
+// Returns the value as the browser keeps it, for restoreIfWritten to compare.
+export const writeInline = (el: HTMLElement, property: string, value: string): string => {
+  el.style.setProperty(property, value);
+
+  return el.style.getPropertyValue(property);
+};
+
+// Puts saved back while property still holds a writeInline result, and says whether it did. A
+// value set since (gsap.set, say) or made !important is the author's and stays.
+export const restoreIfWritten = (
+  el: HTMLElement,
+  property: string,
+  saved: InlineValue,
+  written: string,
+): boolean => {
+  const { style } = el;
+
+  if (style.getPropertyValue(property) !== written || style.getPropertyPriority(property)) {
+    return false;
+  }
+
+  style.setProperty(property, saved.value, saved.priority);
+
+  return true;
+};
+
 // Clears position/top on every element and returns a function that restores them.
 export const stripStickyPositions = (elements: readonly HTMLElement[]): (() => void) => {
   const saved = elements.map(captureInlinePosition);
@@ -421,27 +459,18 @@ const TRIGGER_BOX = [
 ] as const;
 
 interface HeldBox {
-  // With their priority, so an !important one goes back as one.
-  authored: { value: string; priority: string }[];
+  authored: InlineValue[];
   written: string[];
 }
 
 const heldBoxes = new WeakMap<HTMLElement, HeldBox>();
 
 const holdTriggerBox = (trigger: HTMLElement, values: readonly string[]) => {
-  const { style } = trigger;
-  const authored = TRIGGER_BOX.map((property) => ({
-    value: style.getPropertyValue(property),
-    priority: style.getPropertyPriority(property),
-  }));
+  const authored = TRIGGER_BOX.map((property) => captureInline(trigger, property));
 
-  TRIGGER_BOX.forEach((property, i) => {
-    style.setProperty(property, values[i]);
-  });
   heldBoxes.set(trigger, {
     authored,
-    // As read back, which is how a later comparison sees them.
-    written: TRIGGER_BOX.map((property) => style.getPropertyValue(property)),
+    written: TRIGGER_BOX.map((property, i) => writeInline(trigger, property, values[i])),
   });
 };
 
@@ -452,14 +481,8 @@ const releaseTriggerBox = (trigger: HTMLElement): string[] | undefined => {
 
   if (!held) return undefined;
 
-  const { style } = trigger;
-
   TRIGGER_BOX.forEach((property, i) => {
-    const { value, priority } = held.authored[i];
-    const ours = style.getPropertyValue(property) === held.written[i]
-      && !style.getPropertyPriority(property);
-
-    if (ours) style.setProperty(property, value, priority);
+    restoreIfWritten(trigger, property, held.authored[i], held.written[i]);
   });
   heldBoxes.delete(trigger);
 
