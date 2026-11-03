@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-03
+
 - A `createStickyPin` trigger in a flex or grid container, a floated one, or an `inline-block` now keeps its own box and no longer moves the elements around it: its wrapper holds the box the container gave the trigger, and the trigger's width, height, padding and margins are held in px as GSAP holds a pin's, so the neighbor of a `flex: 0 0 200px` sidebar keeps its width and a sidebar the row stretched keeps its full height. The wrapper used to size to the trigger's content, so the pin shrank to its text and the sibling took the rest of the row, a trigger placed by `grid-area` or `order` moved, a floated one stopped floating and pushed what followed down, one with `clear` sat beside the float before it, and an `inline-block` one broke its line (see [`createStickyPin`](README.md#createstickypinoptions))
 - A `scroll-margin-top` set from JS (`gsap.set`, say) on a same-page link target after the first `refresh()` is now picked up by the next `refresh()`, and `destroy()` leaves it in place, `!important` included. `refresh()` put back the value the element had when it was first corrected, so links kept landing by the old margin, and `destroy()` dropped `!important`. A target moved into another instance's shared container now lands where it should too: the first instance's correction was read as the element's own margin (see [Same-page links](README.md#same-page-links))
 - A `createStickyPin` trigger's own inline `top` or `position` now keeps its `!important` when the pin is killed or `destroy()` runs, or when its first `refresh()` throws. It came back without it, so a stylesheet `!important` rule took over.
