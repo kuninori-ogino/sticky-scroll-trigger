@@ -192,6 +192,10 @@ export const captureInline = (el: HTMLElement, property: string): InlineValue =>
   priority: el.style.getPropertyPriority(property),
 });
 
+export const restoreInline = (el: HTMLElement, property: string, saved: InlineValue): void => {
+  el.style.setProperty(property, saved.value, saved.priority);
+};
+
 // An element's inline position/top, captured to put back after a clear or overwrite.
 export interface InlinePosition {
   position: InlineValue;
@@ -204,8 +208,8 @@ export const captureInlinePosition = (el: HTMLElement): InlinePosition => ({
 });
 
 export const restoreInlinePosition = (el: HTMLElement, saved: InlinePosition): void => {
-  el.style.setProperty('position', saved.position.value, saved.position.priority);
-  el.style.setProperty('top', saved.top.value, saved.top.priority);
+  restoreInline(el, 'position', saved.position);
+  restoreInline(el, 'top', saved.top);
 };
 
 // Returns the value as the browser keeps it, for restoreIfWritten to compare.
@@ -229,7 +233,7 @@ export const restoreIfWritten = (
     return false;
   }
 
-  style.setProperty(property, saved.value, saved.priority);
+  restoreInline(el, property, saved);
 
   return true;
 };

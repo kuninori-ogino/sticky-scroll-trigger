@@ -9,7 +9,7 @@
  * above it, whichever instance (or the page author) made it sticky.
  */
 
-import { captureInline, compareDocumentOrder, measureDocumentHeight } from './dom';
+import { captureInline, compareDocumentOrder, measureDocumentHeight, restoreInline } from './dom';
 import {
   addGsapListener,
   isRefreshing,
@@ -752,7 +752,7 @@ export const rebuildDormancy = (scrollTriggerClass: ScrollTriggerClassLike | nul
 
     const saved = authorStyle.get(record.el);
 
-    if (saved) record.el.style.setProperty('position', saved.value, saved.priority);
+    if (saved) restoreInline(record.el, 'position', saved);
     else record.el.removeAttribute('style');
   });
 
