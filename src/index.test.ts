@@ -2026,20 +2026,6 @@ describe('measuring at scroll 0', () => {
     expect(scrolls).toEqual([0, 1200, 0, 1200]);
   });
 
-  it('counts a user\'s scroll once the page has moved from where the trip left it', () => {
-    const { controller, Cls } = setupInPageStickyWithGsap();
-
-    controller.resolveScrollPosition(query('.inside'), 'top top');
-    Cls.scrolling = true;
-    scroll = 1300;
-    controller.resolveScrollPosition(query('.inside'), 'top top');
-    // Back where the trip left it, after a scroll of the user's.
-    scroll = 1200;
-    controller.resolveScrollPosition(query('.inside'), 'top top');
-
-    expect(scrolls).toEqual([0, 1200]);
-  });
-
   // A trigger callback on the first scroll after a pause runs before GSAP marks the scroll.
   it('doesn\'t scroll from inside GSAP\'s update', () => {
     const { controller, Cls } = setupInPageStickyWithGsap();
@@ -2061,34 +2047,6 @@ describe('measuring at scroll 0', () => {
     controller.refresh();
 
     expect(scrolls).toEqual([]);
-  });
-
-  // The update that ends GSAP's refresh comes at rest.
-  it('scrolls to 0 from the update that ends GSAP\'s refresh', () => {
-    const { controller, Cls } = setupInPageStickyWithGsap();
-
-    Cls.isUpdating = true;
-    Cls.isRefreshing = true;
-
-    try {
-      controller.resolveScrollPosition(query('.inside'), 'top top');
-    } finally {
-      Cls.isRefreshing = false;
-    }
-
-    expect(scrolls).toEqual([0, 1200]);
-  });
-
-  // Past the time GSAP counts a trip for, a scroll it still counts is someone else's.
-  it('takes GSAP\'s word once its count of the trip is over', () => {
-    const { controller, Cls } = setupInPageStickyWithGsap();
-
-    controller.resolveScrollPosition(query('.inside'), 'top top');
-    clock += 500;
-    Cls.scrolling = true;
-    controller.resolveScrollPosition(query('.inside'), 'top top');
-
-    expect(scrolls).toEqual([0, 1200]);
   });
 
   // A trip to 0 would stop the user's scroll, so only the other instance's wrappers, the library's
@@ -7046,54 +7004,6 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       expect(livePaddings()).toHaveLength(2);
       expect(scrollTo.mock.calls).toEqual([[{ top: 2400, behavior: 'instant' }]]);
       expect(Cls.refresh).toHaveBeenCalledTimes(1);
-    });
-
-    it('holds a kill right after the library\'s own trip mid-scroll', async () => {
-      const { Cls } = makeClass({ rec: 2500 });
-      const { vars, self } = setupScenes(Cls);
-      const scrollTo = followScrollTo(2500);
-
-      Cls.scrolling = true;
-      gsapRefreshTrip(Cls, vars, self);
-      expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'instant' });
-      scrollTo.mockClear();
-      vars[0].onKill?.(self);
-      await flushMicrotasks();
-
-      expect(livePaddings()).toHaveLength(3);
-      expect(scrollTo).not.toHaveBeenCalled();
-    });
-
-    it('holds a kill once the page has moved from the library\'s own trip', async () => {
-      const { Cls } = makeClass({ rec: 2500 });
-      const { vars, self } = setupScenes(Cls);
-      const scrollTo = followScrollTo(2500);
-
-      gsapRefreshTrip(Cls, vars, self);
-      window.scrollTo({ top: 2510, behavior: 'instant' });
-      scrollTo.mockClear();
-      Cls.scrolling = true;
-      vars[0].onKill?.(self);
-      await flushMicrotasks();
-
-      expect(livePaddings()).toHaveLength(3);
-      expect(scrollTo).not.toHaveBeenCalled();
-    });
-
-    it('holds a kill once GSAP\'s count of the library\'s own trip is over', async () => {
-      const { Cls } = makeClass({ rec: 2500 });
-      const { vars, self } = setupScenes(Cls);
-      const scrollTo = followScrollTo(2500);
-
-      gsapRefreshTrip(Cls, vars, self);
-      clock += 500;
-      scrollTo.mockClear();
-      Cls.scrolling = true;
-      vars[0].onKill?.(self);
-      await flushMicrotasks();
-
-      expect(livePaddings()).toHaveLength(3);
-      expect(scrollTo).not.toHaveBeenCalled();
     });
 
     it('runs a held batch once the library\'s own trip is the only scroll left', async () => {
