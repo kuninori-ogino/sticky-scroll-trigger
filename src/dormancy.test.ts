@@ -482,23 +482,29 @@ describe('rebuildDormancy', () => {
     expect(el.style.cssText).toBe('position: sticky; top: 0px;');
   });
 
-  // Around a library element an author one is set static to measure, then gets its style
-  // attribute back as it was: none where it had none, the same declarations in the same order.
-  it('gives an author element around a library one back its style attribute exactly', () => {
-    document.head.innerHTML = '<style>#plain { position: sticky; top: 0px; }</style>';
+  // Around a library element an author one is set static to measure, then gets its inline position
+  // back: no style attribute where it had none, the others' declarations in the same order. A
+  // strict Content Security Policy ignores setAttribute('style').
+  it('gives an author element around a library one back its inline position', () => {
+    document.head.innerHTML = '<style>#plain, #topOnly { position: sticky; top: 0px; }</style>';
     document.body.innerHTML = `
-      <div id="plain"><div id="styled" style="position: sticky; top: 0px">
+      <div id="plain"><div id="topOnly" style="top: 0px"><div id="styled" style="position: sticky; top: 0px">
         <div id="parent"><div id="el" style="position: sticky; top: 0px"></div></div>
-      </div></div>`;
+      </div></div></div>`;
     place(byId('parent'), 2000, 600);
     place(byId('el'), 2000, 100);
     addClient([byId('el')]);
+
+    const setAttribute = vi.spyOn(Element.prototype, 'setAttribute');
+
     rebuildDormancy(gsap);
     document.head.innerHTML = '';
 
     expect(byId('el').style.position).toBe('relative');
     expect(byId('plain').hasAttribute('style')).toBe(false);
-    expect(byId('styled').getAttribute('style')).toBe('position: sticky; top: 0px');
+    expect(byId('topOnly').style.cssText).toBe('top: 0px;');
+    expect(byId('styled').style.cssText).toBe('position: sticky; top: 0px;');
+    expect(setAttribute).not.toHaveBeenCalledWith('style', expect.anything());
   });
 
   it('gives an !important position around a library element back as it was', () => {
@@ -511,7 +517,7 @@ describe('rebuildDormancy', () => {
     addClient([byId('el')]);
     rebuildDormancy(gsap);
 
-    expect(byId('important').getAttribute('style')).toBe('position: sticky !important; top: 0px');
+    expect(byId('important').style.cssText).toBe('position: sticky !important; top: 0px;');
   });
 
   // Neither around nor inside a library element, an author one has nothing to do with the table.

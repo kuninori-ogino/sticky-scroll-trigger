@@ -9,7 +9,7 @@
  * above it, whichever instance (or the page author) made it sticky.
  */
 
-import { compareDocumentOrder, measureDocumentHeight } from './dom';
+import { captureInline, compareDocumentOrder, measureDocumentHeight } from './dom';
 import {
   addGsapListener,
   isRefreshing,
@@ -736,10 +736,11 @@ export const rebuildDormancy = (scrollTriggerClass: ScrollTriggerClassLike | nul
 
   // Static measurement: with every record that can move a library element static, the natural
   // layout is cheap to lay out. An author element only inside library ones moves none of them and
-  // isn't touched; one around them gets its style attribute back exactly as it was.
+  // isn't touched; one around them gets its inline position back through CSSOM, which a strict
+  // Content Security Policy applies, and no style attribute where it had none.
   const toMeasure = all.filter((r) => owned.has(r.el) || holdsOwned.has(r) || r.state !== 'in');
   const authorStyle = new Map(toMeasure.filter((r) => !owned.has(r.el) && r.state === 'in')
-    .map(({ el }) => [el, el.getAttribute('style')]));
+    .map(({ el }) => [el, el.hasAttribute('style') ? captureInline(el, 'position') : null]));
   // Puts every record back, also when measuring throws. Writes only, so the state applied below
   // re-demotes without a layout in between.
   const restorePositions = () => toMeasure.forEach((record) => {
@@ -751,8 +752,8 @@ export const rebuildDormancy = (scrollTriggerClass: ScrollTriggerClassLike | nul
 
     const saved = authorStyle.get(record.el);
 
-    if (saved === null || saved === undefined) record.el.removeAttribute('style');
-    else record.el.setAttribute('style', saved);
+    if (saved) record.el.style.setProperty('position', saved.value, saved.priority);
+    else record.el.removeAttribute('style');
   });
 
   toMeasure.forEach(({ el }) => {
