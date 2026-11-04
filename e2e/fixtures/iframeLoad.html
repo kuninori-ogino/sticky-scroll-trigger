@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>iframeLoad fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div style="height: 200px"></div>
+    <div class="root">
+      <div id="row" style="display: flex; height: 1200px">
+        <aside id="pin" style="flex: 0 0 200px">
+          <iframe src="iframeLoadFrame.html" style="width: 150px; height: 80px"></iframe>
+          <input id="input" />
+        </aside>
+        <main style="flex: 1">main</main>
+      </div>
+      <section id="after" style="height: 400px"></section>
+    </div>
+    <div id="tail" style="height: 300px"></div>
+    <div style="height: 3000px"></div>
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      // ?impl=pin|scene: a pin on #pin or a Scene layer on #row, built at scroll 1000 ?ms= after
+      // the module runs. A test that holds the frame's response back, so the document's load waits
+      // on it, gets window.__release('frame') once the build is done.
+      // ?rebuild: a second frame outside the container holds the document's load through the
+      // first build (until __release('outer')), and a Scene layer on #after added once it has
+      // loaded rebuilds the nesting while the first frame is the last thing the load waits for.
+      // ?afterLoad: built at 0 once window load has fired, with #input focused.
+      // ?noframe: the first frame is removed, for the values to compare with.
+      const params = new URLSearchParams(location.search);
+      const iframe = document.querySelector('iframe');
+      const outer = params.has('rebuild') ? document.createElement('iframe') : null;
+
+      if (outer) {
+        outer.src = 'iframeLoadFrame.html?outer';
+        document.body.appendChild(outer);
+      }
+
+      const input = document.getElementById('input');
+      const errors = [];
+      const release = (name) => window.__release?.(name);
+      let loads = 0;
+
+      window.addEventListener('error', (event) => errors.push(event.message));
+
+      if (params.has('noframe')) iframe.remove();
+
+      iframe.addEventListener('load', () => {
+        loads += 1;
+      });
+      // A reload's load comes later, so a test waits on this.
+      window.__loads = () => loads;
+
+      // Below the container, so a GSAP refresh measuring the half-built structure moves it.
+      const toggles = [];
+      const tail = ScrollTrigger.create({
+        trigger: '#tail',
+        start: 'top bottom',
+        end: 'bottom top',
+        onToggle: (self) => toggles.push(self.isActive),
+      });
+      const frames = () =>
+        new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const sticky = new StickyScrollTrigger('.root');
+      const build = () => {
+        const st = params.get('impl') === 'scene'
+          ? ScrollTrigger.create(sticky.createStickyTrigger({ trigger: '#row', end: '+=300' }))
+          : ScrollTrigger.create(sticky.createStickyPin({ trigger: '#pin', end: '+=300' }));
+
+        ScrollTrigger.refresh();
+
+        return st;
+      };
+
+      if (params.has('afterLoad')) {
+        if (document.readyState !== 'complete') {
+          await new Promise((resolve) => window.addEventListener('load', resolve, { once: true }));
+        }
+
+        input.focus();
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, Number(params.get('ms') ?? 0)));
+        window.scrollTo(0, 1000);
+      }
+
+      // Only the loads the build causes.
+      loads = 0;
+
+      const readyAtBuild = document.readyState;
+      let st = null;
+
+      try {
+        st = build();
+      } catch (error) {
+        errors.push(String(error));
+      }
+
+      release(outer ? 'outer' : 'frame');
+
+      let readyAtRebuild = null;
+
+      if (outer) {
+        await new Promise((resolve) => outer.addEventListener('load', resolve, { once: true }));
+        // During its load event, the second frame still holds the document's load.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        readyAtRebuild = document.readyState;
+
+        try {
+          ScrollTrigger.create(sticky.createStickyTrigger({ trigger: '#after', end: '+=200' }));
+          // GSAP's create doesn't measure the other triggers again.
+          ScrollTrigger.refresh();
+        } catch (error) {
+          errors.push(String(error));
+        }
+
+        release('frame');
+      }
+
+      if (document.readyState !== 'complete') {
+        await new Promise((resolve) => window.addEventListener('load', resolve, { once: true }));
+      }
+
+      await frames();
+
+      window.__result = {
+        errors,
+        rowChildren: document.getElementById('row').children.length,
+        range: st && [st.start, st.end],
+        tail: [tail.start, tail.end],
+        scroll: window.scrollY,
+        toggles,
+        loads,
+        focused: document.activeElement === input,
+        readyAtBuild,
+        readyAtRebuild,
+      };
+    </script>
+  </body>
+</html>

@@ -283,6 +283,39 @@ const createStructureElement = (): HTMLDivElement => {
   return el;
 };
 
+type MoveTarget = Node & { moveBefore?: (node: Node, child: Node | null) => void };
+
+let movesUnderWay = 0;
+
+// Whether a move below is under way. The browser can run page code inside one (see #runRefresh in
+// index.ts).
+export const isMovingDom = (): boolean => movesUnderWay > 0;
+
+// moveBefore(), where the browser has it, keeps an iframe inside loaded and focus in place. It
+// needs both ends in the document; anything else it refuses goes to insertBefore(), which moves
+// the node or throws.
+export const moveInto = (parent: Node, node: Node, before: Node | null = null): void => {
+  const target = parent as MoveTarget;
+
+  movesUnderWay += 1;
+
+  try {
+    if (target.moveBefore && parent.isConnected && node.isConnected) {
+      try {
+        target.moveBefore(node, before);
+
+        return;
+      } catch {
+        // Falls through to the plain insert.
+      }
+    }
+
+    parent.insertBefore(node, before);
+  } finally {
+    movesUnderWay -= 1;
+  }
+};
+
 // Scene layer: wraps inner in one level of stickyContainer{ stickyWrapper, stickyPadding }
 // and moves it inside the wrapper. With holdTrailingMargin, an empty flow-root after inner keeps a
 // bottom margin ending inner (its own or its content's) in the wrapper, where it can't move the end
@@ -300,7 +333,7 @@ export const wrapScene = (inner: HTMLElement, holdTrailingMargin: boolean) => {
   padding.style.pointerEvents = 'none';
   inner.parentNode.insertBefore(container, inner);
   container.appendChild(wrapper);
-  wrapper.appendChild(inner);
+  moveInto(wrapper, inner);
   container.appendChild(padding);
 
   if (holdTrailingMargin) {
@@ -331,7 +364,7 @@ export const wrapCover = (trigger: HTMLElement): HTMLDivElement => {
   while (wrapper.nextSibling) {
     const node = wrapper.nextSibling;
 
-    wrapper.appendChild(node);
+    moveInto(wrapper, node);
 
     if (node === trigger) break;
   }
@@ -344,7 +377,7 @@ export const unwrapCover = (wrapper: HTMLDivElement) => {
 
   if (!parent) return;
 
-  while (wrapper.firstChild) parent.insertBefore(wrapper.firstChild, wrapper);
+  while (wrapper.firstChild) moveInto(parent, wrapper.firstChild, wrapper);
 
   wrapper.remove();
 };
@@ -367,7 +400,7 @@ export const wrapPin = (trigger: HTMLElement) => {
   outer.style.display = 'flow-root';
   trigger.parentNode.insertBefore(outer, trigger);
   outer.appendChild(inner);
-  inner.appendChild(trigger);
+  moveInto(inner, trigger);
   pinRanges.add(inner);
 
   return { outer, inner };
@@ -501,9 +534,9 @@ const releaseTriggerBox = (trigger: HTMLElement): string[] | undefined => {
 // Sized by its content, outer would shrink a flex item, float or inline-block to trigger's text,
 // reserve only a stretched item's content and break an inline-level trigger's line. So trigger's
 // margin box is read as the item, with outer and inner set to display: contents (moving trigger
-// out instead would reload an iframe inside it and drop focus), and held on outer in px, as GSAP's
-// pin-spacer holds it; a grid item's outer takes its width from its cell. trigger's own box is
-// held on it too (TRIGGER_BOX).
+// out instead would reload an iframe inside it and drop focus without moveBefore()), and held on
+// outer in px, as GSAP's pin-spacer holds it; a grid item's outer takes its width from its cell.
+// trigger's own box is held on it too (TRIGGER_BOX).
 //
 // All reads come before the writes that follow them, for every pin at once, so a refresh costs a
 // fixed number of style and layout passes.
@@ -610,7 +643,7 @@ export const unwrapPin = (
   restoreInlinePosition(trigger, saved);
   releaseTriggerBox(trigger);
 
-  if (parent) parent.insertBefore(trigger, outer);
+  if (parent) moveInto(parent, trigger, outer);
 
   if (outer.firstElementChild instanceof HTMLElement) pinRanges.delete(outer.firstElementChild);
 

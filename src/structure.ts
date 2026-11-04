@@ -3,7 +3,7 @@
  * These don't depend on layout; they only rearrange the DOM and assign layer references.
  */
 
-import { compareDocumentOrder, unwrapCover, wrapCover, wrapScene } from './dom';
+import { compareDocumentOrder, moveInto, unwrapCover, wrapCover, wrapScene } from './dom';
 import type { CoverLayer, Layer } from './types';
 
 // Returns whether layers is out of DOM order. buildStructure always sorts before building, so
@@ -74,7 +74,10 @@ export const unbuildStructure = (
   outermostContainer: HTMLDivElement | null,
 ): void => {
   if (outermostContainer) {
-    outermostContainer.parentNode?.insertBefore(rootElement, outermostContainer);
+    const parent = outermostContainer.parentNode;
+
+    if (parent) moveInto(parent, rootElement, outermostContainer);
+
     outermostContainer.remove();
   }
 

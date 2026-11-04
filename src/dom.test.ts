@@ -7,11 +7,13 @@ import {
   describeElement,
   fitPinsToItems,
   insertSpacers,
+  isMovingDom,
   liftAboveStickyWrapper,
   measureDocumentHeightWithoutPinRanges,
   measureDocumentMaxScroll,
   measureUsedHeight,
   measureViewportHeight,
+  moveInto,
   resolveElement,
   resolveEndTrigger,
   resolveRoot,
@@ -182,6 +184,105 @@ describe('wrapScene', () => {
 
   it('throws for an inner not attached to the document', () => {
     expect(() => wrapScene(document.createElement('div'), false)).toThrow(/not attached to the document/);
+  });
+});
+
+// jsdom has no moveBefore(), so a stub on the prototype stands in for the browser's. The
+// prototype's own one, should jsdom gain it, comes back after each test.
+describe('moveInto', () => {
+  type WithMoveBefore = { moveBefore?: (node: Node, child: Node | null) => void };
+
+  const original = Object.getOwnPropertyDescriptor(Element.prototype, 'moveBefore');
+
+  const stubMoveBefore = (impl: (this: Node, node: Node, child: Node | null) => void) => {
+    const calls: Node[] = [];
+
+    (Element.prototype as WithMoveBefore).moveBefore = function (this: Node, node, child) {
+      calls.push(node);
+      impl.call(this, node, child);
+    };
+
+    return calls;
+  };
+
+  afterEach(() => {
+    if (original) {
+      Object.defineProperty(Element.prototype, 'moveBefore', original);
+    } else {
+      delete (Element.prototype as WithMoveBefore).moveBefore;
+    }
+  });
+
+  const setup = () => {
+    document.body.innerHTML = '<div id="from"><i id="node"></i></div><div id="to"><i id="ref"></i></div>';
+
+    return {
+      node: document.getElementById('node')!,
+      to: document.getElementById('to')!,
+      ref: document.getElementById('ref')!,
+    };
+  };
+
+  it('moves with moveBefore() when both ends are in the document', () => {
+    const { node, to, ref } = setup();
+    const calls = stubMoveBefore(function (this: Node, moved, child) {
+      this.insertBefore(moved, child);
+    });
+
+    moveInto(to, node, ref);
+
+    expect(calls).toEqual([node]);
+    expect(ids(to)).toEqual(['node', 'ref']);
+  });
+
+  it('inserts instead when either end is outside the document', () => {
+    const { node, to } = setup();
+    const calls = stubMoveBefore(() => {});
+    const loose = document.createElement('i');
+    const detached = document.createElement('div');
+
+    loose.id = 'loose';
+    moveInto(to, loose);
+    moveInto(detached, node);
+
+    expect(calls).toEqual([]);
+    expect(ids(to)).toEqual(['ref', 'loose']);
+    expect(ids(detached)).toEqual(['node']);
+  });
+
+  it('inserts instead when moveBefore() refuses the move', () => {
+    const { node, to } = setup();
+
+    stubMoveBefore(() => {
+      throw new DOMException('refused', 'HierarchyRequestError');
+    });
+    moveInto(to, node);
+
+    expect(ids(to)).toEqual(['ref', 'node']);
+  });
+
+  // The page code a browser runs inside a move, here a custom element's connectedCallback.
+  it('counts as moving only while the move runs, a failed one included', () => {
+    const seen: boolean[] = [];
+
+    if (!customElements.get('x-move-probe')) {
+      customElements.define('x-move-probe', class extends HTMLElement {
+        connectedCallback() {
+          seen.push(isMovingDom());
+        }
+      });
+    }
+
+    const { to } = setup();
+    const probe = document.createElement('x-move-probe');
+
+    document.body.appendChild(probe);
+    moveInto(to, probe);
+
+    expect(seen).toEqual([false, true]);
+    expect(isMovingDom()).toBe(false);
+    expect(() => moveInto(probe, to)).toThrow();
+    expect(isMovingDom()).toBe(false);
   });
 });
 

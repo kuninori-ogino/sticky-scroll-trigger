@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A `createStickyPin` or `createStickyTrigger` whose trigger holds a still-loading `<iframe>` (a YouTube or map embed, say) is now built once, at `DOMContentLoaded` too. Moving the trigger restarted the frame's load, the browser fired the page's `load` event mid-move, and GSAP's refresh there wrapped the trigger a second time: Chrome and Safari threw `NotFoundError` and left an empty wrapper beside it, and Firefox threw `trigger ... is not attached`. A custom element in the trigger that refreshes from its `connectedCallback` no longer wraps a pin twice (with `ScrollTrigger.refresh()`) or rebuilds a Scene layer endlessly (with either refresh).
+- In Chrome and Edge 133+ and Firefox 144+, building, rebuilding or taking down the nesting and wrapping or unwrapping a pin now keep `<iframe>` elements loaded and inputs focused inside what moves, using the browser's `moveBefore()`. Safari has none and still reloads them (see [`refresh()`](README.md#refresh)).
+
 ## [0.16.0] - 2026-11-03
 
 - A `createStickyPin` trigger in a flex or grid container, a floated one, or an `inline-block` now keeps its own box and no longer moves the elements around it: its wrapper holds the box the container gave the trigger, and the trigger's width, height, padding and margins are held in px as GSAP holds a pin's, so the neighbor of a `flex: 0 0 200px` sidebar keeps its width and a sidebar the row stretched keeps its full height. The wrapper used to size to the trigger's content, so the pin shrank to its text and the sibling took the rest of the row, a trigger placed by `grid-area` or `order` moved, a floated one stopped floating and pushed what followed down, one with `clear` sat beside the float before it, and an `inline-block` one broke its line (see [`createStickyPin`](README.md#createstickypinoptions))

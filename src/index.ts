@@ -11,6 +11,7 @@ import {
   documentTop,
   fitPinsToItems,
   insertSpacers,
+  isMovingDom,
   liftAboveStickyWrapper,
   measureDocumentHeightWithoutPinRanges,
   measureDocumentMaxScroll,
@@ -240,6 +241,9 @@ let lastScrollTriggerClass: ScrollTriggerClass | null = null;
 // scrollEnd: ScrollTrigger.killAll() drops every listener, and GSAP also fires scrollEnd from the
 // first scroll event after a pause.
 const REST_POLL_MS = 100;
+// Refreshes skipped during a DOM move, by instance, with the GSAP class whose refresh each came in
+// (see #runRefresh).
+const refreshedDuringMove = new Map<StickyScrollTrigger, ScrollTriggerClass | null>();
 
 // Runs each step even if an earlier one throws. The first error is thrown; later ones go off the
 // stack, so none is lost.
@@ -291,6 +295,8 @@ export default class StickyScrollTrigger {
   #measureAgain = false;
   // Set by a kill whose catch-up hasn't run: the next refresh() keeps the content in place.
   #keepContentPending = false;
+  // A refresh() skipped during a DOM move, with no run measuring since (see #runRefreshesOwed).
+  #refreshOwed = false;
   // The batch held for the end of the scroll, and the timer that polls for it.
   #deferredRun: (() => void) | null = null;
   #restTimer: ReturnType<typeof setTimeout> | null = null;
@@ -566,9 +572,9 @@ export default class StickyScrollTrigger {
     return this.#layers.every((layer) => built.has(layer));
   }
 
-  // Rebuilding would move the container's subtree, which reloads iframes and drops focus inside
-  // it, so a removed Scene level stays in the DOM, static and with no padding, until the next
-  // rebuild or the disarm takes the whole structure down.
+  // Rebuilding would move the container's subtree, which without moveBefore() reloads iframes and
+  // drops focus inside it, so a removed Scene level stays in the DOM, static and with no padding,
+  // until the next rebuild or the disarm takes the whole structure down.
   #makeRemovedInert(): void {
     const kept = new Set(this.#layers);
     const removed = this.#builtLayers.flatMap((layer) => (
@@ -1448,9 +1454,10 @@ export default class StickyScrollTrigger {
   refresh(): void {
     // A start or end function's refresh() leaves the measuring to the outermost run, which goes
     // again once, so a function that calls it on every evaluation can't recurse.
-    // With nothing to measure (no layer, or the last kill's structure waiting), no trip either.
+    // With nothing to measure (no layer, the last kill's structure waiting, or a DOM move under
+    // way: see #runRefresh), no trip either.
     if (this.#depth > 0 || isRefreshing(this.#scrollTriggerClass) || this.#destroyed
-      || !this.#armed || pendingDisarms.has(this) || window.scrollY === 0
+      || !this.#armed || pendingDisarms.has(this) || isMovingDom() || window.scrollY === 0
       || this.#measuresInPlace()) {
       this.#refreshFrom(false);
 
@@ -1488,7 +1495,24 @@ export default class StickyScrollTrigger {
     this.#runRefresh();
   }
 
+  // A browser can run page code inside any instance's DOM move: window load, when the moved subtree
+  // holds an iframe the document's load still waits for (GSAP's load listener then refreshes), or
+  // a custom element's connectedCallback. A refresh then would wrap a layer whose wrappers aren't
+  // recorded yet a second time and measure a half-built structure, so it runs in a microtask
+  // instead (see #runRefreshesOwed).
   #runRefresh(): void {
+    if (isMovingDom()) {
+      const cls = isRefreshing(this.#scrollTriggerClass) ? this.#scrollTriggerClass : null;
+
+      this.#refreshOwed = true;
+
+      if (refreshedDuringMove.size === 0) queueMicrotask(StickyScrollTrigger.#runRefreshesOwed);
+
+      refreshedDuringMove.set(this, refreshedDuringMove.get(this) ?? cls);
+
+      return;
+    }
+
     if (this.#depth > 0) this.#measureAgain = true;
 
     // A last kill's structure waits for the scroll to stop, not for a rebuild with no layers.
@@ -1516,6 +1540,8 @@ export default class StickyScrollTrigger {
       if (this.#depth === 0) {
         this.#refreshInitNestedUsed = false;
         this.#measureAgain = false;
+        // This run measured after the move.
+        this.#refreshOwed = false;
       }
     }
 
@@ -1543,6 +1569,24 @@ export default class StickyScrollTrigger {
     );
 
     if (failure) throw failure.error;
+  }
+
+  // A refresh skipped in a GSAP refresh runs as GSAP's refresh again, since GSAP measured its own
+  // triggers in the half-built structure too. Any other runs as refresh(), unless a run of the same
+  // instance has measured since.
+  static #runRefreshesOwed(): void {
+    const owed = [...refreshedDuringMove];
+
+    refreshedDuringMove.clear();
+
+    const classes = new Set(owed.flatMap(([, cls]) => (cls ? [cls] : [])));
+    const direct = owed.flatMap(([instance, cls]) => (
+      !cls && instance.#refreshOwed ? [instance] : []));
+
+    runEach(
+      ...[...classes].map((cls) => () => refreshAll(cls)),
+      ...direct.map((instance) => () => instance.refresh()),
+    );
   }
 
   // Where the content at the viewport's top edge sits in the unpadded layout, given the layers

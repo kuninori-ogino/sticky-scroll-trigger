@@ -3120,6 +3120,121 @@ interface KillKeepsStateWindow {
   __run: () => Promise<{ killed: boolean; loads: number; focused: boolean; rootMoves: number }>;
 }
 
+// iframeLoad.html's result.
+interface IframeLoadResult {
+  errors: string[];
+  rowChildren: number;
+  range: number[] | null;
+  tail: number[];
+  scroll: number;
+  toggles: boolean[];
+  loads: number;
+  focused: boolean;
+  readyAtBuild: DocumentReadyState;
+  readyAtRebuild: DocumentReadyState | null;
+}
+
+// held keeps each frame's response back until the page releases it (see iframeLoad.html), so the
+// document's load waits on the frame however long the page takes to build.
+const loadIframeLoad = async (page: Page, query: string, held = false) => {
+  const pageErrors: string[] = [];
+  const releases = new Map<string, () => void>();
+  const released = (name: string) => new Promise<void>((resolve) => releases.set(name, resolve));
+  const holds = { frame: released('frame'), outer: released('outer') };
+
+  await page.exposeBinding('__release', (_source, name: string) => releases.get(name)?.());
+
+  if (held) {
+    await page.route('**/fixtures/iframeLoadFrame.html', async (route) => {
+      await holds.frame;
+      await route.continue();
+    });
+    await page.route(/iframeLoadFrame\.html\?outer$/, async (route) => {
+      await holds.outer;
+      await route.continue();
+    });
+  }
+
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await page.goto(`/fixtures/iframeLoad.html?${query}`);
+  await page.waitForFunction(() => (window as never as { __result?: IframeLoadResult }).__result);
+
+  const result = await page.evaluate(() =>
+    (window as never as { __result: IframeLoadResult }).__result);
+
+  return { ...result, errors: [...result.errors, ...pageErrors] };
+};
+
+// Moving a subtree whose iframe the document's load still waits for fires window load inside the
+// move, where GSAP refreshes.
+for (const impl of ['pin', 'scene']) {
+  for (const ms of [50, 300]) {
+    test(`a ${impl} built ${ms} ms in, while an iframe inside it loads, is built once with the values it has without one`, async ({
+      page,
+      context,
+    }) => {
+      const result = await loadIframeLoad(page, `impl=${impl}&ms=${ms}`, true);
+      const reference = await loadIframeLoad(await context.newPage(), `impl=${impl}&noframe`);
+
+      expect(result.readyAtBuild).toBe('interactive');
+      expect(result.errors).toEqual([]);
+      expect(result.rowChildren).toBe(2);
+      expect(result.range).toEqual(reference.range);
+      expect(result.tail).toEqual(reference.tail);
+      // A Scene's dwell above keeps the content in place, past 1000.
+      expect(result.scroll).toBe(reference.scroll);
+      expect(result.toggles).toEqual(reference.toggles);
+    });
+  }
+}
+
+// Adding a layer rebuilds the nesting, which moves the frame again.
+for (const impl of ['pin', 'scene']) {
+  test(`a layer added to a ${impl} while an iframe inside it loads rebuilds once with the values it has without one`, async ({
+    page,
+    context,
+  }) => {
+    const result = await loadIframeLoad(page, `impl=${impl}&rebuild`, true);
+    const reference = await loadIframeLoad(await context.newPage(), `impl=${impl}&rebuild&noframe`);
+
+    // The first frame was still loading when the layer came.
+    expect(result.readyAtRebuild).toBe('interactive');
+    expect(result.errors).toEqual([]);
+    expect(result.rowChildren).toBe(2);
+    expect(result.range).toEqual(reference.range);
+    expect(result.tail).toEqual(reference.tail);
+    expect(result.scroll).toBe(reference.scroll);
+    expect(result.toggles).toEqual(reference.toggles);
+  });
+}
+
+// moveBefore() moves the subtree without reloading the iframe or dropping focus. WebKit has
+// none, and a plain move reloads the frame.
+for (const impl of ['pin', 'scene']) {
+  test(`building a ${impl} keeps an iframe and focus inside it where the browser has moveBefore()`, async ({
+    page,
+    browserName,
+  }) => {
+    const result = await loadIframeLoad(page, `impl=${impl}&afterLoad`);
+    const atomic = await page.evaluate(() => 'moveBefore' in Element.prototype);
+
+    expect(atomic).toBe(browserName !== 'webkit');
+    expect(result.errors).toEqual([]);
+    // A plain move blurs the input at once; the reload's load comes later.
+    expect(result.focused).toBe(atomic);
+
+    const loads = () => (window as never as { __loads: () => number }).__loads();
+
+    if (atomic) {
+      await page.waitForTimeout(500);
+    } else {
+      await page.waitForFunction(loads);
+    }
+
+    expect(await page.evaluate(loads)).toBe(atomic ? 0 : 1);
+  });
+}
+
 // Another layer's kill, or s1's own mid-scroll (onLeave, once: true), leaves s3's iframe loaded
 // once and its input focused, as GSAP's own pins do: the killed level stays in place. So does
 // killing the last Scene layer while a cover or a pin stays.

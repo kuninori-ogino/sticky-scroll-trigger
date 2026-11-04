@@ -8512,3 +8512,191 @@ describe('an instance that measured earlier in the same GSAP refresh', () => {
     expect(paddingIn('first')).toBe(200);
   });
 });
+
+// jsdom has neither iframe loads nor moveBefore(), so a custom element's connectedCallback stands
+// in for the page code a browser runs inside a move (see #runRefresh).
+describe('a refresh that arrives during a DOM move', () => {
+  let onConnected: (() => void) | null = null;
+
+  if (!customElements.get('x-moved')) {
+    customElements.define('x-moved', class extends HTMLElement {
+      connectedCallback() {
+        onConnected?.();
+      }
+    });
+  }
+
+  afterEach(() => {
+    onConnected = null;
+  });
+
+  // Calls fn from the next connectedCallback only, so a refresh it starts can't recurse.
+  const onNextConnected = (fn: () => void) => {
+    onConnected = () => {
+      onConnected = null;
+      fn();
+    };
+  };
+
+  // The library's wrappers are the only divs on these pages.
+  const structureDivs = (el: HTMLElement) => {
+    const chain: HTMLElement[] = [];
+
+    for (let node = el.parentElement; node && node.tagName === 'DIV'; node = node.parentElement) {
+      chain.push(node);
+    }
+
+    return chain;
+  };
+
+  it('wraps a pin once when GSAP refreshes inside the move', async () => {
+    document.body.innerHTML = `
+      <main class="root"><section class="pin"><x-moved></x-moved></section></main>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const { Cls } = makeClass({ rec: 0 });
+    const self = Object.create(Cls.prototype) as ScrollTrigger;
+    const vars = controller.createStickyPin({ trigger: query('.pin'), end: '+=100' });
+
+    const layerRefresh = () => {
+      Cls.isRefreshing = true;
+
+      try {
+        vars.onRefreshInit?.(self);
+      } finally {
+        Cls.isRefreshing = false;
+      }
+    };
+
+    onNextConnected(layerRefresh);
+    layerRefresh();
+
+    // outer{ inner{ trigger } }, with .root right above.
+    expect(structureDivs(query('.pin'))).toHaveLength(2);
+    expect(query('.pin').parentElement!.parentElement!.parentElement).toBe(query('.root'));
+    expect(Cls.refresh).not.toHaveBeenCalled();
+
+    await flushMicrotasks();
+
+    // GSAP measured its own triggers in the half-built structure, so its refresh runs again.
+    expect(Cls.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('builds a Scene once when refresh() is called inside the move', () => {
+    document.body.innerHTML = `
+      <main class="root"><section class="scene"><x-moved></x-moved></section></main>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+
+    controller.createStickyTrigger({ trigger: query('.scene'), end: '+=100' });
+    onConnected = () => controller.refresh();
+
+    expect(() => controller.refresh()).not.toThrow();
+    expect(structureDivs(query('.root'))).toHaveLength(2);
+  });
+
+  // Its own run measures after the move.
+  it('doesn\'t run an instance\'s skipped refresh() again after its own run', async () => {
+    document.body.innerHTML = `
+      <main class="root"><section class="scene"><x-moved></x-moved></section></main>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const end = vi.fn(() => '+=100');
+
+    controller.createStickyTrigger({ trigger: query('.scene'), end });
+    onNextConnected(() => controller.refresh());
+    controller.refresh();
+
+    const calls = end.mock.calls.length;
+
+    await flushMicrotasks();
+
+    expect(end).toHaveBeenCalledTimes(calls);
+  });
+
+  it('runs another instance\'s skipped refresh() once the move is done', async () => {
+    document.body.innerHTML = `
+      <main class="a"><section class="a-scene"><x-moved></x-moved></section></main>
+      <main class="b"><section class="b-scene"></section></main>`;
+
+    const a = new StickyScrollTrigger(query('.a'));
+    const b = new StickyScrollTrigger(query('.b'));
+
+    a.createStickyTrigger({ trigger: query('.a-scene'), end: '+=100' });
+    b.createStickyTrigger({ trigger: query('.b-scene'), end: '+=100' });
+    onNextConnected(() => b.refresh());
+    a.refresh();
+
+    expect(structureDivs(query('.b'))).toHaveLength(0);
+
+    await flushMicrotasks();
+
+    expect(structureDivs(query('.b'))).toHaveLength(2);
+  });
+
+  // It measures nothing until the replay, so a trip to 0 and back would only scroll mid-move.
+  it('leaves the scroll alone for a refresh() skipped during the move', async () => {
+    document.body.innerHTML = `
+      <main class="a"><section class="a-scene"><x-moved></x-moved></section></main>
+      <main class="b"><section class="b-scene"></section></main>`;
+
+    const a = new StickyScrollTrigger(query('.a'));
+    const b = new StickyScrollTrigger(query('.b'));
+    let scroll = 500;
+    const scrolls: number[] = [];
+
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => scroll);
+    vi.spyOn(window, 'scrollTo').mockImplementation((options) => {
+      scroll = (options as ScrollToOptions).top ?? scroll;
+      scrolls.push(scroll);
+    });
+
+    try {
+      a.createStickyTrigger({ trigger: query('.a-scene'), end: '+=100' });
+      b.createStickyTrigger({ trigger: query('.b-scene'), end: '+=100' });
+      a.refresh();
+      b.refresh();
+
+      let duringMove: number[] | null = null;
+
+      // a's teardown moves its container at the page's own scroll, unlike a build in refresh().
+      onNextConnected(() => {
+        const before = scrolls.length;
+
+        b.refresh();
+        duringMove = scrolls.slice(before);
+      });
+      a.destroy();
+
+      expect(duringMove).toEqual([]);
+
+      scrolls.length = 0;
+      await flushMicrotasks();
+
+      // The replay's own trip.
+      expect(scrolls).toEqual([0, 500]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('drops a skipped refresh() of an instance destroyed before it runs', async () => {
+    document.body.innerHTML = `
+      <main class="a"><section class="a-scene"><x-moved></x-moved></section></main>
+      <main class="b"><section class="b-scene"></section></main>`;
+
+    const a = new StickyScrollTrigger(query('.a'));
+    const b = new StickyScrollTrigger(query('.b'));
+
+    a.createStickyTrigger({ trigger: query('.a-scene'), end: '+=100' });
+    b.createStickyTrigger({ trigger: query('.b-scene'), end: '+=100' });
+    onNextConnected(() => b.refresh());
+    a.refresh();
+    b.destroy();
+
+    const uncaught = await runDispatch(() => {});
+
+    expect(uncaught).toEqual([]);
+    expect(structureDivs(query('.b'))).toHaveLength(0);
+  });
+});
