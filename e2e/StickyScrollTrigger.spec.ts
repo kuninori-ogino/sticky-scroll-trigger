@@ -1483,28 +1483,41 @@ test('refresh() of a pinned flex item keeps an iframe and focus inside it', asyn
 
   const result = await page.evaluate(async () => {
     const input = document.getElementById('input') as HTMLInputElement;
+    const frame = document.querySelector('iframe')!;
+    const frameWindow = () => frame.contentWindow as (Window & { __mark?: boolean }) | null;
     const wrapped = document.getElementById('pin')!.parentElement!.id !== 'row';
-    let loads = 0;
+    // A move replaces the frame's window at once, which drops the mark.
+    const kept = () => frameWindow()?.__mark === true;
     let blurs = 0;
 
-    document.querySelector('iframe')!.addEventListener('load', () => loads++);
+    frameWindow()!.__mark = true;
     input.focus();
     input.value = 'abc';
     input.setSelectionRange(1, 2);
     input.addEventListener('blur', () => blurs++);
     (window as never as PinItemBoxWindow).__refresh();
-    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const keptInRefresh = kept();
+
+    // Past whatever refresh() leaves for a microtask.
+    await new Promise((resolve) => requestAnimationFrame(resolve));
 
     return {
       wrapped,
-      loads,
+      frameKept: [keptInRefresh, kept()],
       blurs,
       focused: document.activeElement === input,
       selection: [input.selectionStart, input.selectionEnd],
     };
   });
 
-  expect(result).toEqual({ wrapped: true, loads: 0, blurs: 0, focused: true, selection: [1, 2] });
+  expect(result).toEqual({
+    wrapped: true,
+    frameKept: [true, true],
+    blurs: 0,
+    focused: true,
+    selection: [1, 2],
+  });
 });
 
 // The element side of createStickyPin's start clause resolves against trigger's own height:
@@ -1972,12 +1985,18 @@ test('a real window resize re-runs refresh() before GSAP recomputes trigger posi
 
   expect(before).toBe(10); // sanity check: matches the filler's starting height
 
-  await page.evaluate(() => (window as unknown as { __growFiller: () => void }).__growFiller());
+  await page.evaluate(() => {
+    const win = window as unknown as { __growFiller: () => void; __armRefresh: () => void };
+
+    win.__growFiller();
+    win.__armRefresh();
+  });
 
   const viewport = page.viewportSize()!;
 
   await page.setViewportSize({ width: viewport.width, height: viewport.height - 10 });
-  await page.waitForTimeout(500); // GSAP debounces its own resize handling by 0.2s
+  // GSAP refreshes 0.2s after the last resize event.
+  await page.evaluate(() => (window as unknown as { __refreshed: Promise<void> }).__refreshed);
 
   const after = await readStart();
 
@@ -2588,6 +2607,7 @@ interface NestedStickyWindow {
   __demoted: () => HTMLElement[];
   __sticky: { refresh(): void; destroy(): void };
   __gsapRefresh: () => void;
+  __probeRefreshes: () => number;
 }
 
 // Scrolls through the page in `count` odd-sized steps, one frame each.
@@ -2668,10 +2688,8 @@ for (const [created, reenter] of [[true, false], [true, true], [false, false]]) 
     page,
   }) => {
     const measure = async (mode: string) => {
+      // GSAP's own refreshes run by the end of load, which goto waits for.
       await page.goto(`/fixtures/nestedSticky.html?layout=pincover&mode=${mode}&create=${created ? 1 : 0}&reenter=${reenter ? 1 : 0}`);
-      // Past GSAP's own refreshes after load (its resize refresh waits 200ms), so the one below is
-      // the only one measured.
-      await page.waitForTimeout(300);
 
       return page.evaluate(async () => {
         const w = window as never as NestedStickyWindow;
@@ -2679,18 +2697,27 @@ for (const [created, reenter] of [[true, false], [true, true], [false, false]]) 
         window.scrollTo(0, 3000);
         await new Promise((resolve) => requestAnimationFrame(resolve));
 
+        const before = w.__probeRefreshes();
+
         w.__gsapRefresh();
 
         const sameTask = w.__demoted().length;
         const { out } = await w.__sweep([window.scrollY]);
 
-        return { probe: w.__probe(), tops: out[0].tops, sameTask };
+        return {
+          probe: w.__probe(),
+          tops: out[0].tops,
+          sameTask,
+          refreshes: w.__probeRefreshes() - before,
+        };
       });
     };
 
     const on = await measure('always');
     const off = await measure('off');
 
+    // __gsapRefresh() is the only GSAP refresh the measurement sees.
+    expect([on.refreshes, off.refreshes]).toEqual([1, 1]);
     expect(on.probe).toEqual(off.probe);
 
     if (created) expect(on.sameTask).toBeGreaterThan(0);
@@ -3146,6 +3173,7 @@ interface IframeLoadResult {
   scroll: number;
   toggles: boolean[];
   loads: number;
+  frameKept: [boolean, boolean] | null;
   focused: boolean;
   readyAtBuild: DocumentReadyState;
   readyAtRebuild: DocumentReadyState | null;
@@ -3237,18 +3265,17 @@ for (const impl of ['pin', 'scene']) {
 
     expect(atomic).toBe(browserName !== 'webkit');
     expect(result.errors).toEqual([]);
-    // A plain move blurs the input at once; the reload's load comes later.
+    // A plain move blurs the input and replaces the frame's window at once.
     expect(result.focused).toBe(atomic);
+    expect(result.frameKept).toEqual([atomic, atomic]);
 
-    const loads = () => (window as never as { __loads: () => number }).__loads();
+    if (!atomic) {
+      const loads = () => (window as never as { __loads: () => number }).__loads();
 
-    if (atomic) {
-      await page.waitForTimeout(500);
-    } else {
+      // The reload's load comes later.
       await page.waitForFunction(loads);
+      expect(await page.evaluate(loads)).toBe(1);
     }
-
-    expect(await page.evaluate(loads)).toBe(atomic ? 0 : 1);
   });
 }
 
@@ -3281,6 +3308,7 @@ interface RevertMidScrollWindow {
     libraryScrolls: string[];
   }>;
   __rerunAtRest: (rerun: boolean) => Promise<number>;
+  __rest: () => Promise<void>;
 }
 
 // The revert's kills wait for the end of the scroll, and the new instance takes the old one's
@@ -3294,7 +3322,8 @@ for (const destroy of [false, true]) {
       await page.goto(`/fixtures/revertMidScroll.html${params ? `?${params}` : ''}`);
       await page.waitForFunction(() => (window as never as RevertMidScrollWindow).__ready);
       await page.evaluate(() => window.scrollTo(0, 2500));
-      await page.waitForTimeout(500);
+      // So the steps below start their own scroll.
+      await page.evaluate(() => (window as never as RevertMidScrollWindow).__rest());
 
       const { moves, scrolling, libraryScrolls } = await page.evaluate(
         () => (window as never as RevertMidScrollWindow).__scrollAndRerun(20, 20),

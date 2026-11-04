@@ -47,6 +47,17 @@
       window.__growFiller = () => {
         filler.style.height = '500px';
       };
+      // Makes window.__refreshed resolve on GSAP's next refresh.
+      window.__armRefresh = () => {
+        window.__refreshed = new Promise((resolve) => {
+          const done = () => {
+            ScrollTrigger.removeEventListener('refresh', done);
+            resolve();
+          };
+
+          ScrollTrigger.addEventListener('refresh', done);
+        });
+      };
     </script>
   </body>
 </html>

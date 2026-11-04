@@ -70,6 +70,7 @@
         end: 'bottom top',
         onToggle: (self) => toggles.push(self.isActive),
       });
+      const frameKept = () => iframe.contentWindow?.__mark === true;
       const frames = () =>
         new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const sticky = new StickyScrollTrigger('.root');
@@ -89,6 +90,8 @@
         }
 
         input.focus();
+        // A move replaces the frame's window at once, which drops the mark.
+        if (iframe.contentWindow) iframe.contentWindow.__mark = true;
       } else {
         await new Promise((resolve) => setTimeout(resolve, Number(params.get('ms') ?? 0)));
         window.scrollTo(0, 1000);
@@ -105,6 +108,8 @@
       } catch (error) {
         errors.push(String(error));
       }
+
+      const keptInBuild = frameKept();
 
       release(outer ? 'outer' : 'frame');
 
@@ -141,6 +146,8 @@
         scroll: window.scrollY,
         toggles,
         loads,
+        // ?afterLoad only: right after the build, and once its deferred work has run.
+        frameKept: params.has('afterLoad') ? [keptInBuild, frameKept()] : null,
         focused: document.activeElement === input,
         readyAtBuild,
         readyAtRebuild,

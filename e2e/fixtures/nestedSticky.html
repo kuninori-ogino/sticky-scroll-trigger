@@ -150,9 +150,12 @@
       // A plain trigger inside the nesting, to check what GSAP's own refresh measures, and what a
       // layout read in its onRefresh sees.
       const probeElement = document.querySelector(`#s${Math.floor(n / 2)} p`);
+      let probeRefreshes = 0;
       const probe = ScrollTrigger.create(sticky.createResolvedTrigger({
         trigger: probeElement,
         onRefresh: () => {
+          probeRefreshes += 1;
+
           // ?reenter=1: a refresh() from inside GSAP's refresh, after it has measured.
           if (params.get('reenter') === '1') sticky.refresh();
 
@@ -172,6 +175,8 @@
 
       window.__sticky = sticky;
       window.__gsapRefresh = () => ScrollTrigger.refresh();
+      // GSAP refreshes that measured the probe so far.
+      window.__probeRefreshes = () => probeRefreshes;
       window.__probe = () => ({
         start: probe.start,
         end: probe.end,
