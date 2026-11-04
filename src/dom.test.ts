@@ -613,6 +613,28 @@ describe('restoreIfWritten', () => {
     expect(restoreIfWritten(el, 'margin-top', saved, written)).toBe(true);
     expect(el.style.marginTop).toBe('5px');
   });
+
+  it('recognizes its own write only under the priority it was made with', () => {
+    const el = document.createElement('div');
+    const saved = captureInline(el, 'margin-top');
+    const written = writeInline(el, 'margin-top', '0', 'important');
+
+    expect(el.style.getPropertyPriority('margin-top')).toBe('important');
+    expect(restoreIfWritten(el, 'margin-top', saved, written)).toBe(false);
+    expect(restoreIfWritten(el, 'margin-top', saved, written, 'important')).toBe(true);
+    expect(el.style.marginTop).toBe('');
+  });
+
+  it('leaves a value whose priority was changed since', () => {
+    const el = document.createElement('div');
+    const saved = captureInline(el, 'margin-top');
+    const written = writeInline(el, 'margin-top', '0', 'important');
+
+    el.style.setProperty('margin-top', written);
+
+    expect(restoreIfWritten(el, 'margin-top', saved, written, 'important')).toBe(false);
+    expect(el.style.marginTop).toBe('0px');
+  });
 });
 
 // jsdom has no layout, so the page's height is stubbed to report whether the range is still set.

@@ -2227,6 +2227,23 @@ test('an author\'s own scroll-margin-top still applies on top of the correction'
   expect(landed.rectTop).toBe(40);
 });
 
+// Written as a plain inline value, the correction lost to the stylesheet's !important, so these
+// jumps landed short of the target.
+test('an author\'s !important scroll-margin-top in a stylesheet still gets the correction', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/scrollMargin.html');
+
+  const arrival = await findArrivalScroll(page, 'withImportantMargin');
+
+  for (const from of [0, 1400]) {
+    expect(
+      await jumpTo(page, 'withImportantMargin', from, 'anchorClick'),
+      `from ${from}`,
+    ).toEqual({ scroll: (arrival ?? 0) - 40, rectTop: 40 });
+  }
+});
+
 // The emitted rules themselves, checked against the same freeze window the fixture reports. jsdom
 // never reaches this path, reporting no scroll-timeline support, so it never sees a stylesheet to
 // check.

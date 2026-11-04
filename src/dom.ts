@@ -213,23 +213,30 @@ export const restoreInlinePosition = (el: HTMLElement, saved: InlinePosition): v
 };
 
 // Returns the value as the browser keeps it, for restoreIfWritten to compare.
-export const writeInline = (el: HTMLElement, property: string, value: string): string => {
-  el.style.setProperty(property, value);
+export const writeInline = (
+  el: HTMLElement,
+  property: string,
+  value: string,
+  priority = '',
+): string => {
+  el.style.setProperty(property, value, priority);
 
   return el.style.getPropertyValue(property);
 };
 
-// Puts saved back while property still holds a writeInline result, and says whether it did. A
-// value set since (gsap.set, say) or made !important is the author's and stays.
+// Puts saved back while property still holds the writeInline result made with `priority`, and says
+// whether it did. A value or priority set since (gsap.set, say) is the author's and stays.
 export const restoreIfWritten = (
   el: HTMLElement,
   property: string,
   saved: InlineValue,
   written: string,
+  priority = '',
 ): boolean => {
   const { style } = el;
 
-  if (style.getPropertyValue(property) !== written || style.getPropertyPriority(property)) {
+  if (style.getPropertyValue(property) !== written
+    || style.getPropertyPriority(property) !== priority) {
     return false;
   }
 

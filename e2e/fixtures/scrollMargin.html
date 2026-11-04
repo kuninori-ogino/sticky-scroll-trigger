@@ -33,6 +33,10 @@
       #withAuthorMargin {
         scroll-margin-top: var(--headerHeight);
       }
+      /* Beats a plain inline value, so only an !important correction applies here. */
+      #withImportantMargin {
+        scroll-margin-top: 40px !important;
+      }
       /* Fixed so a link is clickable at any scroll position, and out of the flow so it never
          shifts anything the spec measures. */
       nav {
@@ -49,6 +53,7 @@
       <a id="link-afterScene1" href="#afterScene1">1</a>
       <a id="link-afterScene2" href="#afterScene2">2</a>
       <a id="link-withAuthorMargin" href="#withAuthorMargin">3</a>
+      <a id="link-withImportantMargin" href="#withImportantMargin">4</a>
     </nav>
     <div class="lead"></div>
     <div class="container__inner">
@@ -58,6 +63,7 @@
       <section id="scene2" class="scene"></section>
       <div id="afterScene2" class="block"></div>
       <div id="withAuthorMargin" class="block"></div>
+      <div id="withImportantMargin" class="block"></div>
     </div>
     <div class="tail"></div>
 

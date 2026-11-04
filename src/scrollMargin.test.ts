@@ -227,6 +227,35 @@ describe('sync', () => {
     );
   });
 
+  // A stylesheet's !important beats a plain inline value, so only an !important correction applies
+  // to such a target. The next sync and restore() still have to recognize that write as their own.
+  it('writes the correction !important over a stylesheet !important, and still re-reads it', () => {
+    const root = query('.root');
+    const sync = createSync();
+    const style = document.createElement('style');
+    const after = query('#after');
+
+    style.textContent = '#after { scroll-margin-top: 40px !important }';
+    document.head.appendChild(style);
+    sync.sync([dwell(0, 800)], root, naturalTops);
+
+    expect(after.style.getPropertyValue('scroll-margin-top')).toBe(
+      correction(root, { top: 400, windows: [[0, 800]], authorPx: 40 }),
+    );
+    expect(after.style.getPropertyPriority('scroll-margin-top')).toBe('important');
+
+    style.textContent = '#after { scroll-margin-top: 120px !important }';
+    sync.sync([dwell(0, 800)], root, naturalTops);
+
+    expect(after.style.getPropertyValue('scroll-margin-top')).toBe(
+      correction(root, { top: 400, windows: [[0, 800]], authorPx: 120 }),
+    );
+
+    sync.restore();
+
+    expect(after.style.getPropertyValue('scroll-margin-top')).toBe('');
+  });
+
   it('picks up an inline scroll-margin-top set since the last sync, and hands that one back', () => {
     const root = query('.root');
     const sync = createSync();

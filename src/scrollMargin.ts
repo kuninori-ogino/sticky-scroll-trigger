@@ -97,6 +97,9 @@ import { TIE_TOLERANCE_PX } from './freezeWindow';
 // an authoring knob nothing here ever writes to, unlike the per-layer ramp properties in
 // buildStylesheet, so two instances have nothing to collide over.
 const OFFSET_PROPERTY = '--sst-scroll-margin-top-offset';
+// The correction already includes the author's computed value, so it's written !important: a page
+// stylesheet's !important beats a plain inline value, but not an inline !important one.
+const PRIORITY = 'important';
 
 // One Scene layer's contribution, as of the current refresh().
 export interface SceneDwell {
@@ -230,7 +233,13 @@ export const createScrollMarginSync = (
     const snapshot = snapshots.get(target);
 
     if (snapshot?.owner === instanceId) {
-      restoreIfWritten(target, 'scroll-margin-top', snapshot.authored, snapshot.written);
+      restoreIfWritten(
+        target,
+        'scroll-margin-top',
+        snapshot.authored,
+        snapshot.written,
+        PRIORITY,
+      );
     }
   };
 
@@ -318,7 +327,13 @@ export const createScrollMarginSync = (
         const existing = snapshots.get(target);
 
         if (existing
-          && restoreIfWritten(target, 'scroll-margin-top', existing.authored, existing.written)) {
+          && restoreIfWritten(
+            target,
+            'scroll-margin-top',
+            existing.authored,
+            existing.written,
+            PRIORITY,
+          )) {
           return;
         }
 
@@ -355,6 +370,7 @@ export const createScrollMarginSync = (
           target,
           'scroll-margin-top',
           `calc(${authorPx}px + var(${OFFSET_PROPERTY}, 0px) + ${consumed} - (${lag}))`,
+          PRIORITY,
         );
         snapshot.owner = instanceId;
       });
