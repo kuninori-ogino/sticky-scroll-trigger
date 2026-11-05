@@ -916,8 +916,9 @@ export default class StickyScrollTrigger {
     );
 
     // Every pin is cleared before any is measured, so a pin nested inside another's trigger
-    // doesn't hold that trigger open at the range it's about to replace. Clearing inner as well
-    // keeps a percentage-height trigger resolving against its natural container.
+    // doesn't hold that trigger open at the range it's about to replace. inner is cleared too, so
+    // outer measures trigger instead of the range; a percentage height that would still resolve
+    // against inner is fitPinsToItems' to hold.
     wrapped.forEach(({ outer, inner }) => {
       clearHeightForRead(outer);
       clearHeightForRead(inner);
@@ -927,7 +928,8 @@ export default class StickyScrollTrigger {
 
     try {
       // An item pin's outer is sized from trigger's own box instead: the line stretches outer's
-      // natural height whatever trigger's.
+      // natural height whatever trigger's. A block-flow pin's outer measures trigger with the
+      // height fitPinsToItems holds on it.
       const itemHeights = fitPinsToItems(wrapped);
 
       // Read in full before anything is written back, so all the writes share one reflow
@@ -1243,8 +1245,11 @@ export default class StickyScrollTrigger {
       // stops at the end. Wrappers carrying the pin down don't matter: all three engines leave
       // sticky offsets out of the scrollable area. jsdom reports no height, so there's no end.
       const room = documentHeight > 0 ? documentHeight - triggerTop : Infinity;
+      // A pin released before it engages still gets trigger's own height, which pins nothing just
+      // as 0 does, so a percentage height on trigger doesn't collapse to 0.
+      const still = triggerHeight + triggerMarginBottom;
 
-      return [{ layer, topPx, range: Math.max(0, Math.min(height, room)) }];
+      return [{ layer, topPx, range: Math.max(0, Math.min(Math.max(height, still), room)) }];
     });
   }
 

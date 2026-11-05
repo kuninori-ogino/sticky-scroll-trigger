@@ -1520,6 +1520,223 @@ test('refresh() of a pinned flex item keeps an iframe and focus inside it', asyn
   });
 });
 
+interface PinPercentHeightWindow {
+  __ready: boolean;
+  __natural: Record<string, number[]>;
+  __inline: string;
+  __boxes: () => Record<string, number[]>;
+  __refresh: () => void;
+  __stickyRefresh: () => void;
+  __kill: () => void;
+}
+
+const loadPinPercentHeight = async (page: Page, query: Record<string, string>) => {
+  await page.goto(`/fixtures/pinPercentHeight.html?${new URLSearchParams(query)}`);
+  await page.waitForFunction(() => (window as never as PinPercentHeightWindow).__ready);
+};
+
+// Inside the wrappers, a percentage height or min-height would resolve against inner (the pin
+// range) instead of trigger's container, so refresh() holds it in px as read in place, as GSAP's
+// pin does. Under an auto-height parent it resolves to nothing, as unpinned.
+for (const [description, query] of [
+  ['height: 50% in a 400px box', { pin: 'height: 50%' }],
+  ['height: 100% in a 400px box', { pin: 'height: 100%' }],
+  ['min-height: 100% in a 400px box', { pin: 'min-height: 100%' }],
+  ['height: 100% under an auto-height parent', { pin: 'height: 100%', box: '' }],
+  ['min-height: 100% under an auto-height parent', { pin: 'min-height: 100%', box: '' }],
+  ['min-height: 100% as a flex item', { pin: 'min-height: 100%', item: '1' }],
+  // The held height is !important too, or the stylesheet's would win over it.
+  ['stylesheet min-height: 100% !important', { sheet: 'min-height: 100% !important' }],
+  ['max-height: 50% clamping it in a 1000px box', { box: 'height: 1000px', pin: 'height: 450px; max-height: 50%' }],
+  ['stylesheet width: 25% !important as a flex item', { item: '1', flex: '0 1 auto', sheet: 'width: 25% !important' }],
+  // Read with the enclosing pin in its own place, where its own percentage resolves.
+  ['nested pin, both height: 50%', { pin: 'height: 50%', nested: 'height: 50%' }],
+  // Fitted first, so the enclosing pin is read around an outer already at its item's width.
+  ['nested flex item with width: 25%', { box: '', nested: 'width: 25%', row: '1' }],
+] as const) {
+  test(`a pin with ${description} keeps its box, and the page below it`, async ({ page }) => {
+    await loadPinPercentHeight(page, query);
+
+    // Read after a second refresh(), which finds inner as the first one left it.
+    const result = await page.evaluate(async () => {
+      const win = window as never as PinPercentHeightWindow;
+
+      win.__refresh();
+
+      const boxes = win.__boxes();
+
+      window.scrollTo(0, 200);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+
+      return {
+        natural: win.__natural,
+        boxes,
+        topAt200: document.getElementById('pin')!.getBoundingClientRect().top,
+      };
+    });
+
+    expectBoxes(result.boxes, result.natural, description);
+    expect(result.topAt200).toBeCloseTo(0, 0);
+  });
+}
+
+// A pin released before it would engage pins nothing, but inner still holds trigger's own height,
+// so a percentage on trigger doesn't resolve against a range of 0 and collapse it.
+for (const [description, query] of [
+  ['max-height: 100% under an auto-height parent', { pin: 'max-height: 100%', box: '' }],
+  ['height: 100% in a 400px box', { pin: 'height: 100%' }],
+] as const) {
+  test(`a pin with ${description} and an end before its start keeps its box`, async ({ page }) => {
+    await loadPinPercentHeight(page, { ...query, end: 'top bottom' });
+
+    const result = await page.evaluate(() => {
+      const win = window as never as PinPercentHeightWindow;
+
+      win.__refresh();
+
+      return { natural: win.__natural, boxes: win.__boxes() };
+    });
+
+    expectBoxes(result.boxes, result.natural, description);
+  });
+}
+
+// Wrapped, a nested pin keeps its margins inside its own wrapper, so they no longer collapse
+// through the enclosing pin's edges (README "createStickyPin"). The enclosing pin is read around
+// it, so its held height takes them in, and what follows stays where it was.
+test('a pin inside another keeps its margins inside it, and the page below in place', async ({ page }) => {
+  await loadPinPercentHeight(page, { box: '', nested: 'height: 50px; margin: 30px 0' });
+
+  const result = await page.evaluate(() => {
+    const win = window as never as PinPercentHeightWindow;
+
+    win.__refresh();
+
+    return { natural: win.__natural, boxes: win.__boxes() };
+  });
+  const [, pinTop, , pinHeight] = result.boxes.pin;
+  const [, nestedTop, , nestedHeight] = result.boxes.nested;
+
+  expect(result.boxes.after[1]).toBeCloseTo(result.natural.after[1], 0);
+  expect(nestedTop - pinTop).toBeCloseTo(30, 0);
+  expect(pinTop + pinHeight - (nestedTop + nestedHeight)).toBeCloseTo(30, 0);
+});
+
+// A block pin's height is held only where it resolves against inner's, so one sized by its content,
+// in px or in vh keeps following its content and the viewport between refreshes (GSAP skips its
+// refresh on a mobile toolbar resize).
+// A percentage max-height under an auto-height parent clamps nothing, inside the wrappers or out.
+for (const pin of ['', 'height: 50vh', 'height: 30px', 'max-height: 100%']) {
+  test(`a block pin with ${pin || 'an auto height'} is left to its own height rules`, async ({ page }) => {
+    await loadPinPercentHeight(page, { pin, box: '' });
+
+    const result = await page.evaluate(() => {
+      const element = document.getElementById('pin')!;
+      const inline = element.style.cssText;
+      const before = element.getBoundingClientRect().height;
+
+      (element.firstElementChild as HTMLElement).style.height = '100px';
+
+      return { inline, before, grown: element.getBoundingClientRect().height };
+    });
+
+    // Only the author's own inline values and the pin's sticky position.
+    expect(result.inline).not.toContain('!important');
+
+    if (!pin || pin.startsWith('max-height')) expect([result.before, result.grown]).toEqual([20, 100]);
+  });
+}
+
+// outer keeps its height while inner is probed: otherwise WebKit moved the scroll of a page
+// scrolled past the pin, and a smooth scroll stopped in WebKit and Firefox.
+for (const pin of ['', 'height: 50%']) {
+  test(`refresh() past a block pin with ${pin || 'an auto height'} leaves the scroll alone`, async ({ page }) => {
+    // An auto-height box, so outer's height reaches the page.
+    await loadPinPercentHeight(page, { pin, box: '' });
+
+    const result = await page.evaluate(async () => {
+      const win = window as never as PinPercentHeightWindow;
+      const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+
+      window.scrollTo(0, 2000);
+      win.__stickyRefresh();
+
+      const atRest = window.scrollY;
+
+      window.scrollTo({ top: 500, behavior: 'smooth' });
+      await frame();
+      await frame();
+      win.__stickyRefresh();
+
+      // Until the scroll has stood still for a while.
+      let still = 0;
+
+      while (still < 10) {
+        const last = window.scrollY;
+
+        await frame();
+        still = window.scrollY === last ? still + 1 : 0;
+      }
+
+      return { atRest, smooth: window.scrollY };
+    });
+
+    expect(result).toEqual({ atRest: 2000, smooth: 500 });
+  });
+}
+
+// Only the height is held on a pin in block flow, so a container that changes width without a
+// resize (a sidebar opening, say) still moves trigger's width and auto margins at once.
+for (const [description, pin, widths] of [
+  ['its full width', '', [[0, 1200], [0, 900]]],
+  ['a percentage width', 'width: 50%; height: 50%', [[0, 600], [0, 450]]],
+  ['a max-width centered by auto margins', 'max-width: 800px; margin: 0 auto', [[200, 800], [50, 800]]],
+] as const) {
+  test(`a block pin with ${description} follows its container's width before a refresh()`, async ({ page }) => {
+    await loadPinPercentHeight(page, { pin, frame: 'width: 1200px' });
+
+    const result = await page.evaluate(() => {
+      const box = () => {
+        const { left, width } = document.getElementById('pin')!.getBoundingClientRect();
+
+        return [left, width];
+      };
+
+      const before = box();
+
+      document.getElementById('frame')!.style.width = '900px';
+
+      return [before, box()];
+    });
+
+    result.forEach((box, i) => box.forEach((value, j) => {
+      expect(value, `${description} [${i}][${j}]`).toBeCloseTo(widths[i][j], 0);
+    }));
+  });
+}
+
+test('killing a pin with a percentage height puts its own inline box back', async ({ page }) => {
+  const pin = 'height: 50%; max-height: 90%; min-height: 10px !important; width: 50%';
+
+  await loadPinPercentHeight(page, { pin });
+
+  const result = await page.evaluate(async () => {
+    const win = window as never as PinPercentHeightWindow;
+    const element = document.getElementById('pin')!;
+    const held = [element.style.height, element.style.maxHeight, element.style.minHeight];
+
+    win.__kill();
+
+    // Unwrapped, which a kill may leave to a microtask.
+    while (element.parentElement!.id !== 'box') await new Promise((resolve) => requestAnimationFrame(resolve));
+
+    return { inline: win.__inline, held, restored: element.style.cssText };
+  });
+
+  expect(result.held).toEqual(['200px', '200px', '200px']);
+  expect(result.restored).toBe(result.inline);
+});
+
 // The element side of createStickyPin's start clause resolves against trigger's own height:
 // 'bottom bottom' has to become a sticky top of viewportHeight - 60, a number the clause never
 // states. jsdom reports every height as 0, so that term only shows up in a real browser.

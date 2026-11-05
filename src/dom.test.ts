@@ -495,34 +495,124 @@ describe('fitPinsToItems', () => {
     return pin;
   };
 
+  const BLOCK_HELD = 'height: 20px !important; max-height: 20px !important; min-height: 20px !important;';
+
+  // Puts trigger in block flow, with a height that follows inner's once inner has one, as a
+  // percentage height does in a browser.
+  const followInner = () => {
+    document.getElementById('host')!.style.display = 'block';
+    document.head.insertAdjacentHTML(
+      'beforeend',
+      '<style id="follows">div[style*="height"] > #trigger { height: 99px }</style>',
+    );
+  };
+
   afterEach(() => {
     document.getElementById('box')?.remove();
+    document.getElementById('follows')?.remove();
   });
 
-  it('holds trigger\'s own box on it in px, max-width and max-height at its size', () => {
+  // !important, so a stylesheet's !important doesn't beat it.
+  it('holds trigger\'s own box on it in px, max-width at its width, max- and min-height at its height', () => {
     const pin = wrapWithBox('');
 
     fitPinsToItems([pin]);
 
     expect(pin.trigger.style.cssText).toBe(
-      'width: 30px; max-width: 30px; height: 20px; max-height: 20px; padding: 1px 2px; margin: 3px 4px;',
+      'width: 30px !important; max-width: 30px !important; height: 20px !important; '
+      + 'max-height: 20px !important; min-height: 20px !important; '
+      + 'padding: 1px 2px !important; margin: 3px 4px !important;',
     );
+  });
+
+  it('holds only a block-flow trigger\'s height, leaving its width, padding and margins to its rules', () => {
+    const pin = wrapWithBox('');
+
+    followInner();
+
+    expect(fitPinsToItems([pin])).toEqual([undefined]);
+    expect(pin.trigger.style.cssText).toBe(BLOCK_HELD);
+    expect(pin.outer.style.display).toBe('flow-root');
+    expect(pin.inner.style.display).toBe('');
+  });
+
+  it('leaves a block-flow trigger\'s height to its rules where it doesn\'t follow inner\'s', () => {
+    const pin = wrapWithBox('');
+
+    document.getElementById('host')!.style.display = 'block';
+    pin.inner.style.height = '7px';
+    fitPinsToItems([pin]);
+
+    expect(pin.trigger.style.cssText).toBe('');
+    expect(pin.inner.style.height).toBe('7px');
+    expect(pin.outer.style.height).toBe('');
+  });
+
+  // A percentage max-height is tried with inner at trigger's own height; the second stylesheet
+  // makes it clamp there.
+  it('holds a block-flow trigger\'s percentage max-height only where it clamps', () => {
+    const pin = wrapWithBox('max-height: 50%');
+
+    document.getElementById('host')!.style.display = 'block';
+    fitPinsToItems([pin]);
+
+    expect(pin.trigger.style.cssText).toBe('max-height: 50%;');
+
+    document.head.insertAdjacentHTML(
+      'beforeend',
+      '<style id="follows">div[style*="height: 20px"] > #trigger { height: 10px }</style>',
+    );
+    fitPinsToItems([pin]);
+
+    expect(pin.trigger.style.cssText).toBe(
+      'max-height: 20px !important; height: 20px !important; min-height: 20px !important;',
+    );
+  });
+
+  it('holds no height on a block-flow trigger with no box, or one not in px', () => {
+    const pin = wrapWithBox('');
+
+    document.getElementById('host')!.style.display = 'block';
+    pin.trigger.getClientRects = () => [] as unknown as DOMRectList;
+    fitPinsToItems([pin]);
+
+    expect(pin.trigger.style.cssText).toBe('');
+
+    rendered(pin.trigger);
+    document.getElementById('box')!.remove();
+    fitPinsToItems([pin]);
+
+    expect(pin.trigger.style.cssText).toBe('');
   });
 
   it('puts trigger\'s own inline values back before the next read, and on unwrap', () => {
     const pin = wrapWithBox('max-width: 50%');
 
     fitPinsToItems([pin]);
-    document.getElementById('host')!.style.display = 'block';
+    followInner();
     fitPinsToItems([pin]);
 
-    expect(pin.trigger.style.cssText).toBe('max-width: 50%;');
+    // The item's box gives way to the block's.
+    expect(pin.trigger.style.cssText).toBe(`max-width: 50%; ${BLOCK_HELD}`);
 
     document.getElementById('host')!.style.display = 'flex';
     fitPinsToItems([pin]);
     unwrapPin(pin.outer, pin.trigger, NO_POSITION);
 
     expect(pin.trigger.style.cssText).toBe('max-width: 50%;');
+  });
+
+  it('puts a block-flow trigger\'s !important min-height back as one', () => {
+    const pin = wrapWithBox('min-height: 100% !important');
+
+    followInner();
+    fitPinsToItems([pin]);
+
+    expect(pin.trigger.style.minHeight).toBe('20px');
+
+    unwrapPin(pin.outer, pin.trigger, NO_POSITION);
+
+    expect(pin.trigger.style.cssText).toBe('min-height: 100% !important;');
   });
 
   it('puts an !important inline value back as one', () => {
@@ -542,11 +632,11 @@ describe('fitPinsToItems', () => {
 
     fitPinsToItems([pin]);
     pin.trigger.style.height = '7px';
-    // The value written, made !important since.
-    pin.trigger.style.setProperty('width', '30px', 'important');
+    // The value written, made plain since.
+    pin.trigger.style.width = '30px';
     unwrapPin(pin.outer, pin.trigger, NO_POSITION);
 
-    expect(pin.trigger.style.cssText).toBe('width: 30px !important; height: 7px;');
+    expect(pin.trigger.style.cssText).toBe('width: 30px; height: 7px;');
   });
 
   it('holds trigger\'s last box again when a read throws', () => {
@@ -564,6 +654,24 @@ describe('fitPinsToItems', () => {
     unwrapPin(pin.outer, pin.trigger, NO_POSITION);
 
     expect(pin.trigger.style.cssText).toBe('');
+  });
+
+  it('holds a block-flow trigger\'s last height again when a read throws', () => {
+    const pin = wrapWithBox('width: 50%');
+
+    followInner();
+    fitPinsToItems([pin]);
+
+    pin.trigger.getClientRects = () => {
+      throw new Error('read failed');
+    };
+
+    expect(() => fitPinsToItems([pin])).toThrow('read failed');
+    expect(pin.trigger.style.cssText).toBe(`width: 50%; ${BLOCK_HELD}`);
+
+    unwrapPin(pin.outer, pin.trigger, NO_POSITION);
+
+    expect(pin.trigger.style.cssText).toBe('width: 50%;');
   });
 
   // jsdom leaves an auto margin unresolved, as a browser does for an element it doesn't lay out.
@@ -588,6 +696,69 @@ describe('fitPinsToItems', () => {
     expect(() => fitPinsToItems([pin])).toThrow('read failed');
     expect(pin.outer.style.display).toBe('flow-root');
     expect(pin.inner.style.display).toBe('');
+  });
+
+  // #a is a flex item pinned in #host, holding #b, a flex item pinned in #a's own row.
+  const wrapNested = () => {
+    document.body.innerHTML = '<div id="host" style="display: flex"><div id="a">'
+      + '<div id="row" style="display: flex"><div id="b"></div></div></div></div>';
+
+    const [a, b] = ['a', 'b'].map((id) => {
+      const trigger = document.getElementById(id)!;
+
+      rendered(trigger);
+
+      return { trigger, ...wrapPin(trigger) };
+    });
+
+    return { a, b };
+  };
+
+  // offsetWidth is the read measureUsedWidth makes of an item.
+  const onRead = (trigger: HTMLElement, read: () => number) => {
+    Object.defineProperty(trigger, 'offsetWidth', { configurable: true, get: read });
+  };
+
+  it('reads a pin inside another\'s trigger first, with both in their own places', () => {
+    const { a, b } = wrapNested();
+    const reads: string[][] = [];
+
+    onRead(b.trigger, () => {
+      reads.push(['b', a.outer.style.display, a.inner.style.display, b.outer.style.display]);
+
+      return 0;
+    });
+    onRead(a.trigger, () => {
+      reads.push(['a', a.outer.style.display, b.outer.style.display]);
+
+      return 0;
+    });
+    fitPinsToItems([a, b]);
+
+    // #b is in its wrappers by the time #a is read around it.
+    expect(reads).toEqual([['b', 'contents', 'contents', 'contents'], ['a', 'contents', 'flow-root']]);
+    expect(a.outer.style.display).toBe('flow-root');
+    expect(a.inner.style.display).toBe('');
+  });
+
+  it('holds a nested pin\'s last box again when the enclosing pin\'s read throws', () => {
+    const { a, b } = wrapNested();
+
+    document.head.insertAdjacentHTML('beforeend', `<style id="box">#b { ${BOX} }</style>`);
+    fitPinsToItems([a, b]);
+
+    const heldBefore = b.trigger.style.cssText;
+
+    onRead(a.trigger, () => {
+      throw new Error('read failed');
+    });
+
+    expect(() => fitPinsToItems([a, b])).toThrow('read failed');
+    expect(b.trigger.style.cssText).toBe(heldBefore);
+
+    unwrapPin(b.outer, b.trigger, NO_POSITION);
+
+    expect(b.trigger.style.cssText).toBe('');
   });
 
   it('leaves a plain inline trigger in block flow, without its clear', () => {

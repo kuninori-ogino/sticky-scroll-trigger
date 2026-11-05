@@ -484,14 +484,15 @@ interface WrappedPin {
   trigger: HTMLElement;
 }
 
-// trigger's own box as the item, held on it in px as GSAP's _swapPinIn holds a pin's (max-width and
-// max-height at the width and height), so its percentages, a stretched height or a flexed width
-// don't resolve again inside outer.
+// trigger's own box as the item, held on it in px as GSAP's _swapPinIn holds a pin's (max-width at
+// the width, max-height and min-height at the height), so its percentages, a stretched height or a
+// flexed width don't resolve again inside outer.
 const TRIGGER_BOX = [
   'width',
   'max-width',
   'height',
   'max-height',
+  'min-height',
   'padding-top',
   'padding-right',
   'padding-bottom',
@@ -501,36 +502,57 @@ const TRIGGER_BOX = [
   'margin-bottom',
   'margin-left',
 ] as const;
+// What a block-flow trigger holds: inside outer only its height resolves against something new
+// (inner, which holds the pin range); width, padding and margins resolve as before.
+const BLOCK_BOX = ['height', 'max-height', 'min-height'] as const;
+// An inner height no pin range reaches, to see whether trigger's height follows inner's.
+const PROBE_HEIGHT = '123456px';
+
+type HeldProperties = typeof TRIGGER_BOX | typeof BLOCK_BOX;
+
+// Each property's value in style, max-* and min-* taken at the size itself.
+const readHeldBox = (style: CSSStyleDeclaration, properties: HeldProperties) =>
+  properties.map((property) => style.getPropertyValue(property.replace(/^m(ax|in)-/, '')));
+// Written !important: a page stylesheet's !important beats a plain inline value, but not an
+// inline !important one.
+const HELD_PRIORITY = 'important';
 
 interface HeldBox {
+  properties: HeldProperties;
   authored: InlineValue[];
   written: string[];
 }
 
 const heldBoxes = new WeakMap<HTMLElement, HeldBox>();
 
-const holdTriggerBox = (trigger: HTMLElement, values: readonly string[]) => {
-  const authored = TRIGGER_BOX.map((property) => captureInline(trigger, property));
+const holdTriggerBox = (
+  trigger: HTMLElement,
+  properties: HeldProperties,
+  values: readonly string[],
+) => {
+  const authored = properties.map((property) => captureInline(trigger, property));
 
   heldBoxes.set(trigger, {
+    properties,
     authored,
-    written: TRIGGER_BOX.map((property, i) => writeInline(trigger, property, values[i])),
+    written: properties.map((property, i) =>
+      writeInline(trigger, property, values[i], HELD_PRIORITY)),
   });
 };
 
 // Puts trigger's own inline values back, each only while it still holds the value written: one set
 // since (gsap.set, say) stays. Returns what was held, if anything.
-const releaseTriggerBox = (trigger: HTMLElement): string[] | undefined => {
+const releaseTriggerBox = (trigger: HTMLElement): HeldBox | undefined => {
   const held = heldBoxes.get(trigger);
 
   if (!held) return undefined;
 
-  TRIGGER_BOX.forEach((property, i) => {
-    restoreIfWritten(trigger, property, held.authored[i], held.written[i]);
+  held.properties.forEach((property, i) => {
+    restoreIfWritten(trigger, property, held.authored[i], held.written[i], HELD_PRIORITY);
   });
   heldBoxes.delete(trigger);
 
-  return held.written;
+  return held;
 };
 
 // Makes each pin's outer take trigger's place as the flex or grid item, float or inline-level box
@@ -545,43 +567,73 @@ const releaseTriggerBox = (trigger: HTMLElement): string[] | undefined => {
 // outer in px, as GSAP's pin-spacer holds it; a grid item's outer takes its width from its cell.
 // trigger's own box is held on it too (TRIGGER_BOX).
 //
-// All reads come before the writes that follow them, for every pin at once, so a refresh costs a
-// fixed number of style and layout passes.
+// A block-flow pin is read in its own place the same way, for its height alone, and holds it only
+// where it would resolve against inner (heightsFollowingInner): a pin sized by its content or the
+// viewport keeps following them between refreshes.
+//
+// Nested pins are read and fitted first, innermost depth first, with their enclosing pins'
+// wrappers out of the layout too. An enclosing pin is then read around them, since without its
+// nested wrappers it would miss the margins they keep inside.
+//
+// At each depth all reads come before the writes, so a refresh costs a fixed number of style and
+// layout passes per nesting depth.
 export const fitPinsToItems = (pins: readonly WrappedPin[]): (number | undefined)[] => {
   // Released first, so trigger's box is read as its own rules make it.
   const held = pins.map(({ trigger }) => releaseTriggerBox(trigger));
+  const enclosing = pins.map(({ trigger }) =>
+    pins.filter((other) => other.trigger !== trigger && other.trigger.contains(trigger)));
+  const reserved: (number | undefined)[] = pins.map(() => undefined);
 
   try {
-    return fitReleasedPins(pins);
-  } catch (error) {
-    // Held again, to match the outer the caller puts back.
-    pins.forEach(({ trigger }, i) => {
-      const values = held[i];
+    for (let depth = Math.max(0, ...enclosing.map(({ length }) => length)); depth >= 0; depth--) {
+      const indexes = pins.flatMap((_, i) => (enclosing[i].length === depth ? [i] : []));
+      const around = new Set(indexes.flatMap((i) => enclosing[i]));
 
-      if (values) holdTriggerBox(trigger, values);
+      fitReleasedPins(indexes.map((i) => pins[i]), [...around]).forEach((height, j) => {
+        reserved[indexes[j]] = height;
+      });
+    }
+
+    return reserved;
+  } catch (error) {
+    // Held again as before, to match the outer the caller puts back.
+    pins.forEach(({ trigger }, i) => {
+      const box = held[i];
+
+      releaseTriggerBox(trigger);
+
+      if (box) holdTriggerBox(trigger, box.properties, box.written);
     });
 
     throw error;
   }
 };
 
-const fitReleasedPins = (pins: readonly WrappedPin[]): (number | undefined)[] => {
+interface MeasuredBox {
+  // An item's margin box, its width undefined where a grid cell gives outer one.
+  item?: { width: number | undefined; height: number };
+  box: string[];
+}
+
+// around: the pins enclosing these, taken out of the layout with them while they're read.
+const fitReleasedPins = (
+  pins: readonly WrappedPin[],
+  around: readonly WrappedPin[],
+): (number | undefined)[] => {
   // Live, so the reads below see the layout as it stands by then.
   const styles = pins.map(({ trigger }) => getComputedStyle(trigger));
   const layouts = pins.map(({ outer }, i) => itemLayout(outer, styles[i]));
   // A trigger with no box under a hidden ancestor (a hidden tab's), or off the document, has none
   // to hold yet, so outer goes by the properties alone until a refresh() can measure one.
-  const rendered = pins.map(({ trigger }, i) =>
-    !!layouts[i] && trigger.getClientRects().length > 0);
+  const rendered = pins.map(({ trigger }) => trigger.getClientRects().length > 0);
   // In block flow only a block-level trigger's clear moves outer (an inline one's, or one with no
   // box, applies to nothing); the rest go back to unset.
   const copied = styles.map((style, i) => PIN_ITEM_PROPERTIES.map((property) =>
     (layouts[i] || (property === 'clear' && isBlockLevel(style)) ? style[property] : '')));
-  const items = pins.flatMap((pin, index) => {
-    const layout = layouts[index];
-
-    return layout && rendered[index] ? [{ ...pin, index, layout }] : [];
-  });
+  const measured = pins.flatMap((pin, index) =>
+    (rendered[index] ? [{ ...pin, index, layout: layouts[index] }] : []));
+  const aroundDisplays = around.map(({ outer, inner }) =>
+    [outer.style.display, inner.style.display]);
 
   pins.forEach(({ outer }, i) => {
     outer.style.width = '';
@@ -590,41 +642,58 @@ const fitReleasedPins = (pins: readonly WrappedPin[]): (number | undefined)[] =>
     });
     outer.style.display = rendered[i] ? 'contents' : outerDisplay(layouts[i]);
   });
-  items.forEach(({ inner }) => {
+  [...measured, ...around].forEach(({ outer, inner }) => {
+    outer.style.display = 'contents';
     inner.style.display = 'contents';
   });
 
-  let boxes: { width: number | undefined; height: number; triggerBox: string[] }[];
+  let boxes: MeasuredBox[];
 
   try {
-    boxes = items.map(({ trigger, index, layout }) => {
+    boxes = measured.map(({ trigger, index, layout }) => {
       const style = styles[index];
 
+      if (!layout) return { box: readHeldBox(style, BLOCK_BOX) };
+
       return {
-        width: layout === 'grid'
-          ? undefined
-          : measureUsedWidth(trigger)
-            + parseFloat(style.marginLeft)
-            + parseFloat(style.marginRight),
-        height: marginBoxHeight(trigger, style),
-        triggerBox: TRIGGER_BOX.map((property) =>
-          style.getPropertyValue(property.replace(/^max-/, ''))),
+        item: {
+          width: layout === 'grid'
+            ? undefined
+            : measureUsedWidth(trigger)
+              + parseFloat(style.marginLeft)
+              + parseFloat(style.marginRight),
+          height: marginBoxHeight(trigger, style),
+        },
+        box: readHeldBox(style, TRIGGER_BOX),
       };
     });
   } finally {
-    items.forEach(({ outer, inner, layout }) => {
+    measured.forEach(({ outer, inner, layout }) => {
       outer.style.display = outerDisplay(layout);
 
       inner.style.display = '';
     });
+    around.forEach(({ outer, inner }, i) => {
+      [outer.style.display, inner.style.display] = aroundDisplays[i];
+    });
   }
 
+  const inPx = boxes.map(({ box }) => box.every((value) => value.endsWith('px')));
+  const dependent = heightsFollowingInner(measured, boxes, inPx, styles);
   const reserved: (number | undefined)[] = pins.map(() => undefined);
 
   // A box that didn't come out in px is left to outer's own measurement, and trigger to its own
   // rules.
-  items.forEach(({ outer, trigger, layout, index }, i) => {
-    const { width, height, triggerBox } = boxes[i];
+  measured.forEach(({ outer, trigger, index, layout }, i) => {
+    const { item, box } = boxes[i];
+
+    if (!item) {
+      if (inPx[i] && dependent.has(i)) holdTriggerBox(trigger, BLOCK_BOX, box);
+
+      return;
+    }
+
+    const { width, height } = item;
 
     if (!Number.isFinite(height) || (width !== undefined && !Number.isFinite(width))) return;
 
@@ -634,10 +703,57 @@ const fitReleasedPins = (pins: readonly WrappedPin[]): (number | undefined)[] =>
 
     reserved[index] = height;
 
-    if (triggerBox.every((value) => value.endsWith('px'))) holdTriggerBox(trigger, triggerBox);
+    if (inPx[i]) holdTriggerBox(trigger, TRIGGER_BOX, box);
   });
 
   return reserved;
+};
+
+// The block-flow pins in measured (by index) whose height resolves against inner's and so needs
+// holding. A percentage height or min-height follows inner up to PROBE_HEIGHT. A percentage
+// max-height can only clamp an inner shorter than trigger, and a pin range is at least trigger's
+// height (#planPinLayers), so it's tried with inner at trigger's height. Other heights (auto, px,
+// vh) keep following their content and the viewport.
+const heightsFollowingInner = (
+  measured: readonly (WrappedPin & { index: number })[],
+  boxes: readonly MeasuredBox[],
+  inPx: readonly boolean[],
+  styles: readonly CSSStyleDeclaration[],
+): Set<number> => {
+  const blocks = measured.flatMap((pin, i) => (!boxes[i].item && inPx[i] ? [{ ...pin, i }] : []));
+  const dependent = new Set(probeInner(blocks, () => PROBE_HEIGHT, boxes));
+  const capped = blocks.filter(({ index, i }) =>
+    !dependent.has(i) && styles[index].maxHeight.includes('%'));
+
+  probeInner(capped, ({ i }) => boxes[i].box[0], boxes).forEach((i) => dependent.add(i));
+
+  return dependent;
+};
+
+// The blocks whose trigger changes height with inner at height(block). outer keeps its height
+// meanwhile so nothing after it moves: a page resized under the probe had WebKit move its scroll,
+// or stopped a smooth scroll.
+const probeInner = <T extends WrappedPin & { i: number }>(
+  blocks: readonly T[],
+  height: (block: T) => string,
+  boxes: readonly MeasuredBox[],
+): number[] => {
+  const saved = blocks.map(({ outer, inner }) => [outer.style.height, inner.style.height]);
+  const outerHeights = blocks.map(({ outer }) => getComputedStyle(outer).height);
+
+  blocks.forEach((block, j) => {
+    block.outer.style.height = outerHeights[j];
+    block.inner.style.height = height(block);
+  });
+
+  try {
+    return blocks.flatMap(({ trigger, i }) =>
+      (getComputedStyle(trigger).height !== boxes[i].box[0] ? [i] : []));
+  } finally {
+    blocks.forEach(({ outer, inner }, j) => {
+      [outer.style.height, inner.style.height] = saved[j];
+    });
+  }
 };
 
 export const unwrapPin = (

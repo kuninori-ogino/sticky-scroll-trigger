@@ -2992,6 +2992,20 @@ describe('createStickyPin()', () => {
     });
   });
 
+  // Released before it engages, the pin still gets trigger's own height as its range, so a
+  // percentage on trigger doesn't collapse to 0.
+  it('keeps the range at trigger\'s own height when the pin releases before it engages', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+
+    trigger.style.cssText = 'height: 120px; margin-bottom: 10px';
+    Object.defineProperty(trigger, 'offsetHeight', { configurable: true, get: () => 120 });
+    controller.createStickyPin({ trigger, end: 'top bottom' });
+    controller.refresh();
+
+    expect(trigger.parentElement!.style.height).toBe('130px');
+  });
+
   // How long a pin against itself holds depends on layout, so the duration is e2e's job.
   it('accepts a pin with neither endTrigger nor end', () => {
     const { query, controller } = setup();

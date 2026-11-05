@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinPercentHeight fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .after {
+        height: 3000px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="frame">
+      <div class="root">
+        <div id="box"><div id="pin"><div style="height: 20px">pin</div></div></div>
+        <section id="after" class="after"></section>
+      </div>
+    </div>
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      // ?box= is #box's style, ?pin= #pin's inline style, ?item=1 makes #pin a flex item of #box
+      // (flex: 0 0 300px, or ?flex=),
+      // ?frame= is the style of #frame, around the container, ?sheet= a stylesheet rule for #pin,
+      // ?end= #pin's end (+=300).
+      // ?nested= puts a second pin, #nested with that inline style, at the start of #pin, and ?row=1
+      // makes it a flex item of a row there, wrapping a line of text.
+      const params = new URLSearchParams(location.search);
+
+      document.getElementById('frame').style.cssText = params.get('frame') ?? '';
+      const box = document.getElementById('box');
+      const pin = document.getElementById('pin');
+
+      box.style.cssText = params.get('box') ?? 'height: 400px';
+      pin.style.cssText = params.get('pin') ?? '';
+
+      if (params.get('sheet')) {
+        document.head.append(Object.assign(document.createElement('style'), {
+          textContent: `#pin { ${params.get('sheet')} }`,
+        }));
+      }
+
+      if (params.has('nested')) {
+        const nested = `<div id="nested" style="${params.get('nested')}">${'nested '.repeat(params.get('row') ? 40 : 1)}</div>`;
+
+        pin.firstElementChild.outerHTML = params.get('row')
+          ? `<div style="display: flex">${nested}<div style="flex: 1">main</div></div>`
+          : nested;
+      }
+
+      if (params.get('item')) {
+        box.style.display = 'flex';
+        box.style.alignItems = 'flex-start';
+        pin.style.flex = params.get('flex') ?? '0 0 300px';
+      }
+
+      const rect = (id) => {
+        const { left, top, width, height } = document.getElementById(id).getBoundingClientRect();
+
+        return [left, top + window.scrollY, width, height];
+      };
+      const boxes = () => Object.fromEntries(
+        ['pin', 'nested', 'after'].filter((id) => document.getElementById(id)).map((id) => [id, rect(id)]),
+      );
+
+      window.__natural = boxes();
+      window.__inline = pin.style.cssText;
+
+      const sticky = new StickyScrollTrigger('.root');
+      const trigger = ScrollTrigger.create(sticky.createStickyPin({ trigger: '#pin', end: params.get('end') ?? '+=300' }));
+
+      if (params.has('nested')) {
+        ScrollTrigger.create(sticky.createStickyPin({ trigger: '#nested', end: '+=100' }));
+      }
+
+      ScrollTrigger.refresh();
+
+      window.__boxes = boxes;
+      window.__refresh = () => ScrollTrigger.refresh();
+      window.__stickyRefresh = () => sticky.refresh();
+      window.__kill = () => trigger.kill();
+      window.__ready = true;
+    </script>
+  </body>
+</html>
