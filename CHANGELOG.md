@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-06
+
 - A `createStickyPin` or `createStickyTrigger` whose trigger holds a still-loading `<iframe>` (a YouTube or map embed, say) is now built once, at `DOMContentLoaded` too. Moving the trigger restarted the frame's load, the browser fired the page's `load` event mid-move, and GSAP's refresh there wrapped the trigger a second time: Chrome and Safari threw `NotFoundError` and left an empty wrapper beside it, and Firefox threw `trigger ... is not attached`. A custom element in the trigger that refreshes from its `connectedCallback` no longer wraps a pin twice (with `ScrollTrigger.refresh()`) or rebuilds a Scene layer endlessly (with either refresh).
 - In Chrome and Edge 133+ and Firefox 144+, building, rebuilding or taking down the nesting and wrapping or unwrapping a pin now keep `<iframe>` elements loaded and inputs focused inside what moves, using the browser's `moveBefore()`. Safari has none and still reloads them (see [`refresh()`](README.md#refresh)).
 - Same-page links now land on a target whose stylesheet sets `scroll-margin-top` with `!important` (a fixed-header offset, say). The library's inline correction lost to that rule, so they stopped short of it.
