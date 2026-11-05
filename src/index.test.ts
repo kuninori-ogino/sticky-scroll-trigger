@@ -3823,6 +3823,207 @@ describe('cover z-order lift re-sync', () => {
   });
 });
 
+// Registration reads the page's own markup, so a cover doesn't depend on what the layers
+// registered before it have built.
+describe('a cover registered after the structure is built', () => {
+  const fakeSelf = makeFakeSelf();
+
+  const setupPin = () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="base"></section>
+        <section class="pinned"></section>
+        <section class="after"></section>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const pin = controller.createStickyPin({ trigger: query('.pinned'), endTrigger: query('.after') });
+
+    controller.refresh();
+
+    return { controller, pin };
+  };
+
+  // The pin's outer would be the default otherwise, and its kill detaches it.
+  it('takes a built pin\'s trigger as the default cover, which keeps its lift after the pin\'s kill', async () => {
+    const { controller, pin } = setupPin();
+
+    controller.createOverlapScroll({ trigger: query('.base') });
+    controller.refresh();
+    pin.onKill?.(fakeSelf);
+    controller.refresh();
+    await flushMicrotasks();
+
+    expect(query('.pinned').style.zIndex).toBe('1');
+    expect(query('.after').style.zIndex).toBe('1');
+  });
+
+  it('accepts a built pin\'s trigger as an explicit cover', () => {
+    const { controller } = setupPin();
+
+    expect(() => controller.createOverlapScroll({ trigger: query('.base'), cover: query('.pinned') }))
+      .not.toThrow();
+
+    const outer = query('.pinned').parentElement!.parentElement!;
+
+    expect(outer.style.zIndex).toBe('1');
+    expect(query('.pinned').style.zIndex).toBe('');
+  });
+
+  it.each([
+    ['the later trigger first', true],
+    ['the earlier trigger first', false],
+  ])('builds the same structure for an explicit cover past another cover\'s wrapper with %s', (_, laterFirst) => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="t1"></section>
+        <section class="t2"></section>
+        <section class="c"></section>
+      </div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const later = () => controller.createOverlapScroll({ trigger: query('.t2') });
+    const earlier = () => controller.createOverlapScroll({ trigger: query('.t1'), cover: query('.c') });
+
+    if (laterFirst) {
+      later();
+      controller.refresh();
+      expect(earlier).not.toThrow();
+    } else {
+      earlier();
+      later();
+    }
+
+    controller.refresh();
+
+    expect(query('.t1').parentElement!.parentElement).toBe(query('.t2').parentElement);
+    expect(query('.t2').parentElement!.parentElement).toBe(query('.root'));
+    expect(query('.root').lastElementChild).toBe(query('.c'));
+    expect(query('.c').style.zIndex).toBe('1');
+  });
+
+  // The walk starts from the pin's outer whichever instance pins cover.
+  it('lifts from another instance\'s pin wrapper when cover is that pin\'s trigger', () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="base"></section>
+        <section class="pinned"></section>
+        <section class="after"></section>
+      </div>
+      <div class="other"></div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const other = new StickyScrollTrigger(query('.other'));
+
+    controller.createOverlapScroll({ trigger: query('.base') });
+    other.createStickyPin({ trigger: query('.pinned'), endTrigger: query('.after') });
+    other.refresh();
+    controller.refresh();
+
+    expect(query('.pinned').parentElement!.parentElement!.style.zIndex).toBe('1');
+    expect(query('.after').style.zIndex).toBe('1');
+  });
+
+  it.each([
+    ['before', false],
+    ['after', true],
+  ])('wraps a trigger another instance pins with that pin\'s wrappers, registered %s the pin is built', (_, coverLast) => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="s0"></section>
+        <section class="pinned"></section>
+        <section class="after"></section>
+      </div>
+      <div class="other"></div>`;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const other = new StickyScrollTrigger(query('.other'));
+    const cover = () => controller.createOverlapScroll({ trigger: query('.pinned') });
+
+    if (!coverLast) cover();
+
+    other.createStickyPin({ trigger: query('.pinned'), endTrigger: query('.after') });
+    other.refresh();
+
+    if (coverLast) expect(cover).not.toThrow();
+
+    controller.refresh();
+
+    const outer = query('.pinned').parentElement!.parentElement!;
+    const wrapper = outer.parentElement!;
+
+    expect(wrapper.parentElement).toBe(query('.root'));
+    expect(Array.from(wrapper.children)).toEqual([query('.s0'), outer]);
+    expect(query('.after').style.zIndex).toBe('1');
+  });
+
+  // Another instance's cover wrapper stays: only its owner takes it down.
+  it('still rejects a cover outside another instance\'s cover wrapper', () => {
+    document.body.innerHTML = `
+      <div class="root">
+        <section class="t1"></section>
+        <section class="t2"></section>
+        <section class="c"></section>
+      </div>`;
+
+    const first = new StickyScrollTrigger(query('.root'));
+
+    first.createOverlapScroll({ trigger: query('.t2') });
+    first.refresh();
+
+    const second = new StickyScrollTrigger(query('.root'));
+
+    expect(() => second.createOverlapScroll({ trigger: query('.t1'), cover: query('.c') })).toThrow(
+      /cover <section\.c> must be a sibling of trigger <section\.t1>/,
+    );
+  });
+
+  // The inner instance's Scene nodes come down once its last Scene is killed.
+  it('takes another instance\'s built root as the default cover, which keeps its lift after that instance\'s Scene kill', async () => {
+    document.body.innerHTML = `
+      <div class="outer">
+        <section class="a"></section>
+        <div class="inner"><section class="scene"></section></div>
+        <section class="after"></section>
+      </div>`;
+
+    const inner = new StickyScrollTrigger(query('.inner'));
+    const scene = inner.createStickyTrigger({ trigger: query('.scene') });
+
+    inner.refresh();
+
+    const outer = new StickyScrollTrigger(query('.outer'));
+
+    outer.createOverlapScroll({ trigger: query('.a') });
+    outer.refresh();
+    scene.onKill?.(fakeSelf);
+    inner.refresh();
+    outer.refresh();
+    await flushMicrotasks();
+
+    expect(query('.inner').parentElement).toBe(query('.outer'));
+    expect(query('.inner').style.zIndex).toBe('1');
+    expect(query('.after').style.zIndex).toBe('1');
+  });
+
+  // The Scene's sentinel follows the root inside its wrapper.
+  it('takes the element after another instance\'s built root as the default cover when that root is trigger', () => {
+    document.body.innerHTML = `
+      <div class="outer">
+        <div class="inner"><section class="scene"></section></div>
+        <section class="after"></section>
+      </div>`;
+
+    const inner = new StickyScrollTrigger(query('.inner'));
+
+    inner.createStickyTrigger({ trigger: query('.scene') });
+    inner.refresh();
+    new StickyScrollTrigger(query('.outer')).createOverlapScroll({ trigger: query('.inner') });
+
+    expect(query('.after').style.zIndex).toBe('1');
+  });
+});
+
 // GSAP's 'max' keyword (the scroller's max scroll position) is accepted where the layer itself
 // never contributes to document height: createOverlapScroll (cover layers never add padding) and
 // resolveScrollPosition/createResolvedTrigger (they never register into `layers` or add height).

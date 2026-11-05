@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>coverAfterBuild fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        display: block;
+        height: 400px;
+      }
+      .head {
+        height: 200px;
+      }
+      .pin {
+        height: 100px;
+        background: #9cf;
+      }
+      .after {
+        height: 800px;
+        background: #ccc;
+      }
+      .tail {
+        height: 3000px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="head"></div>
+    <div id="host"></div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const query = new URLSearchParams(location.search);
+      const layout = query.get('layout');
+      // Whether the cover registers after the structure it sits next to is built.
+      const coverLast = query.get('order') === 'coverLast';
+      const host = document.getElementById('host');
+      const $ = (selector) => document.querySelector(selector);
+      const frame = () => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      });
+      const lift = (selector) => {
+        const style = getComputedStyle($(selector));
+
+        return `${style.position}/${style.zIndex}`;
+      };
+      const read = (cover, lifted) => ({
+        cover: [Math.round(cover.start), Math.round(cover.end)],
+        lifted: lifted.map(lift),
+      });
+      // Builds the structure before the cover registers, or registers the cover first.
+      const inOrder = (structure, cover) => {
+        if (coverLast) {
+          structure();
+          ScrollTrigger.refresh();
+          cover();
+        } else {
+          cover();
+          structure();
+        }
+
+        ScrollTrigger.refresh();
+      };
+
+      window.__run = async () => {
+        if (layout === 'pinKill' || layout === 'pinMargin') {
+          host.innerHTML = `<div class="root"><section class="base"></section>
+            <div class="pin"${layout === 'pinMargin' ? ' style="margin-top: 40px"' : ''}></div>
+            <section class="after"></section></div>`;
+
+          const sticky = new StickyScrollTrigger('.root');
+          let pin;
+          let cover;
+
+          inOrder(
+            () => { pin = ScrollTrigger.create(sticky.createStickyPin({ trigger: '.pin', end: '+=300' })); },
+            () => { cover = ScrollTrigger.create(sticky.createOverlapScroll({ trigger: '.base' })); },
+          );
+          await frame();
+
+          if (layout === 'pinMargin') return read(cover, ['.after']);
+
+          pin.kill();
+          await Promise.resolve();
+          ScrollTrigger.refresh();
+          await frame();
+
+          return read(cover, ['.pin', '.after']);
+        }
+
+        if (layout === 'nestedRoot') {
+          host.innerHTML = `<div class="outer"><section class="a"></section>
+            <div class="inner"><section></section><section class="scene"></section><section></section></div>
+            <section class="after"></section></div>`;
+
+          const inner = new StickyScrollTrigger('.inner');
+          const outer = new StickyScrollTrigger('.outer');
+          let cover;
+
+          inOrder(
+            () => ScrollTrigger.create(inner.createStickyTrigger({ trigger: '.scene', end: '+=300' })),
+            () => { cover = ScrollTrigger.create(outer.createOverlapScroll({ trigger: '.inner' })); },
+          );
+          await frame();
+
+          return read(cover, ['.after']);
+        }
+
+        // matchMedia: the pin exists on wide viewports only, the cover on every one.
+        host.innerHTML = `<div class="root"><section class="base"></section>
+          <div class="pin"></div><section class="after"></section></div>`;
+
+        const sticky = new StickyScrollTrigger('.root');
+        const mm = gsap.matchMedia();
+
+        mm.add('(min-width: 800px)', () => {
+          ScrollTrigger.create(sticky.createStickyPin({ trigger: '.pin', end: '+=300' }));
+        });
+        sticky.refresh();
+
+        const cover = ScrollTrigger.create(sticky.createOverlapScroll({ trigger: '.base' }));
+
+        ScrollTrigger.refresh();
+        // Read after a switch, once GSAP's refresh has settled the layers left.
+        window.__read = async () => {
+          ScrollTrigger.refresh();
+          await frame();
+
+          return read(cover, ['.after']);
+        };
+
+        return read(cover, ['.after']);
+      };
+    </script>
+  </body>
+</html>

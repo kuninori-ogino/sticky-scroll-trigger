@@ -864,6 +864,16 @@ describe('wrapCover', () => {
     expect(() => wrapCover(document.createElement('div'))).toThrow(/not attached to the document/);
   });
 
+  it('takes in a pinned base with its pin wrappers', () => {
+    const { host, base } = setup();
+    const { outer } = wrapPin(base);
+    const wrapper = wrapCover(base);
+
+    expect(Array.from(wrapper.children, (el) => el.id || 'outer')).toEqual(['a', 'b', 'outer']);
+    expect(wrapper.lastElementChild).toBe(outer);
+    expect(ids(host).slice(1)).toEqual(['cover', 'tail']);
+  });
+
   it('unwrapCover restores the original position and order', () => {
     const { host, base } = setup();
     const wrapper = wrapCover(base);

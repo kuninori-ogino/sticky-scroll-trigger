@@ -331,6 +331,58 @@ export const moveInto = (parent: Node, node: Node, before: Node | null = null): 
   }
 };
 
+// Every instance's pin and Scene nodes, which registration reads through so that registration
+// order doesn't change a cover. An instance passes its own cover wrappers in `own`: to the others,
+// a cover wrapper is part of the page until its owner takes it down.
+const transparentNodes = new WeakSet<Element>();
+const isTransparent = (el: Element, own: ReadonlySet<Element>): boolean =>
+  transparentNodes.has(el) || own.has(el);
+
+export const logicalParent = (el: Element, own: ReadonlySet<Element>): Element | null => {
+  let parent = el.parentElement;
+
+  while (parent && isTransparent(parent, own)) parent = parent.parentElement;
+
+  return parent;
+};
+
+const firstLogicalAt = (el: Element, own: ReadonlySet<Element>): Element | null => {
+  if (!isTransparent(el, own)) return el;
+
+  for (const child of Array.from(el.children)) {
+    const found = firstLogicalAt(child, own);
+
+    if (found) return found;
+  }
+
+  return null;
+};
+
+export const logicalNextSibling = (el: Element, own: ReadonlySet<Element>): Element | null => {
+  for (let node = el; ;) {
+    for (let sibling = node.nextElementSibling; sibling; sibling = sibling.nextElementSibling) {
+      const found = firstLogicalAt(sibling, own);
+
+      if (found) return found;
+    }
+
+    const parent = node.parentElement;
+
+    if (!parent || !isTransparent(parent, own)) return null;
+
+    node = parent;
+  }
+};
+
+// The outermost pin or Scene node around el, which holds el's place among its physical siblings.
+export const physicalHolder = (el: HTMLElement): HTMLElement => {
+  let node = el;
+
+  while (node.parentElement && transparentNodes.has(node.parentElement)) node = node.parentElement;
+
+  return node;
+};
+
 // Scene layer: wraps inner in one level of stickyContainer{ stickyWrapper, stickyPadding }
 // and moves it inside the wrapper. With holdTrailingMargin, an empty flow-root after inner keeps a
 // bottom margin ending inner (its own or its content's) in the wrapper, where it can't move the end
@@ -344,6 +396,7 @@ export const wrapScene = (inner: HTMLElement, holdTrailingMargin: boolean) => {
   const wrapper = createStructureElement();
   const padding = createStructureElement();
 
+  [container, wrapper, padding].forEach((node) => transparentNodes.add(node));
   padding.setAttribute('aria-hidden', 'true');
   padding.style.pointerEvents = 'none';
   inner.parentNode.insertBefore(container, inner);
@@ -355,16 +408,18 @@ export const wrapScene = (inner: HTMLElement, holdTrailingMargin: boolean) => {
     const sentinel = createStructureElement();
 
     sentinel.style.display = 'flow-root';
+    transparentNodes.add(sentinel);
     wrapper.appendChild(sentinel);
   }
 
   return { container, wrapper, padding };
 };
 
-// Cover layer: moves "everything from the start up to trigger" (within trigger's own parent)
-// into a sticky wrapper.
+// Cover layer: moves everything from the start through trigger into a sticky wrapper. Another
+// instance's pin or Scene wrappers around trigger go in whole, as if built after this one.
 export const wrapCover = (trigger: HTMLElement): HTMLDivElement => {
-  const parent = trigger.parentNode;
+  const holder = physicalHolder(trigger);
+  const parent = holder.parentNode;
 
   if (!parent) {
     throw new Error(
@@ -381,7 +436,7 @@ export const wrapCover = (trigger: HTMLElement): HTMLDivElement => {
 
     moveInto(wrapper, node);
 
-    if (node === trigger) break;
+    if (node === holder) break;
   }
 
   return wrapper;
@@ -413,6 +468,8 @@ export const wrapPin = (trigger: HTMLElement) => {
   const inner = createStructureElement();
 
   outer.style.display = 'flow-root';
+  transparentNodes.add(outer);
+  transparentNodes.add(inner);
   trigger.parentNode.insertBefore(outer, trigger);
   outer.appendChild(inner);
   moveInto(inner, trigger);

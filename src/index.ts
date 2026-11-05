@@ -13,10 +13,13 @@ import {
   insertSpacers,
   isMovingDom,
   liftAboveStickyWrapper,
+  logicalNextSibling,
+  logicalParent,
   measureDocumentHeightWithoutPinRanges,
   measureDocumentMaxScroll,
   measureUsedHeight,
   measureViewportHeight,
+  physicalHolder,
   readThenRestore,
   resolveElement,
   resolveEndTrigger,
@@ -417,7 +420,7 @@ export default class StickyScrollTrigger {
   }
 
   // A registration expects the page back as it was, on this container and any around or inside
-  // it, before it reads the DOM (a cover's default is trigger.nextElementSibling; a selector can
+  // it, before it reads the DOM (a cover's default is trigger's next sibling; a selector can
   // use child combinators). The setup puts the dwell back, so the content stays put without a
   // scroll (see #disarmKeepingContent); mid-scroll it isn't kept, as for destroy(). Only create*
   // calls release a hold, and one that throws in validation has released it already.
@@ -1750,14 +1753,12 @@ export default class StickyScrollTrigger {
   // #restoreCoverLifts's counterpart, and the only thing that raises a sibling the page has grown
   // since the last refresh.
   //
-  // The walk starts from whatever holds cover's own place among the siblings, which is the pin's
-  // wrapper when cover is itself a pin trigger: cover sits inside outer{ inner{ cover } } by then,
-  // so starting from cover would reach cover alone.
+  // The walk starts from whatever holds cover's own place among the siblings, which is a pin's
+  // outer when cover is a pin trigger: cover sits inside outer{ inner{ cover } } by then, so
+  // starting from cover would reach cover alone.
   #liftCovers(): void {
     this.#coverLayers().forEach((layer) => {
-      const pin = this.#pinLayers.find(({ trigger }) => trigger === layer.cover);
-
-      this.#coverRestoreByLayer.set(layer, liftAboveStickyWrapper(pin?.outer ?? layer.cover));
+      this.#coverRestoreByLayer.set(layer, liftAboveStickyWrapper(physicalHolder(layer.cover)));
     });
   }
 
@@ -2007,16 +2008,23 @@ export default class StickyScrollTrigger {
     this.#assertTriggerInsideRoot(trigger, 'createOverlapScroll');
 
     const endTrigger = resolveEndTrigger(trigger, endTriggerInput, 'createOverlapScroll');
-    const coverElement = cover === undefined ? trigger.nextElementSibling : resolveElement(cover, 'createOverlapScroll');
+    // Read through wrappers a kill or rebuild can take away: next to a pin, the default would
+    // otherwise be the pin's outer, which the pin's kill detaches.
+    const ownWrappers = new Set(
+      this.#coverLayers().flatMap(({ wrapper }) => (wrapper ? [wrapper] : [])),
+    );
+    const coverElement = cover === undefined
+      ? logicalNextSibling(trigger, ownWrappers)
+      : resolveElement(cover, 'createOverlapScroll');
 
     if (!(coverElement instanceof HTMLElement)) {
       throw new Error(
-        `createOverlapScroll: cover element (trigger.nextElementSibling) not found for trigger `
+        `createOverlapScroll: cover element (trigger's next sibling) not found for trigger `
         + `${describeElement(trigger)}`,
       );
     }
 
-    if (coverElement.parentNode !== trigger.parentNode) {
+    if (logicalParent(coverElement, ownWrappers) !== logicalParent(trigger, ownWrappers)) {
       throw new Error(
         `createOverlapScroll: cover ${describeElement(coverElement)} must be a sibling of trigger `
         + describeElement(trigger),
@@ -2045,7 +2053,7 @@ export default class StickyScrollTrigger {
         // refresh, and the one made here stops matching the elements actually lifted.
         this.#coverRestoreByLayer.get(layer)?.();
         // The wrapper holds trigger's siblings, which matchMedia's next setup reads in the same
-        // task (the default cover is trigger.nextElementSibling). It moves only what the deferred
+        // task (the default cover is trigger's next sibling). It moves only what the deferred
         // teardown would, so it can come off now.
         unbuildCover(layer);
         onKill?.(self);
@@ -2055,7 +2063,7 @@ export default class StickyScrollTrigger {
 
     // Usage that skips ScrollTrigger.create() never fires GSAP's onKill, so destroy() needs its
     // own handle on the restore.
-    this.#coverRestoreByLayer.set(layer, liftAboveStickyWrapper(coverElement));
+    this.#coverRestoreByLayer.set(layer, liftAboveStickyWrapper(physicalHolder(coverElement)));
 
     return vars;
   }

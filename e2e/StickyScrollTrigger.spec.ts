@@ -3052,6 +3052,65 @@ for (const explicit of [false, true]) {
   });
 }
 
+// coverAfterBuild.html's reading: the cover layer's window and each listed element's
+// position/z-index.
+interface CoverAfterBuild {
+  cover: [number, number];
+  lifted: string[];
+}
+
+const loadCoverAfterBuild = async (page: Page, query: string) => {
+  await page.goto(`/fixtures/coverAfterBuild.html?${query}`);
+
+  return page.evaluate(() => (
+    window as never as { __run: () => Promise<CoverAfterBuild> }
+  ).__run());
+};
+
+// Each layout comes out the same whichever registers first.
+for (const order of ['coverFirst', 'coverLast']) {
+  test(`a cover next to a pin keeps its window and lift after the pin's kill (${order})`, async ({ page }) => {
+    // base's bottom meets the viewport's at -120 and cover's top reaches 0 at 600.
+    expect(await loadCoverAfterBuild(page, `layout=pinKill&order=${order}`)).toEqual({
+      cover: [-120, 600],
+      lifted: ['relative/1', 'relative/1'],
+    });
+  });
+
+  test(`a cover next to a pin with a top margin ends where the pin arrives (${order})`, async ({ page }) => {
+    expect(await loadCoverAfterBuild(page, `layout=pinMargin&order=${order}`)).toEqual({
+      cover: [-120, 640],
+      lifted: ['relative/1'],
+    });
+  });
+
+  test(`a cover on another instance's root is the element after it (${order})`, async ({ page }) => {
+    // .inner holds three 400px sections and the Scene's 300px dwell, and starts at 600.
+    expect(await loadCoverAfterBuild(page, `layout=nestedRoot&order=${order}`)).toEqual({
+      cover: [1080, 2100],
+      lifted: ['relative/1'],
+    });
+  });
+}
+
+// The common shape: a pin on wide viewports only, its cover on every one.
+test('a cover keeps its window and lift once a matchMedia switch reverts the pin next to it', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 720 });
+
+  const wide = await loadCoverAfterBuild(page, 'layout=matchMedia');
+
+  await page.setViewportSize({ width: 600, height: 720 });
+  // The revert unwraps the pin.
+  await page.waitForFunction(() => document.querySelector('.pin')!.parentElement!.classList.contains('root'));
+
+  const narrow = await page.evaluate(() => (
+    window as never as { __read: () => Promise<CoverAfterBuild> }
+  ).__read());
+
+  expect(wide).toEqual({ cover: [-120, 600], lifted: ['relative/1'] });
+  expect(narrow).toEqual(wide);
+});
+
 // matchMediaNewInstance.html's record, read after each switch settles.
 interface MatchMediaNewInstanceState {
   setups: number;
