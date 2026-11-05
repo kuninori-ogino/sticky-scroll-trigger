@@ -3996,3 +3996,59 @@ for (const fromEnd of [0, 150]) {
     })).toBe(before);
   });
 }
+
+interface PinStickyResetWindow {
+  __ready: boolean;
+  __reads: (positions: number[]) => Promise<number[]>;
+  __bottom: () => string;
+}
+
+const loadPinStickyReset = async (page: Page, query: Record<string, string>) => {
+  await page.goto(`/fixtures/pinStickyReset.html?${new URLSearchParams(query)}`);
+  await page.waitForFunction(() => (window as never as PinStickyResetWindow).__ready);
+};
+
+// A read gives the unstuck position at every scroll: before the pin (0), stuck (900) and past its
+// range (1600).
+for (const [description, query, expected] of [
+  ['a pin the page makes position: sticky', { sheet: 'position: sticky; top: 50px' }, 700],
+  ['a pin the page makes position: sticky !important', { sheet: 'position: sticky !important; top: 50px !important' }, 700],
+  ['a pin with a stylesheet top', { sheet: 'top: 30px' }, 700],
+  ['a pin with a stylesheet top !important', { sheet: 'top: 30px !important' }, 700],
+  ['a pin with a stylesheet bottom', { sheet: 'bottom: 40px' }, 700],
+  ['a pin with a stylesheet bottom !important', { sheet: 'bottom: 40px !important' }, 700],
+  ['a pin with a stylesheet position: relative and a top', { sheet: 'position: relative; top: 30px' }, 700],
+  ['an absolute child of a pin', { abs: '1' }, 720],
+  ['an absolute child of a layer', { kind: 'scene', abs: '1' }, 320],
+] as const) {
+  test(`the position read for ${description} is the same stuck or not`, async ({ page }) => {
+    await loadPinStickyReset(page, query);
+
+    const reads = await page.evaluate(
+      (positions) => (window as never as PinStickyResetWindow).__reads(positions),
+      [0, 900, 1600],
+    );
+
+    expect(reads).toEqual([expected, expected, expected]);
+  });
+}
+
+for (const [inline, expected] of [
+  ['', '/'],
+  ['bottom: 7px', '7px/'],
+  ['bottom: 7px !important', '7px/important'],
+] as const) {
+  test(`a pin trigger with ${inline ? `inline ${inline}` : 'no inline bottom'} has it back after a read while stuck`, async ({ page }) => {
+    await loadPinStickyReset(page, { inline });
+
+    const bottom = await page.evaluate(async () => {
+      const win = window as never as PinStickyResetWindow;
+
+      await win.__reads([900]);
+
+      return win.__bottom();
+    });
+
+    expect(bottom).toBe(expected);
+  });
+}

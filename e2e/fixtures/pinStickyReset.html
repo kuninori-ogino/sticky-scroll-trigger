@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinStickyReset fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        height: 400px;
+      }
+      .tail {
+        height: 3000px;
+      }
+    </style>
+  </head>
+  <body>
+    <div style="height: 200px">head</div>
+    <div class="root"></div>
+    <div class="tail"></div>
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      // ?kind=scene builds a Scene layer on .target, else a pin; ?sheet= is a stylesheet rule for
+      // .target, ?inline= its inline style, ?abs=1 makes .probe an absolute child at top: 120px.
+      const params = new URLSearchParams(location.search);
+      const scene = params.get('kind') === 'scene';
+      const probe = params.get('abs')
+        ? '<div class="probe" style="position: absolute; top: 120px; height: 20px"></div>'
+        : '<div class="probe" style="margin-top: 100px; height: 50px"></div>';
+
+      document.head.append(Object.assign(document.createElement('style'), {
+        textContent: `.target { ${params.get('sheet') ?? ''} }`,
+      }));
+      document.querySelector('.root').innerHTML = scene
+        ? `<section>s0</section><section class="target">${probe}</section><section>s2</section><section>s3</section>`
+        : `<section>s0</section><div class="target" style="height: 300px">${probe}</div><section>s2</section><section>s3</section>`;
+
+      const target = document.querySelector('.target');
+
+      target.style.cssText += params.get('inline') ?? '';
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      ScrollTrigger.create(scene
+        ? sticky.createStickyTrigger({ trigger: '.target', end: '+=300' })
+        : sticky.createStickyPin({ trigger: '.target', end: '+=400' }));
+      ScrollTrigger.refresh();
+
+      // Where the probe sits unstuck, as the library reads it, at each scroll position.
+      window.__reads = async (positions) => {
+        const reads = [];
+
+        for (const y of positions) {
+          window.scrollTo(0, y);
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          reads.push(Math.round(sticky.resolveScrollPosition('.probe', 'top top')));
+        }
+
+        return reads;
+      };
+      window.__bottom = () => `${target.style.getPropertyValue('bottom')}/${target.style.getPropertyPriority('bottom')}`;
+      window.__ready = true;
+    </script>
+  </body>
+</html>

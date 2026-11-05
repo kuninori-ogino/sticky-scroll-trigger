@@ -18,6 +18,8 @@ import {
   resolveEndTrigger,
   resolveRoot,
   restoreIfWritten,
+  restoreInlinePosition,
+  stripStickyPositions,
   unwrapCover,
   unwrapPin,
   wrapCover,
@@ -344,6 +346,7 @@ describe('wrapPin', () => {
     unwrapPin(outer, trigger, {
       position: { value: 'relative', priority: '' },
       top: { value: '8px', priority: '' },
+      bottom: { value: '', priority: '' },
     });
 
     expect(trigger.style.position).toBe('relative');
@@ -1057,6 +1060,73 @@ describe('compareDocumentOrder', () => {
     shuffled.sort(compareDocumentOrder);
 
     expect(shuffled.map((el) => el.id)).toEqual(['1', '2', '3']);
+  });
+});
+
+describe('stripStickyPositions', () => {
+  const element = (style: string) => {
+    document.body.innerHTML = `<div id="el" style="${style}"></div>`;
+
+    return document.getElementById('el') as HTMLElement;
+  };
+
+  it('puts each element in flow with no offset, !important so no stylesheet rule shifts it', () => {
+    const el = element('position: sticky; top: 10px');
+
+    stripStickyPositions([el]);
+
+    expect(el.style.cssText)
+      .toBe('position: relative !important; top: auto !important; bottom: auto !important;');
+  });
+
+  it('puts an element with no inline values back to none', () => {
+    const el = element('color: red');
+    const restore = stripStickyPositions([el]);
+
+    restore();
+
+    expect(el.style.cssText).toBe('color: red;');
+  });
+
+  it('puts position, top and bottom back with their priority', () => {
+    const sticky = element('position: sticky; top: 10px; bottom: 5px !important');
+    const important = document.createElement('div');
+
+    important.style.cssText = 'position: sticky !important; top: 3px !important';
+    document.body.append(important);
+
+    const restore = stripStickyPositions([sticky, important]);
+
+    restore();
+
+    expect(sticky.style.cssText).toBe('position: sticky; top: 10px; bottom: 5px !important;');
+    expect(important.style.cssText).toBe('position: sticky !important; top: 3px !important;');
+  });
+});
+
+describe('restoreInlinePosition', () => {
+  it('takes off the bottom a reset wrote, for unwrapPin on a pin killed mid-read', () => {
+    document.body.innerHTML = '<div id="outer"><div id="el" style="position: sticky; top: 4px"></div></div>';
+
+    const el = document.getElementById('el') as HTMLElement;
+    const saved = captureInlinePosition(el);
+
+    stripStickyPositions([el]);
+    unwrapPin(document.getElementById('outer') as HTMLDivElement, el, saved);
+
+    expect(el.style.cssText).toBe('position: sticky; top: 4px;');
+  });
+
+  it('leaves a bottom set since the capture alone', () => {
+    document.body.innerHTML = '<div id="el"></div>';
+
+    const el = document.getElementById('el') as HTMLElement;
+    const saved = captureInlinePosition(el);
+
+    el.style.bottom = '9px';
+    restoreInlinePosition(el, saved);
+
+    expect(el.style.bottom).toBe('9px');
   });
 });
 

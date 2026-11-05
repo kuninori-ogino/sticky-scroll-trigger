@@ -175,9 +175,13 @@ export const compareDocumentOrder = (a: HTMLElement, b: HTMLElement): number => 
   return 0;
 };
 
+// The unstuck state a read needs: in flow, unshifted, and still a containing block for absolute
+// children, all !important so no stylesheet rule shifts it. bottom too, though a pin's trigger is
+// the page's: a relative box takes a sheet's bottom as it does top.
 const resetStickyPosition = (el: HTMLElement): void => {
-  el.style.position = '';
-  el.style.top = '';
+  el.style.setProperty('position', 'relative', 'important');
+  el.style.setProperty('top', 'auto', 'important');
+  el.style.setProperty('bottom', 'auto', 'important');
 };
 
 // An element's inline value for one property, with its priority so an !important one goes back as
@@ -196,20 +200,24 @@ export const restoreInline = (el: HTMLElement, property: string, saved: InlineVa
   el.style.setProperty(property, saved.value, saved.priority);
 };
 
-// An element's inline position/top, captured to put back after a clear or overwrite.
+// An element's inline position/top/bottom, captured to put back after a clear or overwrite.
 export interface InlinePosition {
   position: InlineValue;
   top: InlineValue;
+  bottom: InlineValue;
 }
 
 export const captureInlinePosition = (el: HTMLElement): InlinePosition => ({
   position: captureInline(el, 'position'),
   top: captureInline(el, 'top'),
+  bottom: captureInline(el, 'bottom'),
 });
 
+// bottom goes back only while it holds the reset's value, so one set since (gsap.set, say) stays.
 export const restoreInlinePosition = (el: HTMLElement, saved: InlinePosition): void => {
   restoreInline(el, 'position', saved.position);
   restoreInline(el, 'top', saved.top);
+  restoreIfWritten(el, 'bottom', saved.bottom, 'auto', 'important');
 };
 
 // Returns the value as the browser keeps it, for restoreIfWritten to compare.
@@ -245,7 +253,7 @@ export const restoreIfWritten = (
   return true;
 };
 
-// Clears position/top on every element and returns a function that restores them.
+// Puts every element in its unstuck state and returns a function that restores it.
 export const stripStickyPositions = (elements: readonly HTMLElement[]): (() => void) => {
   const saved = elements.map(captureInlinePosition);
 
