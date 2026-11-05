@@ -2291,7 +2291,9 @@ export default class StickyScrollTrigger {
         () => documentTop(element),
       );
     } finally {
-      restores.forEach((restore) => restore());
+      // Last in, first out: an instance listed twice strips its pins again, saving the first
+      // strip's values.
+      restores.reverse().forEach((restore) => restore());
     }
   }
 

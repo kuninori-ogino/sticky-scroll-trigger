@@ -1756,6 +1756,29 @@ describe('static getScrollTop()', () => {
       expect(after).toBe(before);
     },
   );
+
+  it('leaves a pin\'s inline position, top and bottom as they were when an instance is listed twice', () => {
+    document.body.innerHTML = `
+      <div class="root"><section class="scene"></section></div>
+      <section class="pinned"></section>
+      <section class="outside"></section>
+    `;
+
+    const controller = new StickyScrollTrigger(query('.root'));
+    const pinned = query('.pinned');
+
+    pinned.style.bottom = '7px';
+    controller.createStickyPin({ trigger: pinned, endTrigger: query('.outside') });
+    controller.refresh();
+
+    const before = pinned.style.cssText;
+
+    StickyScrollTrigger.getScrollTop(query('.outside'), [controller, controller]);
+
+    expect(pinned.style.cssText).toBe(before);
+    expect(before).toContain('position: sticky');
+    expect(before).toContain('bottom: 7px');
+  });
 });
 
 // jsdom never sticks anything, so el reports a top 400px off whenever pin carries
