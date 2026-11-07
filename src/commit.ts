@@ -1,6 +1,6 @@
 /**
  * The values refresh() writes: sticky tops, Scene paddings, pin reserves and ranges. Structure,
- * cover lifts, the boxes a pin's outer and trigger hold (fitPinsToItems), teardown and
+ * cover lifts, the boxes a pin's outer and trigger hold (fitPinBoxes), teardown and
  * measurements that undo their own writes go through dom.ts and structure.ts.
  *
  * A value cleared to measure past it is written again by the caller, even when unchanged.

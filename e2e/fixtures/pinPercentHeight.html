@@ -15,7 +15,7 @@
   <body>
     <div id="frame">
       <div class="root">
-        <div id="box"><div id="pin"><div style="height: 20px">pin</div></div></div>
+        <div id="box"><div id="pin"><div style="height: 20px">pin</div></div><div id="sib" style="height: 10px"></div></div>
         <section id="after" class="after"></section>
       </div>
     </div>
@@ -67,7 +67,7 @@
         return [left, top + window.scrollY, width, height];
       };
       const boxes = () => Object.fromEntries(
-        ['pin', 'nested', 'after'].filter((id) => document.getElementById(id)).map((id) => [id, rect(id)]),
+        ['pin', 'nested', 'sib', 'after'].filter((id) => document.getElementById(id)).map((id) => [id, rect(id)]),
       );
 
       window.__natural = boxes();

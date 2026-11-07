@@ -9,7 +9,7 @@ import {
   compareDocumentOrder,
   describeElement,
   documentTop,
-  fitPinsToItems,
+  fitPinBoxes,
   insertSpacers,
   isMovingDom,
   liftAboveStickyWrapper,
@@ -877,10 +877,8 @@ export default class StickyScrollTrigger {
     return reads.join(',');
   }
 
-  // Wraps any not-yet-built pin layer. Must run before #refreshGeometry measures Scene and
-  // Cover positions: the wrappers stop trigger's margins from collapsing with its siblings', so
-  // wrapping still moves whatever sits below it, even though #reservePinSpace gives the height
-  // itself back.
+  // Wraps any not-yet-built pin layer, for #reservePinSpace to size before #refreshGeometry
+  // measures Scene and Cover positions.
   #wrapUnwrappedPins() {
     this.#pinLayers.forEach((layer) => {
       if (layer.outer) return;
@@ -897,15 +895,15 @@ export default class StickyScrollTrigger {
     });
   }
 
-  // Sizes every wrapped pin's outer to trigger's own margin box, so registering a pin leaves the
-  // page the height it had without one. outer can't simply keep its natural height once the
+  // Sizes every wrapped pin's outer to the room trigger takes, so registering a pin leaves the
+  // page laid out as it was without one. outer can't simply keep its natural height once the
   // refresh is done: inner holds the pin range, which runs far past trigger itself.
   //
-  // While inner is cleared, though, a block-flow pin's natural height is the margin box already,
-  // since outer is a formatting context and trigger's margins land inside it instead of collapsing
-  // out. So that pin's measurement clears and reads back instead of adding up trigger's own height
-  // and margins, and the browser resolves the box at full precision, through whatever box-sizing,
-  // borders, floats or line boxes trigger happens to have.
+  // While inner is cleared, though, a block-flow pin's outer has that natural height already, its
+  // margins collapsing with the page's as trigger's would (fitPinBoxes carries the bottom one
+  // onto outer). So that pin's measurement clears and reads back instead of adding up trigger's
+  // own height and margins, and the browser resolves the box at full precision, through whatever
+  // box-sizing, borders, floats or line boxes trigger happens to have.
   //
   // This has to run before #refreshGeometry measures, since the height it writes is part of
   // the flow. Left to #planPinLayers, it would measure every Scene layer against the previous
@@ -921,7 +919,7 @@ export default class StickyScrollTrigger {
     // Every pin is cleared before any is measured, so a pin nested inside another's trigger
     // doesn't hold that trigger open at the range it's about to replace. inner is cleared too, so
     // outer measures trigger instead of the range; a percentage height that would still resolve
-    // against inner is fitPinsToItems' to hold.
+    // against inner is fitPinBoxes' to hold.
     wrapped.forEach(({ outer, inner }) => {
       clearHeightForRead(outer);
       clearHeightForRead(inner);
@@ -931,16 +929,16 @@ export default class StickyScrollTrigger {
 
     try {
       // An item pin's outer is sized from trigger's own box instead: the line stretches outer's
-      // natural height whatever trigger's. A block-flow pin's outer measures trigger with the
-      // height fitPinsToItems holds on it.
-      const itemHeights = fitPinsToItems(wrapped);
+      // natural height whatever trigger's. A block-flow pin's outer is read in place by
+      // fitPinBoxes, which holds it there. A pin with nothing rendered measures as it stands.
+      const fitted = fitPinBoxes(wrapped);
 
       // Read in full before anything is written back, so all the writes share one reflow
       // instead of forcing one per pin.
-      reserved = wrapped.map(({ outer }, index) => itemHeights[index] ?? measureUsedHeight(outer));
+      reserved = wrapped.map(({ outer }, index) => fitted[index] ?? measureUsedHeight(outer));
     } catch (error) {
       // outer goes back whole, item box and cleared height with it: the last refresh's box is the
-      // better guess. trigger keeps whichever box fitPinsToItems left on it.
+      // better guess. trigger keeps whichever box fitPinBoxes left on it.
       wrapped.forEach(({ outer, inner, savedStyle, range }) => {
         commitCssText(outer, savedStyle);
         commitHeight(inner, range);
@@ -953,8 +951,10 @@ export default class StickyScrollTrigger {
       commitHeight(outer, `${reserved[index]}px`);
     });
     // The ranges go back rather than staying cleared, so #refreshGeometry still snapshots the last
-    // successful refresh's values and its rollback has something to restore. They're sealed inside
-    // outer either way, so phase 1 measures the same layout with them present.
+    // successful refresh's values and its rollback has something to restore. outer's held height
+    // keeps them out of the flow either way. With a range back, trigger's bottom margin stops
+    // inside inner, and the one fitPinBoxes carried onto outer stands in for it, so phase 1
+    // measures the same layout with them present.
     wrapped.forEach(({ inner, range }) => commitHeight(inner, range));
   }
 
@@ -1142,7 +1142,7 @@ export default class StickyScrollTrigger {
     try {
       if (pins.length) {
         // The ranges stay on through phase 1, so a Scene layer measures the layout the page
-        // shows. They're sealed inside outer, which #reservePinSpace has already sized.
+        // shows. outer, which #reservePinSpace has already sized, keeps them out of the flow.
         pins.forEach(({ layer }) => {
           if (layer.inner) clearHeightForRead(layer.inner);
         });
@@ -2160,10 +2160,11 @@ export default class StickyScrollTrigger {
 
         removeItem(this.#pinLayers, layer);
 
-        // outer reserves trigger's own height, so unwrapping gives back no height, but it does
-        // restore the margin collapsing between trigger and its siblings that the wrappers
-        // blocked. That still moves everything below, invalidating every later Scene layer's
-        // freeze window. A pin that was never wrapped moved nothing.
+        // outer reserves the room trigger took at the last refresh(), margins included. The
+        // unwrap still moves what's below by what has changed since (trigger's content, say) or
+        // by what the wrapped layout couldn't match (a page rule matching outer in trigger's
+        // place), leaving every later Scene layer's freeze window behind. A pin that was never
+        // wrapped moved nothing.
         if (this.#unwrapPinLayer(layer)) this.#scheduleCatchUp();
 
         this.#disarmIfEmpty();

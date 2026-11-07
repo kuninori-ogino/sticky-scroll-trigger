@@ -105,7 +105,7 @@ export interface PinLayer {
   trigger: HTMLElement;
   // Captured by #wrapUnwrappedPins, and put back by unwrapPin (see InlinePosition in dom.ts).
   savedPosition: InlinePosition;
-  // Nesting assigned by #wrapUnwrappedPins during refresh() (outer: trigger's own margin box,
+  // Nesting assigned by #wrapUnwrappedPins during refresh() (outer: the room trigger takes,
   // inner: the pin range).
   outer: HTMLDivElement | null;
   inner: HTMLDivElement | null;

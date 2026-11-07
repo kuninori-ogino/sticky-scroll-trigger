@@ -5,7 +5,7 @@ import {
   captureInlinePosition,
   compareDocumentOrder,
   describeElement,
-  fitPinsToItems,
+  fitPinBoxes,
   insertSpacers,
   isMovingDom,
   liftAboveStickyWrapper,
@@ -372,7 +372,7 @@ describe('wrapPin', () => {
 // client rect to count as rendered. What's checked is which styles go where, and that a read taking
 // outer and inner out of the layout always puts them back. The sizes themselves are e2e's (the
 // "a pinned ... keeps its own box and its siblings in place" tests).
-describe('fitPinsToItems', () => {
+describe('fitPinBoxes', () => {
   const NO_POSITION = captureInlinePosition(document.createElement('div'));
 
   const rendered = (trigger: HTMLElement) => {
@@ -393,7 +393,7 @@ describe('fitPinsToItems', () => {
   it('gives outer trigger\'s place among a flex item\'s siblings', () => {
     const pin = wrapIn('display: flex', 'order: 2; flex: 1 0 30px; align-self: end; clear: both');
 
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
 
     expect(pin.outer.style.order).toBe('2');
     expect(pin.outer.style.alignSelf).toBe('end');
@@ -403,10 +403,10 @@ describe('fitPinsToItems', () => {
   it('copies only clear in block flow, and unsets what an item copied before', () => {
     const pin = wrapIn('display: flex', 'order: 2; clear: both');
 
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
     document.getElementById('host')!.style.display = 'block';
 
-    expect(fitPinsToItems([pin])).toEqual([undefined]);
+    expect(fitPinBoxes([pin])).toEqual([0]);
     expect(pin.outer.style.order).toBe('');
     expect(pin.outer.style.clear).toBe('both');
     expect(pin.outer.style.width).toBe('');
@@ -417,7 +417,7 @@ describe('fitPinsToItems', () => {
 
     pin.trigger.getClientRects = () => [] as unknown as DOMRectList;
 
-    expect(fitPinsToItems([pin])).toEqual([undefined]);
+    expect(fitPinBoxes([pin])).toEqual([undefined]);
     expect(pin.outer.style.flexGrow).toBe('1');
     expect(pin.outer.style.flexBasis).toBe('30px');
     expect(pin.outer.style.width).toBe('');
@@ -427,7 +427,7 @@ describe('fitPinsToItems', () => {
   it('holds a flex item\'s box on outer in px, and leaves inner alone', () => {
     const pin = wrapIn('display: flex', 'flex: 0 0 200px');
 
-    expect(fitPinsToItems([pin])).toEqual([0]);
+    expect(fitPinBoxes([pin])).toEqual([0]);
     expect(pin.outer.style.display).toBe('flow-root');
     expect(pin.outer.style.flex).toBe('0 0 auto');
     expect(pin.outer.style.width).toBe('0px');
@@ -437,7 +437,7 @@ describe('fitPinsToItems', () => {
   it('floats outer with trigger and sizes it in px', () => {
     const pin = wrapIn('', 'float: left');
 
-    expect(fitPinsToItems([pin])).toEqual([0]);
+    expect(fitPinBoxes([pin])).toEqual([0]);
     expect(pin.outer.style.float).toBe('left');
     expect(pin.outer.style.width).toBe('0px');
   });
@@ -445,7 +445,7 @@ describe('fitPinsToItems', () => {
   it('leaves a grid item\'s width to its cell', () => {
     const pin = wrapIn('display: grid', 'grid-column-start: 2');
 
-    expect(fitPinsToItems([pin])).toEqual([0]);
+    expect(fitPinBoxes([pin])).toEqual([0]);
     expect(pin.outer.style.width).toBe('');
     expect(pin.outer.style.gridColumnStart).toBe('2');
   });
@@ -460,14 +460,16 @@ describe('fitPinsToItems', () => {
 
     const pin = { trigger, ...wrapPin(trigger) };
 
-    expect(fitPinsToItems([pin])).toEqual([0]);
+    expect(fitPinBoxes([pin])).toEqual([0]);
     expect(pin.outer.style.flex).toBe('0 0 auto');
   });
 
   it('copies nothing from a trigger with no box of its own', () => {
     const pin = wrapIn('display: flex', 'display: none; flex: 0 0 200px; clear: both');
 
-    expect(fitPinsToItems([pin])).toEqual([undefined]);
+    pin.trigger.getClientRects = () => [] as unknown as DOMRectList;
+
+    expect(fitPinBoxes([pin])).toEqual([undefined]);
     expect(pin.outer.style.flexBasis).toBe('');
     expect(pin.outer.style.clear).toBe('');
   });
@@ -475,15 +477,15 @@ describe('fitPinsToItems', () => {
   it('keeps outer in the line an inline-level trigger sat in, sized in px', () => {
     const pin = wrapIn('', 'display: inline-block; vertical-align: top');
 
-    expect(fitPinsToItems([pin])).toEqual([0]);
+    expect(fitPinBoxes([pin])).toEqual([0]);
     expect(pin.outer.style.display).toBe('inline-block');
     expect(pin.outer.style.verticalAlign).toBe('top');
     expect(pin.outer.style.width).toBe('0px');
 
     pin.trigger.style.display = 'block';
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
 
-    expect(pin.outer.style.display).toBe('flow-root');
+    expect(pin.outer.style.display).toBe('block');
   });
 
   // jsdom resolves no percentages or stretching, so a stylesheet's px values stand in for the box
@@ -519,7 +521,7 @@ describe('fitPinsToItems', () => {
   it('holds trigger\'s own box on it in px, max-width at its width, max- and min-height at its height', () => {
     const pin = wrapWithBox('');
 
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
 
     expect(pin.trigger.style.cssText).toBe(
       'width: 30px !important; max-width: 30px !important; height: 20px !important; '
@@ -533,9 +535,9 @@ describe('fitPinsToItems', () => {
 
     followInner();
 
-    expect(fitPinsToItems([pin])).toEqual([undefined]);
+    expect(fitPinBoxes([pin])).toEqual([0]);
     expect(pin.trigger.style.cssText).toBe(BLOCK_HELD);
-    expect(pin.outer.style.display).toBe('flow-root');
+    expect(pin.outer.style.display).toBe('block');
     expect(pin.inner.style.display).toBe('');
   });
 
@@ -544,11 +546,12 @@ describe('fitPinsToItems', () => {
 
     document.getElementById('host')!.style.display = 'block';
     pin.inner.style.height = '7px';
-    fitPinsToItems([pin]);
+
+    const [reserved] = fitPinBoxes([pin]);
 
     expect(pin.trigger.style.cssText).toBe('');
     expect(pin.inner.style.height).toBe('7px');
-    expect(pin.outer.style.height).toBe('');
+    expect(pin.outer.style.height).toBe(`${reserved}px`);
   });
 
   // A percentage max-height is tried with inner at trigger's own height; the second stylesheet
@@ -557,7 +560,7 @@ describe('fitPinsToItems', () => {
     const pin = wrapWithBox('max-height: 50%');
 
     document.getElementById('host')!.style.display = 'block';
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
 
     expect(pin.trigger.style.cssText).toBe('max-height: 50%;');
 
@@ -565,7 +568,7 @@ describe('fitPinsToItems', () => {
       'beforeend',
       '<style id="follows">div[style*="height: 20px"] > #trigger { height: 10px }</style>',
     );
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
 
     expect(pin.trigger.style.cssText).toBe(
       'max-height: 20px !important; height: 20px !important; min-height: 20px !important;',
@@ -577,13 +580,13 @@ describe('fitPinsToItems', () => {
 
     document.getElementById('host')!.style.display = 'block';
     pin.trigger.getClientRects = () => [] as unknown as DOMRectList;
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
 
     expect(pin.trigger.style.cssText).toBe('');
 
     rendered(pin.trigger);
     document.getElementById('box')!.remove();
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
 
     expect(pin.trigger.style.cssText).toBe('');
   });
@@ -591,15 +594,15 @@ describe('fitPinsToItems', () => {
   it('puts trigger\'s own inline values back before the next read, and on unwrap', () => {
     const pin = wrapWithBox('max-width: 50%');
 
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
     followInner();
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
 
     // The item's box gives way to the block's.
     expect(pin.trigger.style.cssText).toBe(`max-width: 50%; ${BLOCK_HELD}`);
 
     document.getElementById('host')!.style.display = 'flex';
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
     unwrapPin(pin.outer, pin.trigger, NO_POSITION);
 
     expect(pin.trigger.style.cssText).toBe('max-width: 50%;');
@@ -609,7 +612,7 @@ describe('fitPinsToItems', () => {
     const pin = wrapWithBox('min-height: 100% !important');
 
     followInner();
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
 
     expect(pin.trigger.style.minHeight).toBe('20px');
 
@@ -621,7 +624,7 @@ describe('fitPinsToItems', () => {
   it('puts an !important inline value back as one', () => {
     const pin = wrapWithBox('max-width: 50% !important');
 
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
 
     expect(pin.trigger.style.maxWidth).toBe('30px');
 
@@ -633,7 +636,7 @@ describe('fitPinsToItems', () => {
   it('keeps a value set on trigger since the last read', () => {
     const pin = wrapWithBox('');
 
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
     pin.trigger.style.height = '7px';
     // The value written, made plain since.
     pin.trigger.style.width = '30px';
@@ -645,13 +648,13 @@ describe('fitPinsToItems', () => {
   it('holds trigger\'s last box again when a read throws', () => {
     const pin = wrapWithBox('');
 
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
 
     pin.trigger.getClientRects = () => {
       throw new Error('read failed');
     };
 
-    expect(() => fitPinsToItems([pin])).toThrow('read failed');
+    expect(() => fitPinBoxes([pin])).toThrow('read failed');
     expect(pin.trigger.style.width).toBe('30px');
 
     unwrapPin(pin.outer, pin.trigger, NO_POSITION);
@@ -663,13 +666,13 @@ describe('fitPinsToItems', () => {
     const pin = wrapWithBox('width: 50%');
 
     followInner();
-    fitPinsToItems([pin]);
+    fitPinBoxes([pin]);
 
     pin.trigger.getClientRects = () => {
       throw new Error('read failed');
     };
 
-    expect(() => fitPinsToItems([pin])).toThrow('read failed');
+    expect(() => fitPinBoxes([pin])).toThrow('read failed');
     expect(pin.trigger.style.cssText).toBe(`width: 50%; ${BLOCK_HELD}`);
 
     unwrapPin(pin.outer, pin.trigger, NO_POSITION);
@@ -681,7 +684,7 @@ describe('fitPinsToItems', () => {
   it('leaves a box that doesn\'t come out in px to outer\'s own height', () => {
     const pin = wrapIn('display: flex', 'margin-left: auto');
 
-    expect(fitPinsToItems([pin])).toEqual([undefined]);
+    expect(fitPinBoxes([pin])).toEqual([undefined]);
     expect(pin.outer.style.width).toBe('');
     expect(pin.trigger.style.width).toBe('');
   });
@@ -696,7 +699,7 @@ describe('fitPinsToItems', () => {
       },
     });
 
-    expect(() => fitPinsToItems([pin])).toThrow('read failed');
+    expect(() => fitPinBoxes([pin])).toThrow('read failed');
     expect(pin.outer.style.display).toBe('flow-root');
     expect(pin.inner.style.display).toBe('');
   });
@@ -736,7 +739,7 @@ describe('fitPinsToItems', () => {
 
       return 0;
     });
-    fitPinsToItems([a, b]);
+    fitPinBoxes([a, b]);
 
     // #b is in its wrappers by the time #a is read around it.
     expect(reads).toEqual([['b', 'contents', 'contents', 'contents'], ['a', 'contents', 'flow-root']]);
@@ -748,7 +751,7 @@ describe('fitPinsToItems', () => {
     const { a, b } = wrapNested();
 
     document.head.insertAdjacentHTML('beforeend', `<style id="box">#b { ${BOX} }</style>`);
-    fitPinsToItems([a, b]);
+    fitPinBoxes([a, b]);
 
     const heldBefore = b.trigger.style.cssText;
 
@@ -756,7 +759,7 @@ describe('fitPinsToItems', () => {
       throw new Error('read failed');
     });
 
-    expect(() => fitPinsToItems([a, b])).toThrow('read failed');
+    expect(() => fitPinBoxes([a, b])).toThrow('read failed');
     expect(b.trigger.style.cssText).toBe(heldBefore);
 
     unwrapPin(b.outer, b.trigger, NO_POSITION);
@@ -767,9 +770,146 @@ describe('fitPinsToItems', () => {
   it('leaves a plain inline trigger in block flow, without its clear', () => {
     const pin = wrapIn('', 'display: inline; clear: both');
 
-    expect(fitPinsToItems([pin])).toEqual([undefined]);
-    expect(pin.outer.style.display).toBe('flow-root');
+    expect(fitPinBoxes([pin])).toEqual([0]);
+    expect(pin.outer.style.display).toBe('block');
     expect(pin.outer.style.clear).toBe('');
+  });
+
+  // jsdom lays nothing out: inner's offsetHeight stands in for its height, taller by the margin
+  // and the border with the border on.
+  const escaping = (pin: { inner: HTMLElement }, margin: number) => {
+    Object.defineProperty(pin.inner, 'offsetHeight', {
+      configurable: true,
+      get: () => (pin.inner.style.borderBottom ? 10 + margin + 1 : 10),
+    });
+  };
+
+  it('carries the margin escaping a block-flow trigger onto outer, and leaves inner as it was', () => {
+    const pin = wrapIn('');
+
+    escaping(pin, 30);
+
+    const inner = pin.inner.style.cssText;
+    const [reserved] = fitPinBoxes([pin]);
+
+    expect(pin.outer.style.marginBottom).toBe('30px');
+    expect(pin.outer.style.height).toBe(`${reserved}px`);
+    expect(pin.inner.style.cssText).toBe(inner);
+  });
+
+  // A rule matching outer in trigger's place gives it the margin trigger had; collapsed with the
+  // escaping one, the larger stays.
+  it('collapses the escaping margin with one a page rule gives outer', () => {
+    const pin = wrapIn('');
+
+    document.head.insertAdjacentHTML('beforeend', '<style id="box">#host > * { margin-bottom: 24px }</style>');
+    escaping(pin, 0);
+    fitPinBoxes([pin]);
+
+    expect(pin.outer.style.marginBottom).toBe('24px');
+
+    escaping(pin, 30);
+    fitPinBoxes([pin]);
+
+    expect(pin.outer.style.marginBottom).toBe('30px');
+  });
+
+  // !important, so a page rule's !important doesn't win over it.
+  it('carries the margin over a page rule\'s !important one', () => {
+    const pin = wrapIn('');
+
+    document.head.insertAdjacentHTML('beforeend', '<style id="box">#host > * { margin-bottom: 0 !important }</style>');
+    escaping(pin, 24);
+    fitPinBoxes([pin]);
+
+    expect(pin.outer.style.getPropertyValue('margin-bottom')).toBe('24px');
+    expect(pin.outer.style.getPropertyPriority('margin-bottom')).toBe('important');
+  });
+
+  // A bottom edge of outer's own apart from inner's (a rule's min-height, say) holds the margin
+  // inside it or leaves it out, as it would trigger's; so does an inner with no height, whose
+  // margins all leave through outer's top. outer keeps its own.
+  it('carries no margin past an outer with its own bottom edge, or around an empty inner', () => {
+    const pin = wrapIn('');
+
+    escaping(pin, 30);
+    pin.outer.getBoundingClientRect = () => ({ bottom: 200 }) as DOMRect;
+    pin.inner.getBoundingClientRect = () => ({ bottom: 10 }) as DOMRect;
+    fitPinBoxes([pin]);
+
+    expect(pin.outer.style.marginBottom).toBe('0px');
+
+    pin.outer.getBoundingClientRect = () => ({ bottom: 0 }) as DOMRect;
+    pin.inner.getBoundingClientRect = () => ({ bottom: 0 }) as DOMRect;
+    Object.defineProperty(pin.inner, 'offsetHeight', {
+      configurable: true,
+      get: () => (pin.inner.style.borderBottom ? 21 : 0),
+    });
+    fitPinBoxes([pin]);
+
+    expect(pin.outer.style.marginBottom).toBe('0px');
+  });
+
+  it('drops the margin it carried once the pin is an item or has no box', () => {
+    const pin = wrapIn('');
+
+    escaping(pin, 30);
+    fitPinBoxes([pin]);
+    document.getElementById('host')!.style.display = 'flex';
+    fitPinBoxes([pin]);
+
+    expect(pin.outer.style.marginBottom).toBe('');
+
+    document.getElementById('host')!.style.display = 'block';
+    fitPinBoxes([pin]);
+    pin.trigger.getClientRects = () => [] as unknown as DOMRectList;
+    fitPinBoxes([pin]);
+
+    expect(pin.outer.style.marginBottom).toBe('');
+  });
+
+  // outer is the caller's to restore (fitPinBoxes).
+  it('takes the border off inner when the margin read throws', () => {
+    const pin = wrapIn('');
+
+    Object.defineProperty(pin.inner, 'offsetHeight', {
+      configurable: true,
+      get: () => {
+        if (pin.inner.style.borderBottom) throw new Error('read failed');
+
+        return 10;
+      },
+    });
+
+    expect(() => fitPinBoxes([pin])).toThrow('read failed');
+    expect(pin.inner.style.borderBottom).toBe('');
+  });
+
+  // The enclosing pin's margin is read with the nested one's already on its outer.
+  it('carries a nested block-flow pin\'s margin before reading the pin around it', () => {
+    document.body.innerHTML = '<div id="a"><div id="b"></div></div>';
+
+    const [a, b] = ['a', 'b'].map((id) => {
+      const trigger = document.getElementById(id)!;
+
+      rendered(trigger);
+
+      return { trigger, ...wrapPin(trigger) };
+    });
+    let seen = '';
+
+    escaping(b, 20);
+    Object.defineProperty(a.inner, 'offsetHeight', {
+      configurable: true,
+      get: () => {
+        if (a.inner.style.borderBottom) seen = b.outer.style.marginBottom;
+
+        return 10;
+      },
+    });
+    fitPinBoxes([a, b]);
+
+    expect(seen).toBe('20px');
   });
 });
 

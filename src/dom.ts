@@ -454,9 +454,10 @@ export const unwrapCover = (wrapper: HTMLDivElement) => {
 
 // Pin layer: wraps trigger in two levels, outer{ inner{ trigger } }. inner holds the pin range,
 // which runs far past trigger's own height; outer's own height is left to #reservePinSpace, which
-// rewrites it on every refresh. outer is a flow-root, so trigger's margins stop inside it. contain
-// would do that too, but it also makes outer a stacking context and the containing block for
-// trigger's fixed-position descendants.
+// rewrites it on every refresh. In block flow outer is a plain block, so trigger's margins and
+// floats meet the page's as they would unwrapped (fitPinBoxes carries the bottom margin past
+// the height outer holds). Its display is written all the same, so a page rule that matches it in
+// trigger's place (.col > div, say) can't make it a flex container.
 export const wrapPin = (trigger: HTMLElement) => {
   if (!trigger.parentNode) {
     throw new Error(
@@ -467,7 +468,7 @@ export const wrapPin = (trigger: HTMLElement) => {
   const outer = createStructureElement();
   const inner = createStructureElement();
 
-  outer.style.display = 'flow-root';
+  setOuterLayout(outer, null);
   transparentNodes.add(outer);
   transparentNodes.add(inner);
   trigger.parentNode.insertBefore(outer, trigger);
@@ -538,10 +539,18 @@ const itemLayout = (outer: HTMLElement, style: CSSStyleDeclaration): ItemLayout 
   return style.display.startsWith('inline-') ? 'inline' : null;
 };
 
-// outer's own display: a box in a line where trigger was one, a block otherwise, a formatting
-// context either way so trigger's margins stay inside it.
+// outer's own display: a box in a line where trigger was one, a formatting context holding
+// trigger's margin box where it's an item, a plain block in block flow.
 const outerDisplay = (layout: ItemLayout | null) =>
-  (layout === 'inline' ? 'inline-block' : 'flow-root');
+  (layout === 'inline' ? 'inline-block' : layout ? 'flow-root' : 'block');
+
+// outer's display, with box-sizing: border-box in block flow, where the height it holds is the
+// border box measured, a page rule's padding included. An item's outer keeps the page's
+// box-sizing, so under content-box it holds trigger's margin box with such padding around it.
+const setOuterLayout = (outer: HTMLElement, layout: ItemLayout | null) => {
+  outer.style.display = outerDisplay(layout);
+  outer.style.boxSizing = layout ? '' : 'border-box';
+};
 
 interface WrappedPin {
   outer: HTMLDivElement;
@@ -621,9 +630,9 @@ const releaseTriggerBox = (trigger: HTMLElement): HeldBox | undefined => {
 };
 
 // Makes each pin's outer take trigger's place as the flex or grid item, float or inline-level box
-// trigger was, and returns the height to reserve for each (undefined for a pin in block flow, whose
-// outer measures as it stands). Expects outer's and inner's heights cleared; if a read throws,
-// outer is the caller's to restore.
+// trigger was, or the block it was in block flow, and returns the height to reserve for each
+// (undefined for a pin with nothing rendered, whose outer measures as it stands). Expects outer's
+// and inner's heights cleared; if a read throws, outer is the caller's to restore.
 //
 // Sized by its content, outer would shrink a flex item, float or inline-block to trigger's text,
 // reserve only a stretched item's content and break an inline-level trigger's line. So trigger's
@@ -634,15 +643,16 @@ const releaseTriggerBox = (trigger: HTMLElement): HeldBox | undefined => {
 //
 // A block-flow pin is read in its own place the same way, for its height alone, and holds it only
 // where it would resolve against inner (heightsFollowingInner): a pin sized by its content or the
-// viewport keeps following them between refreshes.
+// viewport keeps following them between refreshes. Its outer reserves its block height, and the
+// bottom margin escaping trigger goes on outer (fitEscapingMargins).
 //
 // Nested pins are read and fitted first, innermost depth first, with their enclosing pins'
-// wrappers out of the layout too. An enclosing pin is then read around them, since without its
-// nested wrappers it would miss the margins they keep inside.
+// wrappers out of the layout too. An enclosing pin is then read around them, with their margins
+// already in place.
 //
 // At each depth all reads come before the writes, so a refresh costs a fixed number of style and
 // layout passes per nesting depth.
-export const fitPinsToItems = (pins: readonly WrappedPin[]): (number | undefined)[] => {
+export const fitPinBoxes = (pins: readonly WrappedPin[]): (number | undefined)[] => {
   // Released first, so trigger's box is read as its own rules make it.
   const held = pins.map(({ trigger }) => releaseTriggerBox(trigger));
   const enclosing = pins.map(({ trigger }) =>
@@ -674,10 +684,15 @@ export const fitPinsToItems = (pins: readonly WrappedPin[]): (number | undefined
   }
 };
 
+// A rendered pin with its index among the pins fitted and its layout where outer stands.
+type MeasuredPin = WrappedPin & { index: number; layout: ItemLayout | null };
+
 interface MeasuredBox {
   // An item's margin box, its width undefined where a grid cell gives outer one.
   item?: { width: number | undefined; height: number };
   box: string[];
+  // A block-flow outer's own bottom margin, from a page rule (see takeCarriedMargins).
+  ownMargin?: string;
 }
 
 // around: the pins enclosing these, taken out of the layout with them while they're read.
@@ -699,26 +714,53 @@ const fitReleasedPins = (
     (rendered[index] ? [{ ...pin, index, layout: layouts[index] }] : []));
   const aroundDisplays = around.map(({ outer, inner }) =>
     [outer.style.display, inner.style.display]);
+  const restoreAround = () => around.forEach(({ outer, inner }, i) => {
+    [outer.style.display, inner.style.display] = aroundDisplays[i];
+  });
 
   pins.forEach(({ outer }, i) => {
     outer.style.width = '';
     PIN_ITEM_PROPERTIES.forEach((property, j) => {
       outer.style[property] = copied[i][j];
     });
-    outer.style.display = rendered[i] ? 'contents' : outerDisplay(layouts[i]);
+
+    if (rendered[i]) outer.style.display = 'contents';
+    else setOuterLayout(outer, layouts[i]);
   });
   [...measured, ...around].forEach(({ outer, inner }) => {
     outer.style.display = 'contents';
     inner.style.display = 'contents';
   });
 
+  try {
+    return fitInsideAround(measured, styles, pins);
+  } finally {
+    restoreAround();
+  }
+};
+
+// The enclosing pins stay out of the layout through the reads, the probes and the margin read, so
+// these pins are laid out at the width their enclosing triggers give them, not the one last
+// refresh held on those outers.
+const fitInsideAround = (
+  measured: readonly MeasuredPin[],
+  styles: readonly CSSStyleDeclaration[],
+  pins: readonly WrappedPin[],
+): (number | undefined)[] => {
   let boxes: MeasuredBox[];
+  // Taken off for the reads below, so outer's own margin reads as the page's rules give it, in the
+  // layout those reads flush anyway.
+  const restoreCarried = takeCarriedMargins(measured.map(({ outer }) => outer));
 
   try {
-    boxes = measured.map(({ trigger, index, layout }) => {
+    boxes = measured.map(({ outer, trigger, index, layout }) => {
       const style = styles[index];
 
-      if (!layout) return { box: readHeldBox(style, BLOCK_BOX) };
+      if (!layout) {
+        const ownMargin = outerStyle(outer).marginBottom;
+
+        return { box: readHeldBox(style, BLOCK_BOX), ownMargin };
+      }
 
       return {
         item: {
@@ -733,19 +775,51 @@ const fitReleasedPins = (
       };
     });
   } finally {
+    restoreCarried();
     measured.forEach(({ outer, inner, layout }) => {
-      outer.style.display = outerDisplay(layout);
+      setOuterLayout(outer, layout);
 
       inner.style.display = '';
     });
-    around.forEach(({ outer, inner }, i) => {
-      [outer.style.display, inner.style.display] = aroundDisplays[i];
-    });
   }
 
+  return fitBlocksAndItems(measured, boxes, styles, pins);
+};
+
+const fitBlocksAndItems = (
+  measured: readonly MeasuredPin[],
+  boxes: readonly MeasuredBox[],
+  styles: readonly CSSStyleDeclaration[],
+  pins: readonly WrappedPin[],
+): (number | undefined)[] => {
   const inPx = boxes.map(({ box }) => box.every((value) => value.endsWith('px')));
-  const dependent = heightsFollowingInner(measured, boxes, inPx, styles);
   const reserved: (number | undefined)[] = pins.map(() => undefined);
+  // The block-flow pins, those with no item box. A display: contents trigger lays its content out
+  // in outer's block, so its outer goes with them too, read as it stands.
+  const measuredIndexes = new Set(measured.map(({ index }) => index));
+  const blocks = [
+    ...measured.flatMap((pin, i) =>
+      (boxes[i].item ? [] : [{ ...pin, ownMargin: boxes[i].ownMargin ?? '' }])),
+    ...pins.flatMap((pin, index) => (!measuredIndexes.has(index)
+      && pin.outer.getClientRects().length > 0
+      ? [{ ...pin, index, ownMargin: '' }]
+      : [])),
+  ];
+  const inBlockFlow = new Set(blocks.map(({ index }) => index));
+  // Each block-flow outer goes to the height it reserves before anything inside it changes, and
+  // stays there: nothing after it moves under the probes and the margin read (a page resized under
+  // a read had WebKit move its scroll, or stopped a smooth scroll), and an enclosing pin is read
+  // around this one as the refresh leaves it.
+  const heights = blocks.map(({ outer }) => measureUsedHeight(outer));
+  // outer's bottom edge less inner's, read before outer is held: the height written back from its
+  // computed style is rounded, which moves the edge.
+  const gaps = blocks.map(({ outer, inner }) => bottomGap(outer, inner));
+
+  blocks.forEach(({ outer }, j) => {
+    outer.style.height = `${heights[j]}px`;
+  });
+
+  const dependent = heightsFollowingInner(measured, boxes, inPx, styles);
 
   // A box that didn't come out in px is left to outer's own measurement, and trigger to its own
   // rules.
@@ -771,7 +845,142 @@ const fitReleasedPins = (
     if (inPx[i]) holdTriggerBox(trigger, TRIGGER_BOX, box);
   });
 
+  // A trigger held at a height that followed inner's was read at its auto one above: its outer is
+  // measured again with it held, all cleared before any is read.
+  const held = new Set([...dependent].map((i) => measured[i].index));
+  const regrown = blocks.flatMap(({ index }, j) => (held.has(index) ? [j] : []));
+
+  regrown.forEach((j) => {
+    blocks[j].outer.style.height = '';
+  });
+  regrown.forEach((j) => {
+    heights[j] = measureUsedHeight(blocks[j].outer);
+    gaps[j] = bottomGap(blocks[j].outer, blocks[j].inner);
+  });
+  regrown.forEach((j) => {
+    blocks[j].outer.style.height = `${heights[j]}px`;
+  });
+  // A pin that's an item or has nothing rendered holds none of trigger's margins outside outer: one
+  // a block-flow refresh carried goes.
+  pins.forEach(({ outer }, i) => {
+    if (!inBlockFlow.has(i) && outer.style.marginBottom) {
+      outer.style.removeProperty('margin-bottom');
+    }
+  });
+  fitEscapingMargins(blocks, gaps);
+  blocks.forEach(({ index }, j) => {
+    reserved[index] = heights[j];
+  });
+
   return reserved;
+};
+
+// Each outer's computed style, kept for its lifetime: in Firefox a fresh getComputedStyle() of a
+// display: contents element on every refresh made each refresh slower than the last.
+const outerStyles = new WeakMap<HTMLElement, CSSStyleDeclaration>();
+
+const outerStyle = (outer: HTMLElement): CSSStyleDeclaration => {
+  let style = outerStyles.get(outer);
+
+  if (!style) {
+    style = getComputedStyle(outer);
+    outerStyles.set(outer, style);
+  }
+
+  return style;
+};
+
+// Takes the bottom margin carried onto each outer off, returning the way back: with it off, outer's
+// computed margin is the one the page's rules give it, and a rule matching outer in trigger's place
+// (.stack > *, say) gives it trigger's margin. Only while outer is display: contents, where the
+// margin lays nothing out. A percentage or calc() reads as written.
+const takeCarriedMargins = (outers: readonly HTMLElement[]): (() => void) => {
+  const carried = outers.map((outer) => captureInline(outer, 'margin-bottom'));
+
+  outers.forEach((outer) => outer.style.removeProperty('margin-bottom'));
+
+  return () => outers.forEach((outer, j) => restoreInline(outer, 'margin-bottom', carried[j]));
+};
+
+// The escaping margin collapsed with outer's own: the larger positive one plus the more negative
+// one. One the page writes in px is collapsed here; a percentage or calc() is left to the browser,
+// which resolves it against outer's containing block.
+const carriedMargin = (escaping: number, own: string): string => {
+  if (/^-?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?px$|^0$/.test(own)) {
+    const px = parseFloat(own);
+
+    return `${Math.max(escaping, px, 0) + Math.min(escaping, px, 0)}px`;
+  }
+
+  if (own === 'auto' || own === '') return `${escaping}px`;
+
+  return `calc(max(${escaping}px, ${own}, 0px) + min(${escaping}px, ${own}, 0px))`;
+};
+
+// The bottom border measureUsedHeight counts.
+const bottomBorder = (el: HTMLElement) => {
+  const style = getComputedStyle(el);
+
+  return measureBorderWidth(style.borderBottomStyle, style.borderBottomWidth);
+};
+
+// Whether outer keeps its content's bottom margin inside its natural height (or cuts it off), as a
+// page rule matching it in trigger's place can make it, so none escapes. Most such rules move
+// outer's bottom edge away from inner's (gap): a bottom padding or border, a height, min-height,
+// max-height, size containment, or a formatting context such as a float, an absolute position,
+// an overflow or an align-content where the engine makes it one (iOS 16 doesn't). The gap misses
+// the rest: a display other than the block written (only a page rule's !important sets one), a
+// writing mode other than its parent's, and columns.
+const holdsBottomMargin = (style: CSSStyleDeclaration, gap: number, parent: Element | null) =>
+  Math.abs(gap) > 0.01
+  || !['block', 'list-item'].includes(style.display)
+  || (parent !== null && style.writingMode !== getComputedStyle(parent).writingMode)
+  || ![undefined, '', 'auto'].includes(style.columnCount)
+  || ![undefined, '', 'auto'].includes(style.columnWidth);
+const bottomGap = (outer: HTMLElement, inner: HTMLElement) =>
+  outer.getBoundingClientRect().bottom - inner.getBoundingClientRect().bottom;
+// A transparent border, which keeps the margins of a box's content inside it but no float.
+const HOLD_MARGINS = '1px solid transparent';
+
+// Carries the bottom margin escaping each block-flow pin's trigger (trigger's own, collapsed with
+// its content's) onto outer, collapsed with outer's own. outer holds a height, which stops that
+// margin collapsing through its bottom while the top one still does. The margin is how much taller
+// inner gets with HOLD_MARGINS at its bottom, which leaves out a float overflowing trigger, as
+// unwrapped. outer keeps the last refresh's margin until the new one is written, so the page keeps
+// its height.
+const fitEscapingMargins = (
+  pins: readonly (WrappedPin & { ownMargin: string })[],
+  gaps: readonly number[],
+) => {
+  const plain = pins.map(({ inner }) => measureUsedHeight(inner) - bottomBorder(inner));
+  // Bottom edges, not heights: a page rule's top padding or border on outer keeps trigger's top
+  // margin inside it too. An inner with no height has every margin inside it collapsing through:
+  // they leave through outer's top, so none is left for its bottom.
+  const holding = pins.map(({ outer }, j) => plain[j] < 0.01
+    || holdsBottomMargin(getComputedStyle(outer), gaps[j], outer.parentElement));
+
+  pins.forEach(({ inner }) => {
+    inner.style.borderBottom = HOLD_MARGINS;
+  });
+
+  let margins: number[];
+
+  try {
+    // Each less its border as measureUsedHeight counts it: this one can snap below 1px under a
+    // zoom, and the plain one is a page rule's, if any.
+    margins = pins.map(({ inner }, j) => (holding[j]
+      ? 0
+      : measureUsedHeight(inner) - bottomBorder(inner) - plain[j]));
+  } finally {
+    pins.forEach(({ inner }) => {
+      inner.style.borderBottom = '';
+    });
+  }
+
+  // !important, as trigger's held box is, so a page rule's !important doesn't win over it.
+  pins.forEach(({ outer, ownMargin }, j) => {
+    outer.style.setProperty('margin-bottom', carriedMargin(margins[j], ownMargin), HELD_PRIORITY);
+  });
 };
 
 // The block-flow pins in measured (by index) whose height resolves against inner's and so needs
@@ -795,19 +1004,16 @@ const heightsFollowingInner = (
   return dependent;
 };
 
-// The blocks whose trigger changes height with inner at height(block). outer keeps its height
-// meanwhile so nothing after it moves: a page resized under the probe had WebKit move its scroll,
-// or stopped a smooth scroll.
+// The blocks whose trigger changes height with inner at height(block), their outer held at its
+// height meanwhile (fitBlocksAndItems).
 const probeInner = <T extends WrappedPin & { i: number }>(
   blocks: readonly T[],
   height: (block: T) => string,
   boxes: readonly MeasuredBox[],
 ): number[] => {
-  const saved = blocks.map(({ outer, inner }) => [outer.style.height, inner.style.height]);
-  const outerHeights = blocks.map(({ outer }) => getComputedStyle(outer).height);
+  const saved = blocks.map(({ inner }) => inner.style.height);
 
-  blocks.forEach((block, j) => {
-    block.outer.style.height = outerHeights[j];
+  blocks.forEach((block) => {
     block.inner.style.height = height(block);
   });
 
@@ -815,8 +1021,8 @@ const probeInner = <T extends WrappedPin & { i: number }>(
     return blocks.flatMap(({ trigger, i }) =>
       (getComputedStyle(trigger).height !== boxes[i].box[0] ? [i] : []));
   } finally {
-    blocks.forEach(({ outer, inner }, j) => {
-      [outer.style.height, inner.style.height] = saved[j];
+    blocks.forEach(({ inner }, j) => {
+      inner.style.height = saved[j];
     });
   }
 };

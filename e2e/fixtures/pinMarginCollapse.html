@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinMarginCollapse fixture</title>
+    <style>
+      body {
+        margin: 0;
+        width: 800px;
+      }
+      .fill {
+        height: 3000px;
+      }
+      .end {
+        height: 10px;
+      }
+      /* A page-wide rule a stylesheet commonly has, which reaches the wrappers too. */
+      .border-box,
+      .border-box * {
+        box-sizing: border-box;
+      }
+      /* Rules that match the pin's wrapper in its place once it's wrapped. */
+      .stack > * {
+        margin-bottom: 24px;
+      }
+      .stack-percent > * {
+        margin-bottom: 5%;
+      }
+      .stack-calc > * {
+        margin-bottom: calc(5% + 8px);
+      }
+      .stack-important > * {
+        margin-bottom: 0 !important;
+      }
+      .stack-padding > * {
+        padding-bottom: 8px;
+      }
+      .stack-align > * {
+        align-content: center;
+      }
+      .stack-min > * {
+        min-height: 200px;
+      }
+      .stack-height > * {
+        height: 20px;
+      }
+      .stack-hidden > * {
+        content-visibility: hidden;
+      }
+      .stack-top > * + * {
+        border-top: 1px solid #ddd;
+      }
+      .stack-negative > * {
+        margin-bottom: -5px;
+      }
+      .stack-vertical > * {
+        writing-mode: vertical-rl;
+      }
+      .stack-list > * {
+        display: list-item !important;
+        list-style: none;
+      }
+      .row-padding > div {
+        padding: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="host"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      // Each case's pins (.pin, .pin2) should leave the page where it lays out unwrapped: their
+      // margins and the margins escaping their content collapse with what's around them, floats
+      // around them stay where they were.
+      const CASES = {
+        // pin margins on both edges, a first child's top margin and a last child's bottom margin
+        // escaping through them
+        edges: `<div class="prev" style="height:100px;margin-bottom:30px"></div><div class="pin" style="margin:20px 0"><p class="first" style="margin:16px 0 0;height:50px">a</p><p style="margin:0 0 40px;height:50px">b</p></div><div class="next" style="height:100px;margin-top:30px"></div>`,
+        // the pin's own bottom margin, larger than the next one's top margin
+        ownBottom: `<div class="prev" style="height:100px"></div><div class="pin" style="height:200px;margin-bottom:40px"><p class="first" style="margin:0;height:50px">a</p></div><div class="next" style="height:100px;margin-top:10px"></div>`,
+        // a left float before the pin: the pin's box runs under it, only its line boxes avoid it
+        floatBefore: `<div class="prev" style="float:left;width:200px;height:300px"></div><div class="pin" style="height:100px"><p class="first" style="margin:0">text</p></div><div class="next" style="clear:both;height:100px"></div>`,
+        // a pin inside a pin, each with a top margin, the inner one's first child with its own
+        nested: `<div class="prev" style="height:100px;margin-bottom:30px"></div><div class="pin" style="margin-top:20px"><div class="pin2" style="margin-top:24px"><p class="first" style="margin:16px 0 0;height:50px">a</p></div><p style="margin:0;height:300px">b</p></div><div class="next" style="height:100px;margin-top:30px"></div>`,
+        // padding keeps the content's margins inside; only the pin's own margins collapse
+        padded: `<div class="prev" style="height:100px;margin-bottom:30px"></div><div class="pin" style="margin:20px 0;padding:10px"><p class="first" style="margin:16px 0;height:50px">a</p></div><div class="next" style="height:100px;margin-top:30px"></div>`,
+        // a nested pin that is its enclosing pin's only child, both edges' margins through it
+        nestedOnly: `<div class="prev" style="height:0"></div><div><div class="pin"><div class="pin2" style="height:50px;margin:30px 0"><span class="first">n</span></div></div></div><div class="next" style="height:100px"></div>`,
+        // a child's bottom margin larger than every margin around it
+        childBottom: `<div class="prev" style="height:100px;margin-bottom:10px"></div><div class="pin"><p class="first" style="margin:0 0 60px;height:50px">a</p></div><div class="next" style="height:100px;margin-top:20px"></div>`,
+        negative: `<div class="prev" style="height:100px;margin-bottom:30px"></div><div class="pin" style="margin:-10px 0 -10px;height:80px"></div><div class="next" style="height:100px;margin-top:30px"></div>`,
+        // a transform scales the pin's rect, not the margins that escape it
+        transformed: `<div class="prev" style="height:100px;margin-bottom:30px"></div><div class="pin" style="margin:20px 0;transform:scale(0.5)"><p class="first" style="margin:16px 0 40px;height:50px">a</p></div><div class="next" style="height:100px;margin-top:30px"></div>`,
+        // a float inside the pin overflowing its bottom, which the text after it wraps around
+        floatInside: `<div class="prev" style="height:100px"></div><div class="pin" style="height:50px"><div style="float:left;width:100px;height:150px"></div><span class="first">t</span></div><p class="next" style="margin:0">wrapping text</p><div class="clr" style="clear:both;height:10px"></div>`,
+        // the pin as a section's last child, the section's bottom margin and a sibling pin's
+        // margins in the same chain
+        sectionEnd: `<div class="prev" style="height:100px"></div><section style="margin-bottom:25px"><div class="pin" style="margin-bottom:15px"><p class="first" style="margin:0 0 35px;height:40px">a</p></div></section><div class="pin2" style="margin:10px 0 45px;height:30px"></div><div class="next" style="height:100px;margin-top:5px"></div>`,
+        // the edges case under a page-wide box-sizing: border-box
+        borderBox: `<div class="border-box"><div class="prev" style="height:100px;margin-bottom:30px"></div><div class="pin" style="margin:20px 0"><p class="first" style="margin:16px 0 0;height:50px">a</p><p style="margin:0 0 40px;height:50px">b</p></div></div><div class="next" style="height:100px;margin-top:30px"></div>`,
+        // margins a rule gives each child of the pin's parent, the pin's own included
+        childRule: `<div class="stack"><div class="prev" style="height:100px"></div><div class="pin" style="height:50px"><p class="first" style="margin:0 0 10px">a</p></div><div class="next" style="height:100px"></div></div>`,
+        childRulePercent: `<div class="stack-percent"><div class="prev" style="height:100px"></div><div class="pin" style="height:50px"><p class="first" style="margin:0 0 10px">a</p></div><div class="next" style="height:100px"></div></div>`,
+        childRuleCalc: `<div class="stack-calc"><div class="prev" style="height:100px"></div><div class="pin" style="height:50px"><p class="first" style="margin:0 0 10px">a</p></div><div class="next" style="height:100px"></div></div>`,
+        childRuleImportant: `<div class="stack-important"><div class="prev" style="height:100px"></div><div class="pin"><p class="first" style="margin:0 0 24px;height:30px">a</p></div><div class="next" style="height:100px"></div></div>`,
+        // a rule's padding on the pin's wrapper keeps the pin's bottom margin inside it
+        childRulePadding: `<div class="stack-padding"><div class="prev" style="height:100px"></div><div class="pin" style="margin-bottom:30px"><p class="first" style="margin:0;height:40px">a</p></div><div class="next" style="height:100px"></div></div>`,
+        // a rule's align-content makes the pin's wrapper a formatting context of its own
+        childRuleAlign: `<div class="stack-align"><div class="prev" style="height:100px"></div><div class="pin"><p class="first" style="margin:0 0 30px;height:40px">a</p></div><div class="next" style="height:100px"></div></div>`,
+        // a rule's min-height, height or size containment on the pin's wrapper keeps the margin
+        // escaping the pin inside it, or leaves it out
+        childRuleMinHeight: `<div class="stack-min"><div class="prev" style="height:100px"></div><div class="pin"><p class="first" style="margin:0 0 40px;height:50px">a</p></div><div class="next" style="height:100px"></div></div>`,
+        childRuleHeight: `<div class="stack-height"><div class="prev" style="height:100px"></div><div class="pin"><p class="first" style="margin:0 0 40px;height:50px">a</p></div><div class="next" style="height:100px"></div></div>`,
+        childRuleHidden: `<div class="stack-hidden"><div class="prev" style="height:100px"></div><div class="pin"><p class="first" style="margin:0 0 40px;height:50px">a</p></div><div class="next" style="height:100px"></div></div>`,
+        // a rule's top border on the pin's wrapper, which keeps the pin's top margin inside it
+        childRuleBorderTop: `<div class="stack-top"><div class="prev" style="height:100px"></div><div class="pin" style="margin:20px 0"><p class="first" style="margin:0 0 30px;height:50px">a</p></div><div class="next" style="height:100px"></div></div>`,
+        // a negative margin a rule gives a nested pin's wrapper, collapsed with the positive one
+        // escaping that pin, read once by the pin around it
+        childRuleNested: `<div class="prev" style="height:100px"></div><div class="pin"><div class="stack-negative"><div class="pin2"><p class="first" style="margin:0 0 10px;height:50px">a</p></div></div></div><div class="next" style="height:100px"></div>`,
+        // a rule's writing mode on the pin's wrapper, which makes it a formatting context
+        childRuleVertical: `<div class="stack-vertical"><div class="prev" style="height:100px;writing-mode:horizontal-tb"></div><div class="pin"><p class="first" style="margin:0 0 30px;height:50px">a</p></div><div class="next" style="height:100px;writing-mode:horizontal-tb"></div></div>`,
+        // a list item, whose content's margins escape it as a block's do
+        childRuleList: `<div class="stack-list"><div class="prev" style="height:100px"></div><div class="pin"><p class="first" style="margin:0 0 40px;height:50px">a</p></div><div class="next" style="height:100px"></div></div>`,
+        // a pin with no height, its margins collapsing through it
+        empty: `<div class="prev" style="height:100px"></div><div class="pin" style="margin:20px 0;position:relative"><span class="first" style="position:absolute">a</span></div><div class="next" style="height:100px"></div>`,
+        // a trigger with no box of its own, its content's bottom margin escaping the wrapper
+        contentsTrigger: `<div class="prev" style="height:100px"></div><div class="pin" style="display:contents"><p class="first" style="margin:0 0 40px;height:50px">a</p></div><div class="next" style="height:100px"></div>`,
+        // a tall pin of a fractional height, which its computed style rounds
+        tall: `<div class="prev" style="height:100px"></div><div class="pin" style="margin-bottom:40px"><p class="first" style="margin:0;height:12345.546875px">a</p></div><div class="next" style="height:100px"></div>`,
+        // a pin clearing a float, its top margin smaller than the clearance
+        clears: `<div style="float:left;width:100px;height:200px"></div><div class="prev" style="height:50px;margin-bottom:30px"></div><div class="pin" style="clear:both;margin-top:40px;height:60px"><p class="first" style="margin:12px 0">a</p></div><div class="next" style="height:100px;margin-top:30px"></div>`,
+      };
+      // The pins' range runs past the document's end in pageEnd, so the end is clamped.
+      const TAIL = '<div class="fill"></div><div class="end"></div><div class="fill"></div>';
+      const PAGE_END_TAIL = '<div style="height:200px"></div><div class="end"></div>';
+
+      const docTop = (selector) => {
+        const element = document.querySelector(selector);
+
+        return element ? element.getBoundingClientRect().top + window.scrollY : null;
+      };
+      const snapshot = () => {
+        const pin = document.querySelector('.pin').getBoundingClientRect();
+
+        return {
+          prev: docTop('.prev'),
+          pin: docTop('.pin'),
+          pin2: docTop('.pin2'),
+          first: docTop('.first'),
+          next: docTop('.next'),
+          clr: docTop('.clr'),
+          end: docTop('.end'),
+          pinLeft: pin.left,
+          pinWidth: pin.width,
+          height: document.documentElement.scrollHeight,
+        };
+      };
+      const frame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const pinsOf = (sticky) => [...document.querySelectorAll('.pin, .pin2')].map((trigger) =>
+        sticky.createStickyPin({ trigger, endTrigger: '.end', end: 'top top' }));
+
+      // The page unwrapped, then after exactly one refresh() and after a second: the second finds
+      // the wrappers as the first left them.
+      window.__layout = (name) => {
+        const html = name === 'pageEnd' ? CASES.edges + PAGE_END_TAIL : CASES[name] + TAIL;
+
+        document.getElementById('host').innerHTML = `<section id="root">${html}</section>`;
+
+        const natural = snapshot();
+        const sticky = new StickyScrollTrigger('#root');
+
+        pinsOf(sticky);
+        sticky.refresh();
+
+        const once = snapshot();
+
+        sticky.refresh();
+
+        return { natural, once, twice: snapshot() };
+      };
+
+      // Through ScrollTrigger: where the pin engages and releases, and whether a kill moves the
+      // page.
+      window.__range = async (name) => {
+        document.getElementById('host').innerHTML = `<section id="root">${CASES[name]}${TAIL}</section>`;
+
+        const natural = snapshot();
+        const sticky = new StickyScrollTrigger('#root');
+        const triggers = pinsOf(sticky).map((vars) => ScrollTrigger.create(vars));
+
+        ScrollTrigger.refresh();
+        await frame();
+
+        const pin = document.querySelector('.pin');
+        const wrapped = snapshot();
+        const topAt = async (y) => {
+          window.scrollTo(0, y);
+          await frame();
+
+          return pin.getBoundingClientRect().top;
+        };
+        const tops = {
+          beforeStart: await topAt(wrapped.pin - 5),
+          afterStart: await topAt(wrapped.pin + 10),
+          beforeEnd: await topAt(wrapped.end - 2),
+          afterEnd: await topAt(wrapped.end + 50),
+        };
+
+        window.scrollTo(0, 0);
+        await frame();
+        triggers.forEach((trigger) => trigger.kill());
+
+        return { natural, wrapped, tops, killed: snapshot() };
+      };
+
+      // A pin taken out of the flow, back, made a flex item and back again, a refresh() after
+      // each: where the box after it lands, without the pin registered and with.
+      const TRANSITIONS = `<section id="root"><div style="height:100px"></div><div id="box"><div class="pin" style="margin:0 0 40px;width:300px;height:50px"><p style="margin:0 0 25px;height:10px"></p></div><div style="height:50px;width:200px"></div></div><div class="next" style="height:100px;margin-top:10px"></div>${TAIL}</section>`;
+
+      window.__transitions = (register) => {
+        document.getElementById('host').innerHTML = TRANSITIONS;
+
+        const pin = document.querySelector('.pin');
+        const box = document.getElementById('box');
+        let sticky;
+
+        if (register) {
+          sticky = new StickyScrollTrigger('#root');
+          pinsOf(sticky);
+          sticky.refresh();
+        }
+
+        const step = (change) => {
+          change();
+          sticky?.refresh();
+
+          return docTop('.next');
+        };
+
+        return {
+          block: docTop('.next'),
+          hidden: step(() => (pin.style.display = 'none')),
+          shown: step(() => (pin.style.display = '')),
+          item: step(() => {
+            box.style.display = 'flex';
+            box.style.alignItems = 'flex-start';
+          }),
+          back: step(() => (box.style.display = '')),
+        };
+      };
+
+      // A pin inside another, its content's bottom margin changed between refreshes: the
+      // enclosing pin, an item, holding the margin with its padding or letting it through, reads
+      // the nested one's new margin on the first refresh().
+      const AROUND = {
+        item: '<div style="display:flex;align-items:flex-start"><div class="pin" style="width:300px">{nested}</div></div>',
+        padded: '<div class="pin" style="padding-bottom:5px">{nested}</div>',
+        block: '<div class="pin">{nested}</div>',
+      };
+
+      window.__nestedChange = (around) => {
+        const nested = '<div class="pin2"><p class="last" style="margin:0 0 40px;height:50px"></p></div>';
+
+        document.getElementById('host').innerHTML = `<section id="root"><div style="height:100px"></div>${AROUND[around].replace('{nested}', nested)}<div class="next" style="height:100px;margin-top:5px"></div>${TAIL}</section>`;
+
+        const last = document.querySelector('.last');
+        const at = (margin) => {
+          last.style.marginBottom = margin;
+
+          return docTop('.next');
+        };
+        const natural = { wide: at('40px'), narrow: at('10px') };
+
+        last.style.marginBottom = '40px';
+
+        const sticky = new StickyScrollTrigger('#root');
+
+        pinsOf(sticky);
+        sticky.refresh();
+
+        const step = (margin) => {
+          last.style.marginBottom = margin;
+          sticky.refresh();
+
+          return docTop('.next');
+        };
+
+        return { natural, wrapped: { wide: docTop('.next'), narrow: step('10px'), back: step('40px') } };
+      };
+
+      // A block pin with wrapping text and a percentage bottom margin inside a flex item pin:
+      // registered, then (after the caller resizes the page) refreshed once.
+      const NESTED_PERCENT = `<section id="root"><div style="height:100px"></div><div style="display:flex;align-items:flex-start"><div class="pin" style="flex:1"><div class="pin2" style="margin-bottom:10%"><p style="margin:0">${'word '.repeat(200)}</p></div><div class="sib" style="height:10px"></div></div><div style="width:200px;height:50px"></div></div><div class="next" style="height:100px"></div>${TAIL}</section>`;
+      let nestedPercent;
+
+      window.__nestedPercent = (register) => {
+        // The body follows the viewport here, so a resize changes the row's width.
+        document.body.style.width = 'auto';
+        document.getElementById('host').innerHTML = NESTED_PERCENT;
+
+        if (register) {
+          nestedPercent = new StickyScrollTrigger('#root');
+          pinsOf(nestedPercent);
+          nestedPercent.refresh();
+        }
+
+        return { sib: docTop('.sib'), next: docTop('.next') };
+      };
+      window.__nestedPercentRefresh = () => {
+        nestedPercent.refresh();
+
+        return { sib: docTop('.sib'), next: docTop('.next'), held: document.querySelector('.pin2').style.height };
+      };
+
+      // A flex item pin whose wrapper a rule pads in its place: where its sibling and what follows sit.
+      window.__itemPadding = (register) => {
+        document.getElementById('host').innerHTML = `<section id="root"><div class="row-padding" style="display:flex;align-items:flex-start"><div class="pin" style="width:200px;height:50px"></div><div class="sib" style="flex:1;height:30px"></div></div><div class="next" style="height:100px"></div>${TAIL}</section>`;
+
+        if (register) {
+          const sticky = new StickyScrollTrigger('#root');
+
+          pinsOf(sticky);
+          sticky.refresh();
+        }
+
+        const sib = document.querySelector('.sib').getBoundingClientRect();
+
+        return { sibLeft: sib.left, sibWidth: sib.width, next: docTop('.next') };
+      };
+
+      // One instance's pin inside another's, the two refreshed in either order.
+      window.__crossInstance = (order) => {
+        document.getElementById('host').innerHTML = `<div id="rootA"></div><div id="rootB"></div><div style="height:100px"></div><div><div class="pinB"><div class="pinA" style="height:50px;margin:0 0 30px"><p style="margin:0 0 45px;height:5px"></p></div></div></div><div class="next" style="height:100px"></div>${TAIL}`;
+
+        const natural = docTop('.next');
+        const a = new StickyScrollTrigger('#rootA');
+        const b = new StickyScrollTrigger('#rootB');
+
+        a.createStickyPin({ trigger: '.pinA', endTrigger: '.end', end: 'top top' });
+        b.createStickyPin({ trigger: '.pinB', endTrigger: '.end', end: 'top top' });
+
+        const instances = order === 'a,b' ? [a, b] : [b, a];
+
+        instances.forEach((instance) => instance.refresh());
+
+        const once = docTop('.next');
+
+        instances.forEach((instance) => instance.refresh());
+
+        return { natural, once, twice: docTop('.next') };
+      };
+
+      // A Scene or cover layer next to a pin: its GSAP window, with the pin registered and
+      // without.
+      const PIN = '<div class="pin" style="margin:20px 0 20px"><p style="margin:16px 0 40px;height:50px">pin</p></div>';
+      const COMBOS = {
+        pinBeforeScene: `<div style="height:100px;margin-bottom:30px"></div>${PIN}<div class="scene" style="height:400px;margin-top:30px"></div><div class="next" style="height:100px"></div>`,
+        pinInScene: `<div style="height:100px;margin-bottom:30px"></div><div class="scene" style="margin-top:10px">${PIN}<div style="height:300px"></div></div><div class="next" style="height:100px"></div>`,
+        pinEndsScene: `<div style="height:100px"></div><div class="scene"><div style="height:300px"></div>${PIN}</div><div class="next" style="height:100px;margin-top:10px"></div>`,
+        pinBeforeCover: `<div style="height:100px"></div>${PIN}<div class="overlap" style="height:300px;margin-top:30px"></div><div class="cover" style="height:500px"></div><div class="next" style="height:100px"></div>`,
+        pinEndsRoot: `<div class="scene" style="height:300px"></div>${PIN}`,
+      };
+
+      window.__combo = (shape, withPin) => {
+        document.getElementById('host').innerHTML = shape === 'pinEndsRoot'
+          ? `<section id="root">${COMBOS[shape]}</section><div class="next" style="height:10px"></div>${TAIL}`
+          : `<section id="root">${COMBOS[shape]}${TAIL}</section>`;
+
+        const sticky = new StickyScrollTrigger('#root');
+        const layer = ScrollTrigger.create(shape === 'pinBeforeCover'
+          ? sticky.createOverlapScroll({ trigger: '.overlap', cover: '.cover' })
+          : sticky.createStickyTrigger({ trigger: '.scene' }));
+
+        if (withPin) {
+          ScrollTrigger.create(sticky.createStickyPin({ trigger: '.pin', endTrigger: '.end', end: 'top top' }));
+        }
+
+        ScrollTrigger.refresh();
+        sticky.refresh();
+
+        return { start: layer.start, end: layer.end, next: docTop('.next') };
+      };
+    </script>
+  </body>
+</html>

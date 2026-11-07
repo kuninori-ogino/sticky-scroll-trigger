@@ -1231,6 +1231,227 @@ test('createStickyPin releases at the scroll its end names, whatever trigger\'s 
   }
 });
 
+type MarginLayout = Record<string, number | null>;
+type MarginWindow = Window & {
+  __layout: (name: string) => { natural: MarginLayout; once: MarginLayout; twice: MarginLayout };
+  __range: (name: string) => Promise<{
+    natural: MarginLayout;
+    wrapped: MarginLayout;
+    tops: { beforeStart: number; afterStart: number; beforeEnd: number; afterEnd: number };
+    killed: MarginLayout;
+  }>;
+  __transitions: (register: boolean) => Record<string, number>;
+  __crossInstance: (order: string) => { natural: number; once: number; twice: number };
+  __itemPadding: (register: boolean) => { sibLeft: number; sibWidth: number; next: number };
+  __nestedPercent: (register: boolean) => { sib: number; next: number };
+  __nestedPercentRefresh: () => { sib: number; next: number; held: string };
+  __nestedChange: (around: string) => {
+    natural: { wide: number; narrow: number };
+    wrapped: { wide: number; narrow: number; back: number };
+  };
+  __combo: (shape: string, withPin: boolean) => { start: number; end: number; next: number };
+};
+
+const expectLayout = (actual: MarginLayout, natural: MarginLayout, label: string) => {
+  for (const [key, value] of Object.entries(natural)) {
+    if (value === null) expect(actual[key], `${label} ${key}`).toBeNull();
+    else expect(actual[key], `${label} ${key}`).toBeCloseTo(value, 1);
+  }
+};
+
+const MARGIN_CASES = [
+  'edges', 'ownBottom', 'floatBefore', 'nested', 'padded', 'nestedOnly', 'childBottom', 'negative',
+  'transformed', 'floatInside', 'sectionEnd', 'borderBox', 'childRule', 'childRulePercent',
+  'childRuleCalc', 'childRuleImportant', 'childRulePadding', 'childRuleAlign', 'childRuleMinHeight',
+  'childRuleHeight', 'childRuleHidden', 'childRuleNested', 'childRuleVertical', 'childRuleList',
+  'empty', 'clears',
+];
+
+// A block pin's wrappers leave its margins collapsing as they do unwrapped, the margins its
+// content's edges pass through included, and floats around it stay where they were: the page
+// lays out as though the pin weren't registered, from the first refresh() on. A trigger with no box
+// of its own has no rect to engage, so it's checked here only.
+for (const name of [...MARGIN_CASES, 'pageEnd', 'contentsTrigger']) {
+  test(`a block pin leaves the page laid out as unwrapped (${name})`, async ({ page }) => {
+    await page.goto('/fixtures/pinMarginCollapse.html');
+
+    const result = await page.evaluate(
+      (caseName) => (window as never as MarginWindow).__layout(caseName),
+      name,
+    );
+
+    expectLayout(result.once, result.natural, 'after one refresh()');
+    expectLayout(result.twice, result.natural, 'after two');
+  });
+}
+
+// A rule bordering the pin's wrapper on top moves trigger inside it by the border, as rules
+// matching a wrapper do, but its bottom margins still escape: what follows stays in place.
+test('a rule bordering a block pin\'s wrapper on top leaves what follows in place', async ({ page }) => {
+  await page.goto('/fixtures/pinMarginCollapse.html');
+
+  const result = await page.evaluate(
+    () => (window as never as MarginWindow).__layout('childRuleBorderTop'),
+  );
+
+  for (const [label, layout] of [['after one refresh()', result.once], ['after two', result.twice]] as const) {
+    expect(layout.next, `${label} next`).toBeCloseTo(result.natural.next!, 1);
+    expect(layout.height, `${label} height`).toBeCloseTo(result.natural.height!, 1);
+  }
+});
+
+// A tall pin's computed height comes rounded, which outer is held at: its bottom margin still
+// escapes, and what follows sits where it would unwrapped, but for that rounding.
+test('a tall block pin of a fractional height keeps its bottom margin', async ({ page }) => {
+  await page.goto('/fixtures/pinMarginCollapse.html');
+
+  const result = await page.evaluate(() => (window as never as MarginWindow).__layout('tall'));
+
+  for (const [label, layout] of [['after one refresh()', result.once], ['after two', result.twice]] as const) {
+    expect(layout.next, `${label} next`).toBeCloseTo(result.natural.next!, 0);
+  }
+});
+
+// The same pins through ScrollTrigger: they engage at their top and release at their end as
+// before, and killing them moves nothing, since the wrappers held no margin of their own. A
+// transform keeps a pin at its scaled offset while stuck, so only its kill is checked.
+for (const name of MARGIN_CASES) {
+  test(`a block pin engages, releases and is killed in place (${name})`, async ({ page }) => {
+    await page.goto('/fixtures/pinMarginCollapse.html');
+
+    const result = await page.evaluate(
+      (caseName) => (window as never as MarginWindow).__range(caseName),
+      name,
+    );
+
+    expectLayout(result.wrapped, result.natural, 'registered');
+    expectLayout(result.killed, result.natural, 'killed');
+
+    if (name === 'transformed') return;
+
+    // A pin at the page's top has no scroll before its start.
+    if (result.wrapped.pin! >= 5) expect(result.tops.beforeStart).toBeCloseTo(5, 1);
+
+    expect(result.tops.afterStart).toBeCloseTo(0, 1);
+    expect(result.tops.beforeEnd).toBeCloseTo(0, 1);
+    expect(result.tops.afterEnd).toBeCloseTo(-50, 1);
+  });
+}
+
+// A pin taken out of the flow or made a flex item holds no margin a block-flow refresh() gave
+// its wrapper, and gets it back when it's a block again.
+test('a pin\'s margins follow it through display: none, a flex parent and back', async ({ page }) => {
+  await page.goto('/fixtures/pinMarginCollapse.html');
+
+  const natural = await page.evaluate(() => (window as never as MarginWindow).__transitions(false));
+
+  await page.goto('/fixtures/pinMarginCollapse.html');
+
+  const wrapped = await page.evaluate(() => (window as never as MarginWindow).__transitions(true));
+
+  for (const [state, next] of Object.entries(natural)) {
+    expect(wrapped[state], state).toBeCloseTo(next, 1);
+  }
+});
+
+// A nested pin's margin changed between refreshes reaches the pin around it on the first refresh(),
+// whether that pin is an item, holds the margin in with its padding or lets it through.
+for (const around of ['item', 'padded', 'block']) {
+  test(`a pin around another follows its changed margin on one refresh() (${around})`, async ({ page }) => {
+    await page.goto('/fixtures/pinMarginCollapse.html');
+
+    const { natural, wrapped } = await page.evaluate(
+      (a) => (window as never as MarginWindow).__nestedChange(a),
+      around,
+    );
+
+    expect(wrapped.wide, 'registered').toBeCloseTo(natural.wide, 1);
+    expect(wrapped.narrow, 'narrowed').toBeCloseTo(natural.narrow, 1);
+    expect(wrapped.back, 'widened again').toBeCloseTo(natural.wide, 1);
+  });
+}
+
+// A nested pin is read at the width its enclosing item pin's trigger has now, not the one the last
+// refresh() held on that pin's wrapper, so its text and percentage margin follow a resize on one
+// refresh(), and its auto height isn't mistaken for one following inner and held.
+test('a pin inside an item pin follows a resize on one refresh()', async ({ page }) => {
+  await page.setViewportSize({ width: 700, height: 600 });
+  await page.goto('/fixtures/pinMarginCollapse.html');
+
+  const natural = await page.evaluate(
+    () => (window as never as MarginWindow).__nestedPercent(false),
+  );
+
+  await page.setViewportSize({ width: 1000, height: 600 });
+  await page.goto('/fixtures/pinMarginCollapse.html');
+  await page.evaluate(() => (window as never as MarginWindow).__nestedPercent(true));
+  await page.setViewportSize({ width: 700, height: 600 });
+
+  const once = await page.evaluate(
+    () => (window as never as MarginWindow).__nestedPercentRefresh(),
+  );
+
+  expect(once.sib, 'sibling after the nested pin').toBeCloseTo(natural.sib, 1);
+  expect(once.next, 'after the row').toBeCloseTo(natural.next, 1);
+  expect(once.held, 'height held on the nested trigger').toBe('');
+});
+
+// An item pin's wrapper keeps its content box, so a rule padding it in trigger's place doesn't eat
+// into the box it holds for trigger: the sibling and what follows stay where they were.
+test('a flex item pin whose wrapper a rule pads leaves its row in place', async ({ page }) => {
+  await page.goto('/fixtures/pinMarginCollapse.html');
+
+  const natural = await page.evaluate(() => (window as never as MarginWindow).__itemPadding(false));
+
+  await page.goto('/fixtures/pinMarginCollapse.html');
+
+  const wrapped = await page.evaluate(() => (window as never as MarginWindow).__itemPadding(true));
+
+  for (const [key, value] of Object.entries(natural)) {
+    expect(wrapped[key as keyof typeof wrapped], key).toBeCloseTo(value, 1);
+  }
+});
+
+// One instance's pin inside another's: whichever instance refreshes first, the enclosing pin is
+// read with the inner one's margins already in place.
+for (const order of ['a,b', 'b,a']) {
+  test(`a pin inside another instance's pin keeps the page in place (${order})`, async ({ page }) => {
+    await page.goto('/fixtures/pinMarginCollapse.html');
+
+    const result = await page.evaluate(
+      (o) => (window as never as MarginWindow).__crossInstance(o),
+      order,
+    );
+
+    expect(result.once).toBeCloseTo(result.natural, 1);
+    expect(result.twice).toBeCloseTo(result.natural, 1);
+  });
+}
+
+// A Scene or cover layer before, around or after a pin gets the GSAP window it would get with
+// the pin unregistered.
+for (const shape of ['pinBeforeScene', 'pinInScene', 'pinEndsScene', 'pinBeforeCover', 'pinEndsRoot']) {
+  test(`a pin leaves the window of a layer beside it alone (${shape})`, async ({ page }) => {
+    await page.goto('/fixtures/pinMarginCollapse.html');
+
+    const without = await page.evaluate(
+      (s) => (window as never as MarginWindow).__combo(s, false),
+      shape,
+    );
+
+    await page.goto('/fixtures/pinMarginCollapse.html');
+
+    const withPin = await page.evaluate(
+      (s) => (window as never as MarginWindow).__combo(s, true),
+      shape,
+    );
+
+    expect(withPin.start, 'start').toBeCloseTo(without.start, 1);
+    expect(withPin.end, 'end').toBeCloseTo(without.end, 1);
+    expect(withPin.next, 'next').toBeCloseTo(without.next, 1);
+  });
+}
+
 // A pin's wrappers stay out of the page's stacking and positioning: trigger's own z-index still
 // ranks it against its siblings, and a position:fixed element inside it still follows the
 // viewport.
@@ -1540,6 +1761,8 @@ const loadPinPercentHeight = async (page: Page, query: Record<string, string>) =
 // pin does. Under an auto-height parent it resolves to nothing, as unpinned.
 for (const [description, query] of [
   ['height: 50% in a 400px box', { pin: 'height: 50%' }],
+  // Its bottom margin still escapes it: outer is measured with the height held.
+  ['height: 50% and a bottom margin in a 400px box', { pin: 'height: 50%; margin-bottom: 30px' }],
   ['height: 100% in a 400px box', { pin: 'height: 100%' }],
   ['min-height: 100% in a 400px box', { pin: 'min-height: 100%' }],
   ['height: 100% under an auto-height parent', { pin: 'height: 100%', box: '' }],
@@ -1601,10 +1824,12 @@ for (const [description, query] of [
   });
 }
 
-// Wrapped, a nested pin keeps its margins inside its own wrapper, so they no longer collapse
-// through the enclosing pin's edges (README "createStickyPin"). The enclosing pin is read around
-// it, so its held height takes them in, and what follows stays where it was.
-test('a pin inside another keeps its margins inside it, and the page below in place', async ({ page }) => {
+// A nested pin's margins collapse through the enclosing pin's edges as they do unwrapped, the
+// enclosing pin read with them already on the nested one's outer, so both pins and what follows
+// stay where they were.
+test('a pin inside another lets its margins collapse through it, and the page below in place', async ({
+  page,
+}) => {
   await loadPinPercentHeight(page, { box: '', nested: 'height: 50px; margin: 30px 0' });
 
   const result = await page.evaluate(() => {
@@ -1614,12 +1839,8 @@ test('a pin inside another keeps its margins inside it, and the page below in pl
 
     return { natural: win.__natural, boxes: win.__boxes() };
   });
-  const [, pinTop, , pinHeight] = result.boxes.pin;
-  const [, nestedTop, , nestedHeight] = result.boxes.nested;
 
-  expect(result.boxes.after[1]).toBeCloseTo(result.natural.after[1], 0);
-  expect(nestedTop - pinTop).toBeCloseTo(30, 0);
-  expect(pinTop + pinHeight - (nestedTop + nestedHeight)).toBeCloseTo(30, 0);
+  expectBoxes(result.boxes, result.natural, 'nested margins');
 });
 
 // A block pin's height is held only where it resolves against inner's, so one sized by its content,
@@ -2161,10 +2382,9 @@ test('a Scene layer after a not-yet-wrapped pin gets a stable freeze window on t
   expect(afterFirstRefresh).toEqual(afterSecondRefresh);
 });
 
-// A pin's kill restores the margin collapsing its wrappers blocked, moving the layers below it,
-// and jsdom has no layout to move, so the unit tests can only check that the re-measure is
-// scheduled. This checks the 40px.
-test('killing a pin moves the freeze window of the Scene layer below it, in the module and in GSAP', async ({
+// A pin's wrappers leave its margins collapsing as they do unwrapped, so its kill moves nothing
+// below it, and GSAP's cached start of the Scene layer there stays the module's.
+test('killing a pin leaves the freeze window of the Scene layer below it, in the module and in GSAP', async ({
   page,
 }) => {
   await page.goto('/fixtures/pinKillRemeasure.html');
@@ -2180,12 +2400,31 @@ test('killing a pin moves the freeze window of the Scene layer below it, in the 
     ).__runPinKill(),
   );
 
-  // 100 lead + 60 margin + 40 margin + 300 pin, with the two margins kept apart by the wrappers
-  expect(result.before.module).toBe(500);
-  // unwrapped they collapse into one 60px gap, so .scene starts 40px earlier
-  expect(result.after.module).toBe(460);
-  // GSAP's cached start tracks it, rather than staying on the pre-kill measurement
-  expect(result.after.gsap).toBe(result.after.module);
+  // 100 lead + 60 collapsed margin + 300 pin
+  expect(result.before).toEqual({ module: 460, gsap: 460 });
+  expect(result.after).toEqual(result.before);
+});
+
+// A pin grown since the last refresh() moves what's below it once it's unwrapped: the kill's
+// re-measure moves the Scene layer's window with it, and GSAP's cached start follows.
+test('killing a pin grown since the last refresh() moves the Scene layer below it, in GSAP too', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/pinKillRemeasure.html');
+
+  const result = await page.evaluate(() =>
+    (
+      window as unknown as {
+        __runPinKill: (grow: number) => Promise<{
+          before: { module: number; gsap: number };
+          after: { module: number; gsap: number };
+        }>;
+      }
+    ).__runPinKill(40),
+  );
+
+  expect(result.before.module).toBe(460);
+  expect(result.after).toEqual({ module: 500, gsap: 500 });
 });
 
 // scenario.html no longer manually binds refreshInit (see the earlier commit removing it), relying

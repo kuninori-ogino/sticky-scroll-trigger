@@ -7,9 +7,8 @@
       body {
         margin: 0;
       }
-      /* .lead's own margin-bottom and .pin's margin-top would collapse into a single 60px gap
-         unwrapped, but the pin's wrappers stop them reaching each other, so the wrapped page
-         spends 100px here. Killing the pin gives that 40px back and moves .scene up. */
+      /* .lead's own margin-bottom and .pin's margin-top collapse into a single 60px gap, wrapped
+         as unwrapped, so killing the pin moves nothing. */
       .lead {
         height: 100px;
         margin-bottom: 60px;
@@ -43,9 +42,8 @@
 
       const sticky = new StickyScrollTrigger('.root');
 
-      // .pin sits right before .scene in DOM order. Its wrappers reserve its own height, so what
-      // the kill gives back is the margin collapsing between .lead and .pin they were blocking:
-      // .scene's freeze window has to move up by the 40px that collapse leaves behind.
+      // .pin sits right before .scene in DOM order. Its wrappers reserve the room it takes,
+      // margins included, so .scene's freeze window stays where it was through the kill.
       const sceneVars = sticky.createStickyTrigger({ trigger: '.scene', start: 'top top', end: '+=200' });
       const pinVars = sticky.createStickyPin({ trigger: '.pin', endTrigger: '.tail', end: 'top top' });
 
@@ -60,8 +58,12 @@
       // for a Scene kill).
       const snapshot = () => ({ module: sceneVars.start(), gsap: sceneTrigger.start });
 
-      window.__runPinKill = async () => {
+      // grow: makes .pin taller after the last refresh(), which its wrapper still reserves the old
+      // height for, so the kill moves .scene by the difference.
+      window.__runPinKill = async (grow = 0) => {
         const before = snapshot();
+
+        if (grow) pinVars.trigger.style.height = `${300 + grow}px`;
 
         pinTrigger.kill();
 

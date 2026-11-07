@@ -2909,7 +2909,7 @@ describe('createStickyPin()', () => {
     expect(outer.style.height).toBe('60px');
   });
 
-  // Throwing inside fitPinsToItems, and after it has written a box that's no longer an item's.
+  // Throwing inside fitPinBoxes, and after it has written a box that's no longer an item's.
   it.each([
     ['reading the item\'s box', (trigger: HTMLElement) => {
       trigger.getClientRects = () => {
