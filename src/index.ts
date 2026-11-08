@@ -220,9 +220,16 @@ type PendingKeep = {
   position: ContentPosition;
   cls: ScrollTriggerClass | null;
   onlyAtRest: boolean;
+  // Made mid-scroll: kept only in GSAP's record (see #flushPendingDisarmForRevert).
+  recordOnly: boolean;
   cancelled: boolean;
 };
 
+// Moving GSAP's record adds no scroll, so it always can; a scroll of the library's own only at
+// rest, and never for a keep made mid-scroll.
+const keepCanRun = (keep: PendingKeep, cls: ScrollTriggerClass | null): boolean => (
+  scrollRecord(cls) !== null
+  || (!keep.recordOnly && !(keep.onlyAtRest && isUserScrolling(cls))));
 const pendingKeeps = new Set<PendingKeep>();
 // The kill batch each instance has yet to catch up, at most one. A batch's own refreshInit listener
 // comes after those of the layers registered before the kill, so every layer's handler runs them
@@ -305,6 +312,8 @@ export default class StickyScrollTrigger {
   #restTimer: ReturnType<typeof setTimeout> | null = null;
   // A last kill's content to keep, until #applyPendingKeep.
   #pendingKeep: PendingKeep | null = null;
+  // A last kill's keep that a registration here took over, for this instance's next refresh().
+  #inheritedKeep: PendingKeep | null = null;
   // The ScrollTrigger class, read at runtime off the `self` GSAP passes to its callbacks, so gsap
   // is never imported (see gsap.ts). Null until the first onKill/onRefreshInit, and
   // again after destroy().
@@ -376,21 +385,59 @@ export default class StickyScrollTrigger {
   // Page-level side effects start with the first layer or pin, not at construction: an instance
   // created per gsap.matchMedia setup and never destroyed acts on the page only while it has one.
   #arm(): void {
-    // Registering again before the scroll stopped: the rebuild reuses the structure. As at rest
-    // (see #disarmKeepingContent), the setup puts the dwell back, so the content isn't kept.
-    if (pendingDisarms.delete(this)) this.#keepContentPending = false;
+    const held = pendingDisarms.has(this);
+
+    // Registering again before the scroll stopped: the rebuild reuses the structure, which still
+    // holds the old windows, so the keep is read off them now and taken over as a last kill's.
+    if (held) {
+      if (this.#built) {
+        const keep: PendingKeep = {
+          owner: this,
+          position: this.#naturalScrollTop(this.#builtLayers),
+          cls: this.#scrollTriggerClass,
+          onlyAtRest: true,
+          recordOnly: isUserScrolling(this.#scrollTriggerClass),
+          cancelled: true,
+        };
+
+        pendingKeeps.add(keep);
+        queueMicrotask(() => pendingKeeps.delete(keep));
+      }
+
+      pendingDisarms.delete(this);
+      this.#keepContentPending = false;
+    }
+
+    // One armed all along puts nothing back.
+    if (this.#armed && !held) return;
+
+    const overlapping = [...pendingKeeps].filter((keep) => keep.owner.#overlaps(this));
+
+    overlapping.forEach((keep) => {
+      keep.cancelled = true;
+    });
+
+    // With two, which content to keep is unclear.
+    if (overlapping.length === 1) this.#inheritKeep(overlapping[0]!);
 
     if (this.#armed) return;
 
     this.#armed = true;
     armedInstances.add(this);
-
-    pendingKeeps.forEach((keep) => {
-      if (keep.owner.#overlaps(this)) keep.cancelled = true;
-    });
     this.#scrollMarginSync = createScrollMarginSync(this.#rootElement, this.#scrollMarginTargets);
 
     if (this.#dormancyClient) registerDormancyClient(this.#dormancyClient);
+  }
+
+  // The setup puts the dwell back under windows of its own, so the keep waits for the refresh()
+  // in GSAP's refresh after it (gsap.matchMedia's, say), which keeps the content against them.
+  // Registration's own refreshes leave it for then, and the next task drops it. Each heir keeps the
+  // content where the heirs before it left it, adding only its own dwell.
+  #inheritKeep(keep: PendingKeep): void {
+    this.#inheritedKeep = keep;
+    setTimeout(() => {
+      if (this.#inheritedKeep === keep) this.#inheritedKeep = null;
+    }, 0);
   }
 
   // The last kill hands the page back as destroy() does, at once unless the page is scrolling,
@@ -415,15 +462,14 @@ export default class StickyScrollTrigger {
       // GSAP marks a scroll only after scrollStart and the first update (ScrollTrigger.js:387-388),
       // so a kill from a scroll listener ahead of it reads as at rest: its keep is dropped if a
       // scroll has begun by the time it runs.
-      this.#disarmKeepingContent(true, true);
+      this.#disarmKeepingContent(true);
     }
   }
 
   // A registration expects the page back as it was, on this container and any around or inside
   // it, before it reads the DOM (a cover's default is trigger's next sibling; a selector can
-  // use child combinators). The setup puts the dwell back, so the content stays put without a
-  // scroll (see #disarmKeepingContent); mid-scroll it isn't kept, as for destroy(). Only create*
-  // calls release a hold, and one that throws in validation has released it already.
+  // use child combinators). The content is kept as for destroy() (see #disarmKeepingContent). Only
+  // create* calls release a hold, and one that throws in validation has released it already.
   #flushOverlappingDisarms(): void {
     // A registration on a destroyed instance throws without registering anything.
     if (this.#destroyed) return;
@@ -436,15 +482,15 @@ export default class StickyScrollTrigger {
     });
   }
 
-  // Tears down and, with keepContent, keeps the content at the viewport's top in place once the
-  // task is over, unless an instance on an overlapping container has armed since: a setup run
-  // again (a gsap.context revert and re-run, say) puts the dwell back, as with GSAP's own pins,
-  // and keeping the content would shift it by that dwell. The keep runs before GSAP next measures
-  // (in the batch's refreshInit or before its ScrollTrigger.refresh(), else in a microtask);
-  // inside GSAP's refresh it moves the record at once. onlyAtRest drops it if a scroll has begun.
-  #disarmKeepingContent(keepContent: boolean, onlyAtRest = false): void {
+  // Tears down and keeps the content at the viewport's top in place once the task is over. An
+  // instance armed since on an overlapping container takes the keep over (see #inheritKeep): its
+  // setup puts a dwell back, which the old windows don't count. The keep runs before GSAP next
+  // measures (in the batch's refreshInit or before its ScrollTrigger.refresh(), else in a
+  // microtask); inside GSAP's refresh it moves the record at once. onlyAtRest drops it if a scroll
+  // has begun, and recordOnly keeps it only in that record.
+  #disarmKeepingContent(onlyAtRest = false, recordOnly = false): void {
     // With nothing built there is no dwell to take off.
-    const position = keepContent && this.#built ? this.#naturalScrollTop(this.#builtLayers) : null;
+    const position = this.#built ? this.#naturalScrollTop(this.#builtLayers) : null;
 
     this.#keepContentPending = false;
     this.#disarm();
@@ -453,8 +499,9 @@ export default class StickyScrollTrigger {
 
     // GSAP clears the record once it has scrolled back (ScrollTrigger.js:557-568), and a kill
     // from onRefresh or the update after it comes later: then the keep waits for the end of the
-    // refresh like any other.
-    if (scrollRecord(this.#scrollTriggerClass)) {
+    // refresh like any other. A mid-scroll revert's keep waits too, for the registration that
+    // usually follows it to take over: written now, it would miss that setup's dwell.
+    if (!recordOnly && scrollRecord(this.#scrollTriggerClass)) {
       this.#keepContent(position);
 
       return;
@@ -469,6 +516,7 @@ export default class StickyScrollTrigger {
       position,
       cls: this.#scrollTriggerClass,
       onlyAtRest,
+      recordOnly,
       cancelled: false,
     };
     pendingKeeps.add(this.#pendingKeep);
@@ -483,7 +531,7 @@ export default class StickyScrollTrigger {
     this.#pendingKeep = null;
     pendingKeeps.delete(keep);
 
-    if (keep.cancelled || (keep.onlyAtRest && isUserScrolling(keep.cls))) return;
+    if (keep.cancelled || !keepCanRun(keep, keep.cls)) return;
 
     this.#keepContent(keep.position, keep.cls);
   }
@@ -514,18 +562,18 @@ export default class StickyScrollTrigger {
     runEach(() => this.#flushPendingDisarm(), () => run?.());
   }
 
-  #flushPendingDisarm(keepContent = true, onlyAtRest = false): void {
+  #flushPendingDisarm(onlyAtRest = false, recordOnly = false): void {
     if (pendingDisarms.delete(this) && !this.#destroyed && !this.#layers.length
       && !this.#pinLayers.length) {
-      this.#disarmKeepingContent(keepContent, onlyAtRest);
+      this.#disarmKeepingContent(onlyAtRest, recordOnly);
     }
   }
 
-  // Mid-scroll the content isn't kept: the scroll would stop a fling, and a revert that a new
-  // setup follows is the usual case. Inside GSAP's update alone, whether a scroll has begun shows
-  // only once the update is over.
+  // Mid-scroll the content is kept only in GSAP's record, which GSAP scrolls back to anyway: a
+  // scroll of the library's own would stop a fling. Inside GSAP's update alone, whether a scroll
+  // has begun shows only once the update is over.
   #flushPendingDisarmForRevert(): void {
-    this.#flushPendingDisarm(!isUserScrolling(this.#scrollTriggerClass), true);
+    this.#flushPendingDisarm(true, isUserScrolling(this.#scrollTriggerClass));
   }
 
   #disarm(): void {
@@ -1527,8 +1575,20 @@ export default class StickyScrollTrigger {
     if (this.#destroyed || !this.#armed || pendingDisarms.has(this)) return;
 
     let failure: { error: unknown } | null = null;
-    // Only a kill's catch-up keeps the content in place; a resize keeps GSAP's scroll number.
-    const position = this.#keepContentPending ? this.#naturalScrollTop(this.#builtLayers) : null;
+    // Only a kill's catch-up, or a last kill's keep taken over, keeps the content in place; a
+    // resize keeps GSAP's scroll number.
+    const inherited = this.#inheritedKeep;
+    const cls = this.#scrollTriggerClass;
+    const useInherited = inherited !== null && isRefreshing(cls) && keepCanRun(inherited, cls);
+
+    if (useInherited) this.#inheritedKeep = null;
+
+    // A kill's catch-up reads the content off this instance's own layers instead, and still uses
+    // the keep up.
+    const takenOver = useInherited && !this.#keepContentPending ? inherited : null;
+    const position = this.#keepContentPending
+      ? this.#naturalScrollTop(this.#builtLayers)
+      : takenOver?.position ?? null;
 
     this.#keepContentPending = false;
 
@@ -1569,7 +1629,12 @@ export default class StickyScrollTrigger {
     // Reading the scroll forces a layout, so both reads wait until the table has demoted the far
     // layers: with every wrapper sticky, that layout is the cost dormancy avoids. A failed rebuild
     // leaves part of the layout unpadded, and the next refresh puts it back.
-    if (!failure && position !== null) this.#keepContent(position);
+    if (!failure && position !== null) {
+      const natural = this.#keepContent(position);
+
+      // Where the content now sits, for the next heir.
+      if (takenOver) takenOver.position = { natural, consumed: takenOver.position.consumed };
+    }
 
     // For the scroll the page ends up at, the one keepContent kept included.
     this.#scrollMarginSync?.applyRamps(
@@ -1639,14 +1704,14 @@ export default class StickyScrollTrigger {
   #keepContent(
     position: ContentPosition,
     cls: ScrollTriggerClass | null = this.#scrollTriggerClass,
-  ): void {
+  ): number {
     const target = this.#keptScrollTop(position);
     const record = scrollRecord(this.#scrollTriggerClass);
 
     if (record) {
       record.write(target);
 
-      return;
+      return target;
     }
 
     // A measurement at 0 goes back there once it is done, by the same half-pixel rule as below.
@@ -1655,11 +1720,11 @@ export default class StickyScrollTrigger {
     if (zeroReturn !== null) {
       if (Math.abs(zeroReturn - target) >= 0.5) moveScrollZeroReturn(Math.round(target));
 
-      return;
+      return target;
     }
 
     // With no record to move (rec 0 at the top), GSAP still sets the scroll once it has measured.
-    if (isRefreshing(cls)) return;
+    if (isRefreshing(cls)) return target;
 
     // Whole pixels: GSAP's scroll function below rounds what it is given and scrolls there too.
     if (Math.abs(window.scrollY - target) >= 0.5) {
@@ -1667,6 +1732,8 @@ export default class StickyScrollTrigger {
     }
 
     syncScrollCache(cls);
+
+    return target;
   }
 
   // Each Scene layer still built keeps the dwell the scroll had gone through, capped at its new

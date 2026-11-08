@@ -7474,6 +7474,8 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         expect(livePaddings()).toHaveLength(3);
         expect(scrollTops(scrollTo)).toEqual([]);
+        // Its held catch-up would run in a later test's GSAP refresh.
+        controller.destroy();
       });
 
       // GSAP measures in that refresh, and nothing refreshes it again once the scroll stops.
@@ -7540,7 +7542,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         controller.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
         controller.refresh();
 
-        // As at rest: the setup puts the dwell back, so the content isn't kept.
+        // As at rest: the setup puts the dwell back, and no GSAP refresh keeps the content.
         expect(livePaddings()).toHaveLength(1);
         expect(scrollTops(scrollTo)).toEqual([]);
 
@@ -7564,6 +7566,25 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         next.createResolvedTrigger({ trigger: query('.s1') });
         expect(livePaddings()).toHaveLength(0);
         expect(query('.root').parentElement).toBe(query('.host'));
+        next.destroy();
+      });
+
+      // Mid-scroll the keep waits for GSAP's record, which the batch's GSAP refresh has.
+      it('keeps the content in the GSAP refresh after a resolve took the hold down', () => {
+        const scroller = { rec: 2500 };
+        const { Cls, gsapRefresh } = makeClass(scroller);
+        const { vars, self } = setupScenes(Cls);
+
+        followScrollTo(2500);
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+        const next = new StickyScrollTrigger(query('.root'));
+
+        next.createResolvedTrigger({ trigger: query('.s1') });
+        gsapRefresh();
+
+        expect(scroller.rec).toBe(2200);
         next.destroy();
       });
 
@@ -7609,7 +7630,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       });
 
       // A new instance per gsap.matchMedia setup expects the root back as it was. Mid-scroll the
-      // content isn't kept: the new setup puts the dwell back.
+      // content is kept only in GSAP's record, and no GSAP refresh runs here.
       it('hands the root back to a new instance on it', async () => {
         const { Cls } = makeClass({ rec: 0 });
         const { vars, self } = setupScenes(Cls);
@@ -7682,6 +7703,23 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
         expect(livePaddings()).toHaveLength(0);
         expect(query('.root').parentElement).toBe(query('.host'));
         expect(vi.getTimerCount()).toBe(0);
+        expect(scrollTo).not.toHaveBeenCalled();
+      });
+
+      // GSAP's report of a scroll can end before the keep runs; the keep still never scrolls by
+      // itself.
+      it('leaves the scroll alone on destroy() mid-scroll when the scroll ends before the keep', async () => {
+        const { Cls } = makeClass({ rec: 0 });
+        const { controller, vars, self } = setupScenes(Cls);
+        const scrollTo = followScrollTo(2500);
+
+        Cls.scrolling = true;
+        vars.forEach((layerVars) => layerVars.onKill?.(self));
+        controller.destroy();
+        Cls.scrolling = false;
+        await flushMicrotasks();
+
+        expect(livePaddings()).toHaveLength(0);
         expect(scrollTo).not.toHaveBeenCalled();
       });
 
@@ -7978,7 +8016,7 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       it('leaves another instance\'s hold alone for a registration on a destroyed one', () => {
         const { Cls } = makeClass({ rec: 0 });
-        const { vars, self } = setupScenes(Cls);
+        const { controller, vars, self } = setupScenes(Cls);
         const around = new StickyScrollTrigger(query('.host'));
 
         around.destroy();
@@ -7987,6 +8025,8 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
         expect(() => around.createStickyTrigger({ trigger: query('.root') })).toThrow();
         expect(livePaddings()).toHaveLength(3);
+        // Its held catch-up would run in a later test's GSAP refresh.
+        controller.destroy();
       });
 
       // A kill from a page whose cleanup throws still refreshes GSAP for the triggers left.
@@ -8029,6 +8069,8 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       expect(before).toBe(450);
       expect(controller.resolveScrollPosition(query('.s3'), 'top -150px')).toBe(before);
+      // Its held catch-up would run in a later test's GSAP refresh.
+      controller.destroy();
     });
 
     // jsdom never sticks anything, so .s3 reports a top 400px off whenever a wrapper around it
@@ -8057,6 +8099,8 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
 
       expect(before).toBe(450);
       expect(controller.resolveScrollPosition(s3, 'top -150px')).toBe(before);
+      // Its held catch-up would run in a later test's GSAP refresh.
+      controller.destroy();
     });
 
     it('drops every listener when an earlier held batch throws', async () => {
@@ -8093,6 +8137,330 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       expect(uncaught.map((error) => (error as Error).message)).toEqual(['boom']);
       expect(Cls.refresh).toHaveBeenCalledTimes(1);
       expect(listeners).toHaveLength(0);
+    });
+  });
+
+  // gsap.matchMedia reverts the old setup, runs the next one, then refreshes GSAP, all in one task.
+  describe('a last kill\'s keep taken over by the next registration', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    // Each layer refreshes in GSAP's refresh from its onRefreshInit, as GSAP calls it.
+    const registerNext = (
+      Cls: ReturnType<typeof makeClass>['Cls'],
+      self: ScrollTrigger,
+      ends: string[],
+      controller = new StickyScrollTrigger(query('.root')),
+    ) => {
+      ends.forEach((end, index) => {
+        const layerVars = controller.createStickyTrigger({ trigger: query(`.s${index + 1}`), end });
+
+        Cls.addEventListener('refreshInit', () => layerVars.onRefreshInit?.(self));
+      });
+
+      return controller;
+    };
+
+    it('keeps the content under the next setup\'s windows in GSAP\'s refresh', () => {
+      const scroller = { rec: 2500 };
+      const { Cls, gsapRefresh } = makeClass(scroller);
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+      const next = registerNext(Cls, self, ['+=200']);
+
+      gsapRefresh();
+
+      // The measurement's own trip to 0 comes back to the record.
+      expect(scroller.rec).toBe(2400);
+      expect(scrollTops(scrollTo)).toEqual([0, 2400]);
+      next.destroy();
+    });
+
+    // A gsap.context revert and re-run, with no refresh of the page's own.
+    it('keeps the content in the GSAP refresh the deferred step calls', async () => {
+      const scroller = { rec: 0 };
+      const { Cls, gsapRefresh } = makeClass(scroller);
+      const { vars, self } = setupScenes(Cls);
+
+      followScrollTo(2500);
+      Cls.refresh.mockImplementation(() => {
+        scroller.rec = window.scrollY;
+        gsapRefresh();
+        window.scrollTo({ top: scroller.rec, behavior: 'instant' });
+        scroller.rec = 0;
+      });
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+      const next = registerNext(Cls, self, ['+=200']);
+
+      await flushMicrotasks();
+
+      expect(Cls.refresh).toHaveBeenCalledTimes(1);
+      expect(window.scrollY).toBe(2400);
+      next.destroy();
+    });
+
+    // A refresh() of the page's own inside a later GSAP refresh in the task keeps GSAP's record.
+    it('keeps the content in one refresh() only', () => {
+      const scroller = { rec: 2500 };
+      const { Cls, gsapRefresh } = makeClass(scroller);
+      const { vars, self } = setupScenes(Cls);
+
+      followScrollTo(2500);
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+      const next = registerNext(Cls, self, ['+=200']);
+
+      gsapRefresh();
+      window.scrollTo({ top: 3000, behavior: 'instant' });
+      scroller.rec = 3000;
+      Cls.isRefreshing = true;
+      next.refresh();
+      Cls.isRefreshing = false;
+
+      expect(scroller.rec).toBe(3000);
+      next.destroy();
+    });
+
+    it('leaves GSAP\'s record alone when the same setup runs again', () => {
+      const scroller = { rec: 2500 };
+      const { Cls, gsapRefresh } = makeClass(scroller);
+      const { controller, vars, self } = setupScenes(Cls);
+
+      followScrollTo(2500);
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+      registerNext(Cls, self, ['+=100', '+=100', '+=100'], controller);
+      gsapRefresh();
+
+      expect(scroller.rec).toBe(2500);
+      controller.destroy();
+    });
+
+    it('drops the keep once the task is over', async () => {
+      const scroller = { rec: 2500 };
+      const { Cls, gsapRefresh } = makeClass(scroller);
+      const { vars, self } = setupScenes(Cls);
+
+      followScrollTo(2500);
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+      const next = registerNext(Cls, self, ['+=200']);
+
+      await flushMicrotasks();
+      vi.advanceTimersByTime(0);
+      gsapRefresh();
+
+      expect(scroller.rec).toBe(2500);
+      next.destroy();
+    });
+
+    // Which content to keep is unclear.
+    it('keeps nothing for a registration over two last kills\' containers', () => {
+      const scroller = { rec: 2500 };
+      const { Cls, gsapRefresh } = makeClass(scroller);
+      const self = Object.create(Cls.prototype) as ScrollTrigger;
+
+      document.body.innerHTML = `
+        <div class="root">
+          <div class="a"><section class="s1"></section></div>
+          <div class="b"><section class="s2"></section></div>
+        </div>`;
+
+      const killed = ['.a', '.b'].map((root, index) => {
+        const controller = new StickyScrollTrigger(query(root));
+        const layerVars = controller.createStickyTrigger({
+          trigger: query(`.s${index + 1}`),
+          end: '+=100',
+        });
+
+        controller.refresh();
+
+        return layerVars;
+      });
+
+      followScrollTo(2500);
+      killed.forEach((layerVars) => layerVars.onKill?.(self));
+
+      const next = registerNext(Cls, self, ['+=200']);
+
+      gsapRefresh();
+
+      expect(scroller.rec).toBe(2500);
+      next.destroy();
+    });
+
+    // Each adds its own dwell to where the other left the content.
+    it('keeps the content under both instances taking over the same last kill', () => {
+      const scroller = { rec: 2500 };
+      const { Cls, gsapRefresh } = makeClass(scroller);
+      const { vars, self } = setupScenes(Cls);
+
+      query('.host').insertAdjacentHTML('afterbegin', '<section class="h1"></section>');
+      followScrollTo(2500);
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+      const around = new StickyScrollTrigger(query('.host'));
+      const aroundVars = around.createStickyTrigger({ trigger: query('.h1'), end: '+=100' });
+
+      Cls.addEventListener('refreshInit', () => aroundVars.onRefreshInit?.(self));
+
+      const next = registerNext(Cls, self, ['+=50']);
+
+      gsapRefresh();
+
+      expect(livePaddings()).toHaveLength(2);
+      expect(scroller.rec).toBe(2350);
+      next.destroy();
+      around.destroy();
+    });
+
+    it('keeps the content only in GSAP\'s record for a new instance mid-scroll', async () => {
+      const scroller = { rec: 2500 };
+      const { Cls, gsapRefresh } = makeClass(scroller);
+      const { vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      Cls.scrolling = true;
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+
+      const next = registerNext(Cls, self, ['+=200']);
+
+      gsapRefresh();
+      expect(scroller.rec).toBe(2400);
+
+      // Nothing past the measurement's own trip to 0 and back to the record.
+      await flushMicrotasks();
+      expect(scrollTops(scrollTo)).toEqual([0, 2400]);
+      next.destroy();
+    });
+
+    it('keeps the content read off the held structure for the same instance mid-scroll', () => {
+      const scroller = { rec: 2500 };
+      const { Cls, gsapRefresh } = makeClass(scroller);
+      const { controller, vars, self } = setupScenes(Cls);
+      const scrollTo = followScrollTo(2500);
+
+      Cls.scrolling = true;
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+      registerNext(Cls, self, ['+=200'], controller);
+      gsapRefresh();
+
+      // The measurement's own trip to 0 comes back to the record.
+      expect(scroller.rec).toBe(2400);
+      expect(scrollTops(scrollTo)).toEqual([0, 2400]);
+      controller.destroy();
+    });
+
+    // The first hold's keep still reads the content as it was before either rebuild.
+    it('keeps the content for the same instance held and registered again twice in a task', () => {
+      const scroller = { rec: 2500 };
+      const { Cls, gsapRefresh } = makeClass(scroller);
+      const { controller, vars, self } = setupScenes(Cls);
+
+      followScrollTo(2500);
+      Cls.scrolling = true;
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+      controller.createStickyTrigger({ trigger: query('.s1'), end: '+=200' }).onKill?.(self);
+      registerNext(Cls, self, ['+=200'], controller);
+      gsapRefresh();
+
+      expect(scroller.rec).toBe(2400);
+      controller.destroy();
+    });
+
+    it('keeps the content under a held instance and another taking over its last kill together', () => {
+      const scroller = { rec: 2500 };
+      const { Cls, gsapRefresh } = makeClass(scroller);
+      const { controller, vars, self } = setupScenes(Cls);
+
+      query('.host').insertAdjacentHTML('afterbegin', '<section class="h1"></section>');
+      followScrollTo(2500);
+      Cls.scrolling = true;
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+      registerNext(Cls, self, ['+=150'], controller);
+
+      const around = new StickyScrollTrigger(query('.host'));
+      const aroundVars = around.createStickyTrigger({ trigger: query('.h1'), end: '+=100' });
+
+      Cls.addEventListener('refreshInit', () => aroundVars.onRefreshInit?.(self));
+      gsapRefresh();
+
+      expect(livePaddings()).toHaveLength(2);
+      expect(scroller.rec).toBe(2450);
+      around.destroy();
+      controller.destroy();
+    });
+
+    // Which content to keep is unclear, as for a registration over two last kills' containers.
+    it('keeps nothing for a held instance whose registration releases another instance\'s hold', () => {
+      const scroller = { rec: 2500 };
+      const { Cls, gsapRefresh } = makeClass(scroller);
+      const { controller, vars, self } = setupScenes(Cls);
+
+      query('.host').insertAdjacentHTML('afterbegin', '<section class="h1"></section>');
+
+      const around = new StickyScrollTrigger(query('.host'));
+      const aroundVars = around.createStickyTrigger({ trigger: query('.h1'), end: '+=100' });
+
+      around.refresh();
+      followScrollTo(2500);
+      Cls.scrolling = true;
+      aroundVars.onKill?.(self);
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+      registerNext(Cls, self, ['+=200'], controller);
+      gsapRefresh();
+
+      expect(scroller.rec).toBe(2500);
+      around.destroy();
+      controller.destroy();
+    });
+
+    // A structure never built took no dwell off, as at rest.
+    it('keeps nothing for a hold that was never built', () => {
+      const scroller = { rec: 2500 };
+      const { Cls, gsapRefresh } = makeClass(scroller);
+      const self = Object.create(Cls.prototype) as ScrollTrigger;
+
+      document.body.innerHTML = '<div class="root"><section class="s1"></section></div>';
+
+      const controller = new StickyScrollTrigger(query('.root'));
+      const layerVars = controller.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
+
+      followScrollTo(2500);
+      Cls.scrolling = true;
+      layerVars.onKill?.(self);
+      registerNext(Cls, self, ['+=200'], controller);
+      gsapRefresh();
+
+      expect(scroller.rec).toBe(2500);
+      controller.destroy();
+    });
+
+    // The registration releases the hold inside GSAP's refresh, ahead of the batch's listener.
+    it('leaves GSAP\'s record alone when the same setup registers again from refreshInit mid-scroll', () => {
+      const scroller = { rec: 2500 };
+      const { Cls, listeners, gsapRefresh } = makeClass(scroller);
+      const { vars, self } = setupScenes(Cls);
+      let next: StickyScrollTrigger | null = null;
+
+      followScrollTo(2500);
+      Cls.scrolling = true;
+      vars.forEach((layerVars) => layerVars.onKill?.(self));
+      listeners.unshift(() => {
+        next ??= registerNext(Cls, self, ['+=100', '+=100', '+=100']);
+      });
+      gsapRefresh();
+
+      expect(scroller.rec).toBe(2500);
+      next!.destroy();
     });
   });
 
