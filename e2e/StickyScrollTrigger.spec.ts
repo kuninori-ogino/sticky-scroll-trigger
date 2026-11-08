@@ -17,6 +17,23 @@ const readProgress = (locator: Locator) =>
 
     return value;
   });
+// Until a scroll from `from` has moved and stood still for a few frames (a Firefox wheel step is
+// smooth and can start late). Gives up after a second if it never moves (the page end).
+const waitForScrollToSettle = (page: Page, from: number) =>
+  page.evaluate(async (start) => {
+    const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+
+    for (let i = 0; i < 60 && window.scrollY === start; i += 1) await frame();
+
+    let still = 0;
+
+    for (let i = 0; i < 600 && still < 3; i += 1) {
+      const last = window.scrollY;
+
+      await frame();
+      still = window.scrollY === last ? still + 1 : 0;
+    }
+  }, from);
 // Whether any ancestor of the target element (up to document.body) has position:sticky applied.
 // createStickyTrigger generates an anonymous wrapper div each time, so this walks computedStyle
 // rather than checking class names.
@@ -1885,8 +1902,10 @@ for (const pin of ['', 'height: 50%']) {
       const atRest = window.scrollY;
 
       window.scrollTo({ top: 500, behavior: 'smooth' });
-      await frame();
-      await frame();
+
+      // Refresh mid-scroll, once the smooth scroll has moved.
+      for (let i = 0; i < 600 && window.scrollY === atRest; i += 1) await frame();
+
       win.__stickyRefresh();
 
       // Until the scroll has stood still for a while.
@@ -2149,8 +2168,10 @@ test('scene1 gets pinned by native sticky while scrolling, and --progress advanc
   let sawSticky = false;
 
   for (let i = 0; i < 80 && progress < 0.99; i += 1) {
+    const before = await page.evaluate(() => window.scrollY);
+
     await page.mouse.wheel(0, 120);
-    await page.waitForTimeout(20);
+    await waitForScrollToSettle(page, before);
     progress = await readProgress(scene);
 
     if (!sawSticky && progress > 0.05 && progress < 0.95) {
