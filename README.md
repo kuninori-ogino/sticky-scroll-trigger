@@ -21,13 +21,13 @@ The [CodePen demo](https://codepen.io/editor/kuninori-ogino/pen/01a083a9-37ab-79
 
 | requirement      | description                                                                                                                                                 |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GSAP             | `^3.15.0`, with the `ScrollTrigger` plugin already registered via `gsap.registerPlugin`                                                                     |
+| GSAP             | `^3.13.0`, with the `ScrollTrigger` plugin already registered via `gsap.registerPlugin`                                                                     |
 | TypeScript       | Optional. The published `.d.ts` uses GSAP's global types (`ScrollTrigger.Vars`); plain JavaScript projects can `import` the same `dist/` build without them |
 | Browser          | Must support `position:sticky` (no `overflow:hidden`/`auto`/`scroll` on an ancestor inside `body`, nor on `body` once `html`'s isn't `visible`)             |
 | Scroll direction | Vertical scrolling only (`horizontal` is not supported)                                                                                                     |
 | Module system    | ESM only (`import`) or a `<script>` tag via the global build; CommonJS (`require`) is not supported                                                         |
 
-This module is tested against 3.15.1, and the notes below on what raw GSAP itself does were measured there. A later 3.x satisfies the peer range but is untested.
+This module is tested against 3.13.0 through 3.15.1, and the notes below on what raw GSAP itself does were measured there. A later 3.x satisfies the peer range but is untested.
 
 ## Installation
 

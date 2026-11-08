@@ -67,7 +67,7 @@
     "vitest": "^5.0.3"
   },
   "peerDependencies": {
-    "gsap": "^3.15.0"
+    "gsap": "^3.13.0"
   },
   "allowScripts": {
     "fsevents@2.3.2": true,

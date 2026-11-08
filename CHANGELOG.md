@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - A `createStickyTrigger` or `createOverlapScroll` below or around a `createStickyPin` (a scrubbed scene after a pinned header, say) now starts and ends where it would without the pin, and the page around a pin keeps the margins it has without one. The pin's wrapper kept the trigger's vertical margins, and its content's, from collapsing with the page's: a `margin-bottom: 30px` above a trigger with `margin-top: 20px` took 50px instead of 30px, moving what followed and every window below it, and killing the pin moved it all back. A float before the pin also narrowed it, and one overflowing the trigger pushed the text after it down. A block pin nested inside a flex or grid item pin also follows its content's height after the page's width changes, where a `refresh()` held the height it read. A page with such margins lays out differently after upgrading: what follows a pin moves to where it sits without the library (see [`createStickyPin`](README.md#createstickypinoptions)).
+- GSAP 3.13 and 3.14 now satisfy the peer range, so a project on either installs without a peer-dependency warning.
 
 ## [0.17.0] - 2026-11-06
 
