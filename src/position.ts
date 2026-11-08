@@ -97,7 +97,7 @@ export const parseClauseToken = (
 };
 
 // GSAP's own _parsePosition treats a whole position value as an absolute scroll position whenever
-// isNaN(value) is false (`isNaN(value) || (value = +value)` at ScrollTrigger.js:750). This mirrors
+// isNaN(value) is false (`isNaN(value) || (value = +value)` at ScrollTrigger.js:756). This mirrors
 // that condition as-is, including its acceptance of 'Infinity': a value GSAP itself treats as
 // absolute shouldn't be rejected here. Only the single-bare-number form needs the special case,
 // since '500 top' and '500px' don't coerce cleanly and reach parseClauseToken in both libraries.
@@ -183,7 +183,7 @@ const DWELL_RELATIVE_RE = /^\+=(\d+(?:\.\d*)?|\.\d+)(%|px)?$/;
 export const isDwellFormat = (resolved: EndValue): boolean =>
   typeof resolved === 'string' && DWELL_RELATIVE_RE.test(resolved.trim());
 
-// GSAP splits the two '+=' end forms at ScrollTrigger.js:1389. One that also holds a space is a
+// GSAP splits the two '+=' end forms at ScrollTrigger.js:1397. One that also holds a space is a
 // position clause in both libraries, but GSAP first prepends the start clause's element token
 // (`parsedStart.split(" ")[0] + parsedEnd`), so start: 'bottom bottom' with end: '+=100 bottom'
 // resolves as 'bottom+=100 bottom' against endTrigger. Without that prefix, parseClauseToken reads
@@ -264,20 +264,20 @@ export const resolveDwell = (resolved: EndValue, viewportHeight: number): number
 };
 
 // The offset's sign requires '=' here too: GSAP's _parsePosition checks `value.charAt(4) === "="`
-// (ScrollTrigger.js:742) before reading anything past 'max' as an offset, so 'max-100' silently
+// (ScrollTrigger.js:748) before reading anything past 'max' as an offset, so 'max-100' silently
 // falls back to bare 'max' with the offset discarded. This doesn't recognize that form at all and
 // throws instead, the same choice as CLAUSE_TOKEN_RE above.
 const MAX_TOKEN_RE = /^max(?:([+-]=)(\d+(?:\.\d*)?|\.\d+)(%|px)?)?$/;
 
 // Whether end is in 'max' notation ('max' / 'max-=100' / 'max+=10%'): the scroller's maximum
-// scroll position, optionally offset. GSAP defines this for `end` only. In raw GSAP 3.15.0,
+// scroll position, optionally offset. GSAP defines this for `end` only. In raw GSAP 3.15.1,
 // `start: 'max'` silently resolves to 0, which this module rejects rather than reproduces.
 export const isMaxFormat = (resolved: EndValue): boolean =>
   typeof resolved === 'string' && MAX_TOKEN_RE.test(resolved.trim());
 
 // Converts an already-resolved 'max' end into its offset (px) from the scroller's maximum scroll
 // position (0 for a bare 'max'), scaling '%' against the viewport height as GSAP's own scrollerSize
-// does. Only the bare form matches real GSAP: 3.15.0's documented offset forms silently drop both
+// does. Only the bare form matches real GSAP: 3.15.1's documented offset forms silently drop both
 // the offset and the 'max', collapsing end onto start, which this module doesn't replicate.
 export const resolveMaxOffset = (resolved: string, viewportHeight: number): number => {
   const match = MAX_TOKEN_RE.exec(resolved.trim());

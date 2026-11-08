@@ -846,7 +846,7 @@ test('createStickyTrigger\'s default end resolves against an explicit endTrigger
     .toBeCloseTo(result.triggerHeight + result.endTriggerHeight, 0);
 });
 
-// GSAP splits the two '+=' end forms at ScrollTrigger.js:1389: one holding a space is a position
+// GSAP splits the two '+=' end forms at ScrollTrigger.js:1397: one holding a space is a position
 // clause against endTrigger, which GSAP resolves after prefixing the start clause's element token
 // onto it ('bottom' + '+=100 bottom'). The prefix is only visible in a real browser, since the
 // whole difference it makes is that token's fraction of endTrigger's own height. With start

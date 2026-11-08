@@ -355,8 +355,8 @@ const onGsapRefreshDone = (): void => {
 
 // The scroll GSAP's refresh goes back to: the record it took before its refreshInit, which a
 // listener ahead of the table's that scrolls to 0 to measure leaves alone. None (0) when GSAP took
-// none, in a refresh while its triggers are reverted (ScrollTrigger.js:274; a matchMedia switch
-// records first, 1370), and then the scroll as it is.
+// none, in a refresh while its triggers are reverted (ScrollTrigger.js:499; a matchMedia switch
+// records first, 2067), and then the scroll as it is.
 const gsapRefreshScroll = (): number => {
   const refreshing = Array.from(gsapClasses).find((cls) => isRefreshing(cls));
 

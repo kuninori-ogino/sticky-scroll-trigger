@@ -167,7 +167,7 @@ describe('parseClauseToken', () => {
 
 describe('isAbsoluteFormat', () => {
   // Matches GSAP's own _parsePosition: `isNaN(value) || (value = +value)` at
-  // ScrollTrigger.js:750, a value coerces cleanly via unary '+' only when it's a plain number,
+  // ScrollTrigger.js:756, a value coerces cleanly via unary '+' only when it's a plain number,
   // or a string with nothing in it but a number.
   // isNaN('Infinity') is false (Number('Infinity') is Infinity, not NaN), so GSAP's own check
   // treats it as absolute too, and this module deliberately doesn't tighten that to a finite check.
@@ -292,7 +292,7 @@ describe('isDwellFormat', () => {
 });
 
 describe('prefixSpacedRelativeEnd', () => {
-  // GSAP's `parsedStart.split(" ")[0] + parsedEnd` (ScrollTrigger.js:1391), which is what makes
+  // GSAP's `parsedStart.split(" ")[0] + parsedEnd` (ScrollTrigger.js:1399), which is what makes
   // start: 'bottom bottom' with end: '+=100 bottom' resolve as 'bottom+=100 bottom'.
   it('prepends the start clause\'s element token to a spaced "+=" end', () => {
     expect(prefixSpacedRelativeEnd('bottom bottom', '+=100 bottom')).toBe('bottom+=100 bottom');

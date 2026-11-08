@@ -32,10 +32,10 @@ const markOwnScroll = (fromRest: boolean): void => {
 };
 
 // GSAP's word, less the library's own trip. GSAP counts the scroll event a trip fires as the page
-// scrolling (ScrollTrigger.js:193), until a check it makes every 250 ms finds 200 ms gone since
-// (335, 1401). Within that time, with the page still where the trip came back to, the trip is the
+// scrolling (ScrollTrigger.js:388), until a check it makes every 250 ms finds 200 ms gone since
+// (2124, 596). Within that time, with the page still where the trip came back to, the trip is the
 // only scroll there was, under a pointer held still too; past it, GSAP's word stands. Inside GSAP's
-// update, the first scroll after a pause reads as none yet (199-202), as a kill finds too; the
+// update, the first scroll after a pause reads as none yet (383-388), as a kill finds too; the
 // update that ends GSAP's refresh comes at rest (315-316).
 const isOwnTripOnly = (): boolean => {
   if (ownScrollTop !== null && (Math.abs(window.scrollY - ownScrollTop) >= 0.5

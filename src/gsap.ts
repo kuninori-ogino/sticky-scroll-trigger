@@ -23,7 +23,7 @@ type GsapEvent = 'refresh' | 'refreshInit';
 export const classOf = (self: ScrollTrigger): ScrollTriggerClass =>
   self.constructor as unknown as ScrollTriggerClass;
 
-// GSAP assigns it only true or false (ScrollTrigger.js:1178, 1250), undefined before its first
+// GSAP assigns it only true or false (ScrollTrigger.js:498, 574), undefined before its first
 // refresh.
 export const isRefreshing = (cls: ClassArg): boolean => cls?.isRefreshing === true;
 
@@ -60,7 +60,7 @@ type ScrollRecord = { read(): number; write(value: number): void };
 
 // GSAP's record of the scroll it returns to after measuring, while one of its refreshes runs.
 // Each read and write goes to the record itself, since GSAP may move it in between. GSAP took it
-// before its refreshInit (ScrollTrigger.js:1179) and doesn't go back to a record of 0 (1233),
+// before its refreshInit (ScrollTrigger.js:499) and doesn't go back to a record of 0 (557),
 // which counts as none unless `zero`.
 export const scrollRecord = (
   cls: ClassArg,
@@ -83,7 +83,7 @@ export const scrollRecord = (
 };
 
 // GSAP caches the scroll until the scroll event, and a trigger created before then scrolls back
-// to the cached number once it has measured (ScrollTrigger.js:1265, 1565). GSAP's scroll function
+// to the cached number once it has measured (ScrollTrigger.js:1273, 1574). GSAP's scroll function
 // updates the cache but also scrolls, so it runs only when the cache is off.
 export const syncScrollCache = (cls: ScrollTriggerClass | null | undefined): void => {
   const scrollFunc = cls?.getScrollFunc?.(window) as ((value?: number) => unknown) | undefined;

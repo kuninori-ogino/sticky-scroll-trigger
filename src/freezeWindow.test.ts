@@ -76,7 +76,7 @@ describe('absolute end', () => {
     expect(plans[0].freezeEnd).toBe(5000);
   });
 
-  // Matches GSAP's own `end = Math.max(start, ...)` (ScrollTrigger.js:1401): an absolute end
+  // Matches GSAP's own `end = Math.max(start, ...)` (ScrollTrigger.js:1409): an absolute end
   // below freezeStart collapses to a zero-length window instead of a negative one.
   it('clamps to freezeStart when the absolute value would fall before it', () => {
     const { plans } = run([
@@ -727,7 +727,7 @@ describe('position-clause end', () => {
   });
 });
 
-// Fallback results are raw GSAP 3.15.0's, with pins created in the fallback order, measured on
+// Fallback results are raw GSAP 3.15.1's, with pins created in the fallback order, measured on
 // chromium, webkit and firefox at a 720px viewport.
 // Every expected value here is GSAP's own, measured with the other pins created first.
 describe('spacers above, inside and below the element a point is on', () => {

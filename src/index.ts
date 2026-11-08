@@ -451,7 +451,7 @@ export default class StickyScrollTrigger {
 
     if (!position) return;
 
-    // GSAP clears the record once it has scrolled back (ScrollTrigger.js:551-562), and a kill
+    // GSAP clears the record once it has scrolled back (ScrollTrigger.js:557-568), and a kill
     // from onRefresh or the update after it comes later: then the keep waits for the end of the
     // refresh like any other.
     if (scrollRecord(this.#scrollTriggerClass)) {
@@ -1187,7 +1187,7 @@ export default class StickyScrollTrigger {
       if (!layer.inner) return [];
 
       // start comes first so a spaced '+=' end can take its element token, which is also the order
-      // GSAP resolves the two in (ScrollTrigger.js:1384-1391).
+      // GSAP resolves the two in (ScrollTrigger.js:1392-1399).
       const resolvedStart = resolveMaybeFn(layer.start);
       const resolvedEnd = prefixSpacedRelativeEnd(resolvedStart, resolveMaybeFn(layer.end));
       const classifiedEnd = classifyPosition(resolvedEnd);
@@ -1921,7 +1921,7 @@ export default class StickyScrollTrigger {
       onKill: (self) => {
         this.#captureScrollTriggerClass(self);
 
-        // Already off: a repeated kill() (GSAP calls onKill on each, ScrollTrigger.js:1926) or a
+        // Already off: a repeated kill() (GSAP calls onKill on each, ScrollTrigger.js:1935) or a
         // kill after destroy().
         if (!this.#layers.includes(layer)) {
           onKill?.(self);
@@ -1942,9 +1942,9 @@ export default class StickyScrollTrigger {
   // Builds the ScrollTrigger config for an effect that sticky-pins a Scene. Registration order
   // doesn't matter, since refresh() builds in DOM order.
   // start/end default to GSAP's own defaults for a pinned trigger:
-  // - start (ScrollTrigger.js:1339, `vars.start || (... pin ? "0 0" : "0 100%")`): trigger's own
+  // - start (ScrollTrigger.js:1347, `vars.start || (... pin ? "0 0" : "0 100%")`): trigger's own
   //   top reaching the viewport's top.
-  // - end (ScrollTrigger.js:1401, `parsedEnd || (parsedEndTrigger ? "100% 0" : max)`): endTrigger's
+  // - end (ScrollTrigger.js:1409, `parsedEnd || (parsedEndTrigger ? "100% 0" : max)`): endTrigger's
   //   own bottom edge reaching the viewport's top edge, so dwell for endTrigger's own height plus
   //   the dwell of the Scene layers nested inside it, rather than a fixed distance.
   //   parsedEndTrigger defaults to trigger itself and so is always truthy, which makes "100% 0"
@@ -2081,8 +2081,8 @@ export default class StickyScrollTrigger {
   // the caller doesn't write ScrollTrigger.addEventListener('refreshInit', refresh) by hand.
   //
   // endTrigger and end default to GSAP's own, as createStickyTrigger's do:
-  // endTrigger falls back to trigger (ScrollTrigger.js:1338, `vars.endTrigger || trigger`) and end
-  // to 'bottom top' (ScrollTrigger.js:1401, `parsedEnd || (parsedEndTrigger ? "100% 0" : max)`,
+  // endTrigger falls back to trigger (ScrollTrigger.js:1346, `vars.endTrigger || trigger`) and end
+  // to 'bottom top' (ScrollTrigger.js:1409, `parsedEnd || (parsedEndTrigger ? "100% 0" : max)`,
   // where parsedEndTrigger is always truthy). Omitting both holds the pin for trigger's own
   // height, matching GSAP's pin: true.
   // 'top top' can't be the end default: resolved against trigger itself it names the pin's own
@@ -2303,7 +2303,7 @@ export default class StickyScrollTrigger {
   // sits outside refresh()'s scope.
   // start/end take GSAP's defaults for a trigger that doesn't pin, the only ones that can apply
   // here: pin is excluded from PassThroughVars, so these Vars never pin. GSAP spells them "0 100%"
-  // (ScrollTrigger.js:1339) and "100% 0" (1401, see createStickyTrigger above); the keyword form
+  // (ScrollTrigger.js:1347) and "100% 0" (1409, see createStickyTrigger above); the keyword form
   // below says the same thing.
   createResolvedTrigger({
     trigger: triggerInput,

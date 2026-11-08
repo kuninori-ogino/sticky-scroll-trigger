@@ -27,7 +27,7 @@ The [CodePen demo](https://codepen.io/editor/kuninori-ogino/pen/01a083a9-37ab-79
 | Scroll direction | Vertical scrolling only (`horizontal` is not supported)                                                                                                     |
 | Module system    | ESM only (`import`) or a `<script>` tag via the global build; CommonJS (`require`) is not supported                                                         |
 
-This module is tested against 3.15.0, and the notes below on what raw GSAP itself does were measured there. A later 3.x satisfies the peer range but is untested.
+This module is tested against 3.15.1, and the notes below on what raw GSAP itself does were measured there. A later 3.x satisfies the peer range but is untested.
 
 ## Installation
 
@@ -599,7 +599,7 @@ A `createOverlapScroll` cover layer's `end` instead counts a scene's dwell exact
 
 "`'max'` keyword": the scroller's max scroll position, optionally offset (`'max-=100'`, `'max+=10%'`). Ignores `endTrigger` entirely.
 
-Bare `'max'` matches GSAP's own `end: 'max'` notation exactly. The offset forms are this module's own extension, not a GSAP reproduction: raw GSAP 3.15.0 silently drops both the offset and the `'max'` itself for `end: 'max-=100'`/`'max+=10%'`, collapsing `end` down to `start`'s position.
+Bare `'max'` matches GSAP's own `end: 'max'` notation exactly. The offset forms are this module's own extension, not a GSAP reproduction: raw GSAP 3.15.1 silently drops both the offset and the `'max'` itself for `end: 'max-=100'`/`'max+=10%'`, collapsing `end` down to `start`'s position.
 
 ```ts
 sticky.createOverlapScroll({
@@ -609,7 +609,7 @@ sticky.createOverlapScroll({
 }); // pin until the very bottom of the page
 ```
 
-`'max'` is only supported by [`createOverlapScroll`](#createoverlapscrolloptions) and [`resolveScrollPosition`](#resolvescrollpositionelement-position)/[`createResolvedTrigger`](#createresolvedtriggeroptions). `createStickyTrigger` throws on it: a Scene layer's dwell padding is part of the document height `'max'` measures and as long as the freeze window, so lengthening the window moves `'max'` by the same amount and `'max'` can't settle the length. `createStickyPin` throws on it too. GSAP defines `'max'` for `end`, not `start`. In raw GSAP 3.15.0, `start: 'max'` silently resolves to `0` rather than the scroller's max, so this module rejects it for `start` instead of reproducing that.
+`'max'` is only supported by [`createOverlapScroll`](#createoverlapscrolloptions) and [`resolveScrollPosition`](#resolvescrollpositionelement-position)/[`createResolvedTrigger`](#createresolvedtriggeroptions). `createStickyTrigger` throws on it: a Scene layer's dwell padding is part of the document height `'max'` measures and as long as the freeze window, so lengthening the window moves `'max'` by the same amount and `'max'` can't settle the length. `createStickyPin` throws on it too. GSAP defines `'max'` for `end`, not `start`. In raw GSAP 3.15.1, `start: 'max'` silently resolves to `0` rather than the scroller's max, so this module rejects it for `start` instead of reproducing that.
 
 ## Constraints and caveats
 
