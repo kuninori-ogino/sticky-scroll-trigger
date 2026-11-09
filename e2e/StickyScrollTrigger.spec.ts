@@ -1534,6 +1534,23 @@ test('a pin held past the end of the page doesn\'t make the page taller', async 
   }
 });
 
+// A pin whose trigger has no box keeps its range inside the page too: the range sits where the
+// wrapper does, not at the trigger's documentTop of 0.
+for (const pinDisplay of ['none', 'contents']) {
+  test(`a display: ${pinDisplay} pin held past the end of the page doesn't make the page taller`, async ({
+    page,
+  }) => {
+    // 600 + 1000, and 400 + 1000 + the scene's 500px dwell padding.
+    for (const [scenario, expected] of [['endOutside', 1600], ['endInside', 1900]] as const) {
+      await page.goto(`/fixtures/pinWrapperEffects.html?case=${scenario}&pinDisplay=${pinDisplay}`);
+      await page.waitForFunction(() => (window as unknown as { __ready: boolean }).__ready);
+
+      expect(await page.evaluate(() => document.documentElement.scrollHeight), scenario)
+        .toBe(expected);
+    }
+  });
+}
+
 // The page's end is measured with every pin range cleared, so another instance's range left over
 // from a longer page isn't counted as page: 100 + 100 + 300 + 1000 once it shrinks.
 test('pins in two instances held past the end let the page shrink', async ({ page }) => {

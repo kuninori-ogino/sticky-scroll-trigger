@@ -58,6 +58,11 @@
 
       document.body.insertAdjacentHTML('afterbegin', markup);
 
+      // A pin with no box of its own: none or contents.
+      const pinDisplay = new URLSearchParams(location.search).get('pinDisplay');
+
+      if (pinDisplay) document.getElementById('pin').style.display = pinDisplay;
+
       const sticky = new StickyScrollTrigger('.root');
 
       if (scenario === 'endInside') {

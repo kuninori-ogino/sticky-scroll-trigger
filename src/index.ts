@@ -1293,9 +1293,11 @@ export default class StickyScrollTrigger {
         + triggerMarginBottom;
       // Nothing contains inner's overflow, so a range running past the page's end would make the
       // page taller. Such a pin can't release before the scroll runs out anyway, so the range
-      // stops at the end. Wrappers carrying the pin down don't matter: all three engines leave
-      // sticky offsets out of the scrollable area. jsdom reports no height, so there's no end.
-      const room = documentHeight > 0 ? documentHeight - triggerTop : Infinity;
+      // stops at the end, measured from inner: a trigger with no box (display: none or contents)
+      // has a documentTop of 0. Wrappers carrying the pin down don't matter: all three engines
+      // leave sticky offsets out of the scrollable area. jsdom reports no height, so there's no
+      // end.
+      const room = documentHeight > 0 ? documentHeight - documentTop(layer.inner) : Infinity;
       // A pin released before it engages still gets trigger's own height, which pins nothing just
       // as 0 does, so a percentage height on trigger doesn't collapse to 0.
       const still = triggerHeight + triggerMarginBottom;
