@@ -43,8 +43,7 @@ export const buildStructure = (
   for (const layer of layers) {
     if (layer.kind !== 'scene') continue;
 
-    // Only the innermost wrapper needs the sentinel: every outer one ends in the padding div of the
-    // container it wraps, which has no margin.
+    // Only the innermost wrapper gets the sentinel: the margin it holds ends the shared container.
     const wrapped = wrapScene(inner, inner === rootElement);
 
     layer.container = wrapped.container;

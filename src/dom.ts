@@ -383,11 +383,21 @@ export const physicalHolder = (el: HTMLElement): HTMLElement => {
   return node;
 };
 
+// Every Scene sentinel, which sceneSentinel finds from the shared container it follows.
+const sentinels = new WeakSet<Element>();
+
+export const sceneSentinel = (root: HTMLElement): HTMLElement | null => {
+  const next = root.nextElementSibling;
+
+  return next instanceof HTMLElement && sentinels.has(next) ? next : null;
+};
+
 // Scene layer: wraps inner in one level of stickyContainer{ stickyWrapper, stickyPadding }
-// and moves it inside the wrapper. With holdTrailingMargin, an empty flow-root after inner keeps a
-// bottom margin ending inner (its own or its content's) in the wrapper, where it can't move the end
-// of the freeze. A flow-root wrapper would also hold in a top margin and shift the content down.
-export const wrapScene = (inner: HTMLElement, holdTrailingMargin: boolean) => {
+// and moves it inside the wrapper. A bottom margin ending inner, its own or its content's,
+// collapses out of the wrapper; refresh() carries it past the dwell (commitCarriedMargin), or,
+// where it can't get out, holds it in with the sentinel the innermost wrapper gets after inner
+// (commitHeldMargin), which lays out nothing until then.
+export const wrapScene = (inner: HTMLElement, withSentinel: boolean) => {
   if (!inner.parentNode) {
     throw new Error(`StickyScrollTrigger: ${describeElement(inner)} is not attached to the document`);
   }
@@ -404,11 +414,12 @@ export const wrapScene = (inner: HTMLElement, holdTrailingMargin: boolean) => {
   moveInto(wrapper, inner);
   container.appendChild(padding);
 
-  if (holdTrailingMargin) {
+  if (withSentinel) {
     const sentinel = createStructureElement();
 
-    sentinel.style.display = 'flow-root';
+    sentinel.style.display = 'none';
     transparentNodes.add(sentinel);
+    sentinels.add(sentinel);
     wrapper.appendChild(sentinel);
   }
 

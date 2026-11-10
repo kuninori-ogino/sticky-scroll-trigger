@@ -19,6 +19,7 @@ import {
   resolveRoot,
   restoreIfWritten,
   restoreInlinePosition,
+  sceneSentinel,
   stripStickyPositions,
   unwrapCover,
   unwrapPin,
@@ -153,16 +154,32 @@ describe('wrapScene', () => {
     expect(wrapper.firstElementChild).toBe(inner);
   });
 
-  it('with holdTrailingMargin, follows inner with an empty flow-root inside the wrapper', () => {
+  it('puts nothing after inner inside the wrapper without a sentinel', () => {
+    document.body.innerHTML = '<div><div id="inner"></div></div>';
+
+    const inner = document.getElementById('inner')!;
+    const { wrapper } = wrapScene(inner, false);
+
+    expect(Array.from(wrapper.children)).toEqual([inner]);
+    expect(sceneSentinel(inner)).toBeNull();
+  });
+
+  it('with a sentinel, follows inner with an empty div that lays out nothing yet', () => {
     document.body.innerHTML = '<div><div id="inner"></div></div>';
 
     const inner = document.getElementById('inner')!;
     const { wrapper } = wrapScene(inner, true);
-    const sentinel = wrapper.lastElementChild as HTMLElement;
+    const sentinel = sceneSentinel(inner)!;
 
     expect(Array.from(wrapper.children)).toEqual([inner, sentinel]);
-    expect(sentinel.style.display).toBe('flow-root');
+    expect(sentinel.style.display).toBe('none');
     expect(sentinel.childNodes).toHaveLength(0);
+  });
+
+  it('finds no sentinel in an element of the page after inner', () => {
+    document.body.innerHTML = '<div><div id="inner"></div><div id="next"></div></div>';
+
+    expect(sceneSentinel(document.getElementById('inner')!)).toBeNull();
   });
 
   it('excludes padding from assistive tech and hit testing', () => {
@@ -177,9 +194,10 @@ describe('wrapScene', () => {
   it('turns transitions off on everything it adds', () => {
     document.body.innerHTML = '<div><div id="inner"></div></div>';
 
-    const { container, wrapper, padding } = wrapScene(document.getElementById('inner')!, true);
+    const inner = document.getElementById('inner')!;
+    const { container, wrapper, padding } = wrapScene(inner, true);
 
-    [container, wrapper, padding, wrapper.lastElementChild as HTMLElement].forEach((el) => {
+    [container, wrapper, padding, sceneSentinel(inner)!].forEach((el) => {
       expect(transitionOff(el)).toEqual(['none', 'important']);
     });
   });

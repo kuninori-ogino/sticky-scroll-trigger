@@ -54,10 +54,134 @@
           html: block(300, 'lead', 'margin-top:16px') + block(200, 'first') + block(400),
           scenes: [['#first', '+=300']],
         },
+        // The margin ending the container against the top margin of what follows it.
+        collapseAfter: {
+          html: twoScenes('margin-bottom:40px'),
+          after: 'margin-top:30px',
+          scenes: [['#first', '+=300'], ['#second', '+=200']],
+        },
+        collapseAfterOuterDwellOnly: {
+          html: twoScenes('margin-bottom:40px'),
+          after: 'margin-top:30px',
+          scenes: [['#first', '+=0'], ['#second', '+=200']],
+        },
+        collapseAfterNoDwell: {
+          html: twoScenes('margin-bottom:40px'),
+          after: 'margin-top:30px',
+          scenes: [['#first', '+=0']],
+        },
+        collapseAfterNegative: {
+          html: twoScenes('margin-bottom:-20px'),
+          after: 'margin-top:-10px',
+          scenes: [['#first', '+=300']],
+        },
+        collapseAfterContainerMargin: {
+          root: 'margin-bottom:20px',
+          html: twoScenes('margin-bottom:40px'),
+          after: 'margin-top:30px',
+          scenes: [['#first', '+=300']],
+        },
+        // Margins in em, which computed heights round.
+        collapseAfterEm: {
+          root: 'font-size:15.3px',
+          html: twoScenes('margin-bottom:1.37em'),
+          after: 'margin-top:0.61em;font-size:15.3px',
+          scenes: [['#first', '+=300']],
+        },
+        // No margin at refresh(): the sentinel holds the one that shows up after it.
+        marginLater: {
+          html: twoScenes(''),
+          after: 'margin-top:30px',
+          scenes: [['#first', '+=300'], ['#second', '+=200']],
+        },
+        // A flex or grid item keeps the margin in, as does a page rule padding the wrapper that takes
+        // the container's place: the sentinel holds it inside the innermost wrapper.
+        flexParent: {
+          body: { display: 'flex', flexDirection: 'column' },
+          html: twoScenes('margin-bottom:40px'),
+          after: 'margin-top:30px',
+          scenes: [['#first', '+=300'], ['#second', '+=200']],
+        },
+        gridParent: {
+          body: { display: 'grid' },
+          html: twoScenes('margin-bottom:40px'),
+          after: 'margin-top:30px',
+          scenes: [['#first', '+=300']],
+        },
+        wrapperPadding: {
+          css: 'body > div:nth-child(2) { padding-bottom: 10px }',
+          html: twoScenes('margin-bottom:40px'),
+          after: 'margin-top:30px',
+          scenes: [['#first', '+=300']],
+        },
+        // Margins of both signs ending the container, which collapse to the largest plus the most
+        // negative: the positive part more than twice the negative, less than twice, and smaller.
+        collapseAfterMixed: {
+          root: 'margin-bottom:-10px',
+          html: twoScenes('margin-bottom:40px'),
+          after: 'margin-top:30px',
+          scenes: [['#first', '+=300'], ['#second', '+=200']],
+        },
+        collapseAfterMixedNear: {
+          root: 'margin-bottom:-30px',
+          html: twoScenes('margin-bottom:40px'),
+          after: 'margin-top:20px',
+          scenes: [['#first', '+=300']],
+        },
+        collapseAfterMixedNegative: {
+          root: 'margin-bottom:-40px',
+          html: twoScenes('margin-bottom:10px'),
+          after: 'margin-top:30px',
+          scenes: [['#first', '+=300'], ['#second', '+=200']],
+        },
+        collapseAfterMixedNextNegative: {
+          root: 'margin-bottom:-10px',
+          html: twoScenes('margin-bottom:40px'),
+          after: 'margin-top:-25px',
+          scenes: [['#first', '+=300']],
+        },
+        // In em, which computed heights round, read with the probe in place.
+        collapseAfterMixedEm: {
+          root: 'margin-bottom:-0.7em;font-size:15.3px',
+          html: twoScenes('margin-bottom:2.63em;font-size:15.3px'),
+          after: 'margin-top:9.33px',
+          scenes: [['#first', '+=300'], ['#second', '+=200']],
+        },
+        // A positive part larger than the first probe.
+        collapseAfterMixedLarge: {
+          root: 'margin-bottom:-10px',
+          html: twoScenes('margin-bottom:1500px'),
+          after: 'margin-top:30px',
+          scenes: [['#first', '+=300']],
+        },
+        // Registered with GSAP, so the first scene can be killed.
+        collapseAfterMixedKill: {
+          gsap: true,
+          root: 'margin-bottom:-10px',
+          html: twoScenes('margin-bottom:40px'),
+          after: 'margin-top:30px',
+          scenes: [['#first', '+=300'], ['#second', '+=200']],
+        },
+        // An end function reading below the container, called again with the dwell after it out.
+        collapseAfterLiveEnd: {
+          html: twoScenes('margin-bottom:40px'),
+          after: 'margin-top:30px',
+          scenes: [['#first', '+=300'], ['#second', () => {
+            window.__liveEndReads.push(document.querySelector('.tail').getBoundingClientRect().top
+              + window.scrollY);
+
+            return '+=200';
+          }]],
+        },
       };
       const layout = layouts[new URLSearchParams(location.search).get('layout')];
 
       document.querySelector('.before').style.cssText = layout.before ?? '';
+      document.querySelector('.tail').style.cssText = layout.after ?? '';
+      Object.assign(document.body.style, layout.body ?? {});
+
+      if (layout.css) document.head.insertAdjacentHTML('beforeend', `<style>${layout.css}</style>`);
+      window.__liveEndReads = [];
 
       const root = document.querySelector('.root');
 
@@ -66,10 +190,21 @@
 
       const documentTops = () =>
         Array.from(root.children, (el) => el.getBoundingClientRect().top + window.scrollY);
+      const tailTop = () => document.querySelector('.tail').getBoundingClientRect().top + window.scrollY;
       const unwrappedTops = documentTops();
+      const unwrappedTailTop = tailTop();
       const sticky = new StickyScrollTrigger(root);
       const scenes = layout.scenes.map(([trigger, end]) =>
         sticky.createStickyTrigger({ trigger, start: 'top top', end }));
+      const { ScrollTrigger } = layout.gsap ? await import('gsap/ScrollTrigger') : {};
+
+      if (ScrollTrigger) {
+        const { default: gsap } = await import('gsap');
+
+        gsap.registerPlugin(ScrollTrigger);
+      }
+
+      const triggers = ScrollTrigger ? scenes.map((vars) => ScrollTrigger.create(vars)) : [];
 
       sticky.refresh();
 
@@ -99,7 +234,37 @@
 
         window.scrollTo(0, 0);
 
-        return { windows, stillRuns, unwrappedTops, tops: documentTops() };
+        return {
+          windows,
+          stillRuns,
+          unwrappedTops,
+          tops: documentTops(),
+          unwrappedTailTop,
+          tailTop: tailTop(),
+          liveEndReads: window.__liveEndReads,
+        };
+      };
+      window.__refresh = () => sticky.refresh();
+      // Sets the shared container's parent's display, then refresh().
+      window.__setParentDisplay = (display) => {
+        document.body.style.display = display;
+        sticky.refresh();
+      };
+      // Sets the last child's bottom margin, with no refresh().
+      window.__setTrailingMarginOnly = (margin) => {
+        root.lastElementChild.style.marginBottom = margin;
+      };
+      // Kills a scene registered with GSAP, then sets the shared container's bottom margin and
+      // calls refresh().
+      window.__killThenSetRootMargin = (index, margin) => {
+        triggers[index].kill();
+        root.style.marginBottom = margin;
+        sticky.refresh();
+      };
+      // Sets the last child's bottom margin, then refresh().
+      window.__setTrailingMargin = (margin) => {
+        root.lastElementChild.style.marginBottom = margin;
+        sticky.refresh();
       };
     </script>
   </body>

@@ -448,6 +448,21 @@ describe('refresh()\'s rebuild decision', () => {
   });
 });
 
+// jsdom lays out nothing, as under a hidden ancestor: with no margin to read, refresh() leaves the
+// margin ending the shared container held in, so one that shows up later can't lengthen a freeze.
+describe('the trailing margin with nothing laid out', () => {
+  it('stays held in by the sentinel after refresh()', () => {
+    document.body.innerHTML = '<div class="root"><section class="s1"></section></div>';
+
+    const controller = new StickyScrollTrigger(query('.root'));
+
+    controller.createStickyTrigger({ trigger: query('.s1'), end: '+=100' });
+    controller.refresh();
+
+    expect((query('.root').nextElementSibling as HTMLElement).style.display).toBe('flow-root');
+  });
+});
+
 describe('Vars passed to GSAP', () => {
   // GSAP swaps a falsy end for "100% 0", so returning 0 as-is would make the trigger born
   // with a bogus window meaning "until trigger's bottom edge reaches the viewport's top edge."

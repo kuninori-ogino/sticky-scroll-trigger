@@ -29,12 +29,48 @@ export const commitCssText = (el: HTMLElement, cssText: string): void => {
   el.style.cssText = cssText;
 };
 
-// A Scene level a kill leaves in the DOM: no longer sticky, and no dwell.
-export const commitInert = (wrapper: HTMLElement, padding: HTMLElement | null): void => {
+// The margin ending the shared container would sit above a padding with dwell and lengthen the
+// freeze. margin-top cancels it there and margin-bottom carries it out through the container's
+// bottom to collapse with what follows. null clears both: an empty padding lets the margin through.
+export const commitCarriedMargin = (padding: HTMLElement, margin: number | null): void => {
+  padding.style.marginTop = margin === null ? '' : `${-margin}px`;
+  padding.style.marginBottom = margin === null ? '' : `${margin}px`;
+};
+
+// Margins of both signs collapse to the largest plus the most negative, so only minus the larger
+// part cancels them: the padding carries that one, and its container's margin-bottom the other, so
+// both leave the container as they reached the padding.
+export const commitContainerMargin = (container: HTMLElement, margin: number | null): void => {
+  container.style.marginBottom = margin === null ? '' : `${margin}px`;
+};
+
+// A margin-top larger than the positive part of the margins above the padding collapses with them
+// to itself plus their negative part, which refresh() reads off.
+export const commitMarginProbe = (padding: HTMLElement, probe: number): void => {
+  padding.style.marginTop = `${probe}px`;
+};
+
+// Holds the margin ending the shared container in the innermost wrapper (flow-root) where carrying
+// it out would leave it inside a container, lengthening the freeze, or lets it out (none).
+export const commitHeldMargin = (sentinel: HTMLElement, held: boolean): void => {
+  sentinel.style.display = held ? 'flow-root' : 'none';
+};
+
+// A Scene level a kill leaves in the DOM: no longer sticky, no dwell, and no carried margin.
+export const commitInert = (
+  wrapper: HTMLElement,
+  padding: HTMLElement | null,
+  container: HTMLElement | null,
+): void => {
   wrapper.style.position = '';
   wrapper.style.top = '';
 
-  if (padding) padding.style.height = '0px';
+  if (padding) {
+    padding.style.height = '0px';
+    commitCarriedMargin(padding, null);
+  }
+
+  if (container) commitContainerMargin(container, null);
 };
 
 export const clearStickyForRead = (el: HTMLElement): void => {
