@@ -2,7 +2,7 @@
 
 ## Setup
 
-Node.js `24.22.1` (see `.nvmrc`).
+Node.js `24.22.3` (see `.nvmrc`).
 
 ```bash
 npm ci
