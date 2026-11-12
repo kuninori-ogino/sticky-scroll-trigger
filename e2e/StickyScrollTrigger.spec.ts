@@ -1468,6 +1468,79 @@ test('createStickyPin releases at the scroll its end names, whatever trigger\'s 
   }
 });
 
+// A page rule on divs that matches a pin's inner, or one on every div as a descendant rule is,
+// leaves the range as the plan sizes it: the pin keeps its size, engages where it sits unpinned and
+// releases where its end names, what follows stays put, a fixed element inside trigger stays fixed,
+// nothing clips, fades, snaps, paints or counts at inner, and trigger's content computes every
+// property as it does unpinned.
+test('createStickyPin\'s range keeps its size and place under a page rule on divs', async ({ page }) => {
+  await page.goto('/fixtures/pinRangeRules.html');
+
+  type FixtureWindow = Window & {
+    __tops: (id: string) => Record<
+      'left' | 'width' | 'height' | 'beforeEngage' | 'atEngage' | 'atRelease' | 'after', number
+    >;
+    __after: () => number;
+    __fixed: () => number[];
+    __text: () => string[];
+    __select: () => string[];
+    __paint: () => string[];
+    __naturalText: string[];
+    __naturalAfter: number;
+  };
+
+  for (const id of [
+    'moves-pin', 'clips-pin', 'grows-pin', 'aligns-pin', 'fonts-pin', 'all-pin', 'indents-pin',
+    'holds-pin',
+  ]) {
+    const tops = await page.evaluate(
+      (pinId) => (window as unknown as FixtureWindow).__tops(pinId),
+      id,
+    );
+
+    expect(tops.left, `#${id}'s left edge off its own`).toBeCloseTo(0, 0);
+    expect(tops.width, `#${id}'s width off its own`).toBeCloseTo(0, 0);
+    expect(tops.height, `#${id}'s height off its own`).toBeCloseTo(0, 0);
+    expect(tops.beforeEngage, `#${id} a pixel before it engages`).toBeCloseTo(1, 0);
+    expect(tops.atEngage, `#${id} where it engages`).toBeCloseTo(0, 0);
+    expect(tops.atRelease, `#${id} at release`).toBeCloseTo(0, 0);
+    expect(tops.after, `#${id} a pixel later`).toBeCloseTo(-1, 0);
+  }
+
+  const after = await page.evaluate(() => {
+    const win = window as unknown as FixtureWindow;
+
+    return { now: win.__after(), natural: win.__naturalAfter };
+  });
+
+  expect(after.now).toBeCloseTo(after.natural, 0);
+
+  const fixed = await page.evaluate(() => (window as unknown as FixtureWindow).__fixed());
+
+  fixed.forEach((fixedTop, i) => expect(fixedTop, `#fixed at scroll ${i}`).toBeCloseTo(10, 0));
+
+  expect(await page.evaluate(() => (window as unknown as FixtureWindow).__paint()))
+    .toEqual([
+      '1', 'none', 'none', 'normal', 'auto', 'none', '0px', 'rgba(0, 0, 0, 0)', 'none', 'none', 'none',
+      'none', 'none',
+    ]);
+
+  const text = await page.evaluate(() => {
+    const win = window as unknown as FixtureWindow;
+
+    return { now: win.__text(), natural: win.__naturalText };
+  });
+
+  expect(text.now).toEqual(text.natural);
+
+  // user-select isn't inherited, so inner takes outer's for trigger's text to stay selectable.
+  const [innerSelect, outerSelect] = await page.evaluate(
+    () => (window as unknown as FixtureWindow).__select(),
+  );
+
+  expect(innerSelect).toBe(outerSelect);
+});
+
 type MarginLayout = Record<string, number | null>;
 type MarginWindow = Window & {
   __layout: (name: string) => { natural: MarginLayout; once: MarginLayout; twice: MarginLayout };

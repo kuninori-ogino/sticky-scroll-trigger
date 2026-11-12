@@ -6,7 +6,7 @@
  * A value cleared to measure past it is written again by the caller, even when unchanged.
  */
 
-import { restoreInlinePosition } from './dom';
+import { restoreInlinePosition, setRangeHeight } from './dom';
 import type { InlinePosition } from './dom';
 
 export const commitSticky = (el: HTMLElement, topPx: number): void => {
@@ -21,6 +21,11 @@ export const commitPosition = (el: HTMLElement, saved: InlinePosition): void => 
 
 export const commitHeight = (el: HTMLElement, height: string): void => {
   el.style.height = height;
+};
+
+// A pin's range, on its inner.
+export const commitRange = (inner: HTMLElement, height: string): void => {
+  setRangeHeight(inner, height);
 };
 
 // Rolls a pin's outer back whole (reserve and item box) after a pass that throws. Through CSSOM,
@@ -80,4 +85,8 @@ export const clearStickyForRead = (el: HTMLElement): void => {
 
 export const clearHeightForRead = (el: HTMLElement): void => {
   el.style.height = '';
+};
+
+export const clearRangeForRead = (inner: HTMLElement): void => {
+  setRangeHeight(inner, 'auto');
 };

@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinRangeRules fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .pin {
+        height: 100px;
+        background: #c33;
+      }
+      .gap {
+        height: 400px;
+      }
+      .end {
+        height: 100px;
+      }
+      .spacer {
+        height: 150vh;
+      }
+      .tail {
+        height: 200vh;
+      }
+      /* Each matches a pin's inner (the div the library wraps trigger in, inside its outer) and
+         nothing unpinned: a page rule on divs that would pad, move, clip or relay the range. */
+      #moves > div > div {
+        padding: 20px !important;
+        border: 5px solid !important;
+        margin: 20px !important;
+        position: relative !important;
+        top: 15px !important;
+        transform: translateY(10px) !important;
+        float: left !important;
+        width: 50% !important;
+        height: 50px !important;
+        box-sizing: border-box !important;
+      }
+      #clips > div > div {
+        display: inline !important;
+        overflow: hidden !important;
+        max-height: 50px !important;
+        columns: 2 !important;
+        content-visibility: auto !important;
+      }
+      #grows > div > div {
+        display: grid !important;
+        grid-template-rows: 50px !important;
+        min-height: 2000px !important;
+      }
+      #fonts > div > div {
+        font-size: 2em !important;
+        line-height: 3 !important;
+        margin-trim: block !important;
+      }
+      /* Every div under #all, as a descendant rule reaches them: outer and trigger too. */
+      #all div {
+        max-height: 300px;
+        align-content: end;
+      }
+      #indents > div > div {
+        text-indent: 40px !important;
+        text-align: center !important;
+        font-family: monospace !important;
+        letter-spacing: 1em !important;
+        word-spacing: 1em !important;
+        text-transform: uppercase !important;
+        white-space: pre !important;
+        word-break: break-all !important;
+        overflow-wrap: anywhere !important;
+        hyphens: none !important;
+        direction: rtl !important;
+        text-wrap: balance !important;
+        text-align-last: right !important;
+        tab-size: 2 !important;
+        line-break: anywhere !important;
+        visibility: hidden !important;
+        color: red !important;
+        cursor: wait !important;
+        pointer-events: none !important;
+        color-scheme: dark !important;
+        accent-color: red !important;
+        caret-color: red !important;
+        text-shadow: 1px 1px red !important;
+        list-style-type: square !important;
+        quotes: '<' '>' !important;
+        font-synthesis: none !important;
+        font-palette: dark !important;
+        text-rendering: optimizeSpeed !important;
+        -webkit-font-smoothing: none !important;
+        -moz-osx-font-smoothing: grayscale !important;
+        text-size-adjust: 50% !important;
+        -webkit-text-size-adjust: 50% !important;
+        text-orientation: upright !important;
+        text-spacing-trim: space-all !important;
+        hanging-punctuation: first !important;
+        ruby-position: under !important;
+        text-emphasis: dot !important;
+        text-emphasis-position: under left !important;
+        text-underline-offset: 9px !important;
+        text-underline-position: under !important;
+        text-decoration-skip-ink: none !important;
+        -webkit-text-stroke: 1px red !important;
+        -webkit-text-fill-color: red !important;
+        -webkit-text-security: disc !important;
+        paint-order: stroke !important;
+        fill: red !important;
+        stroke: red !important;
+        dominant-baseline: middle !important;
+        image-rendering: pixelated !important;
+        border-collapse: collapse !important;
+        border-spacing: 7px !important;
+        caption-side: bottom !important;
+        empty-cells: hide !important;
+        widows: 5 !important;
+        orphans: 5 !important;
+        math-depth: 3 !important;
+        print-color-adjust: exact !important;
+        forced-color-adjust: none !important;
+        dynamic-range-limit: standard !important;
+        interpolate-size: allow-keywords !important;
+        user-select: none !important;
+        -webkit-user-select: none !important;
+        -webkit-user-modify: read-write !important;
+        scrollbar-color: red blue !important;
+        -webkit-tap-highlight-color: red !important;
+        hyphenate-character: '=' !important;
+        hyphenate-limit-chars: 10 !important;
+        text-justify: inter-character !important;
+        text-combine-upright: all !important;
+        ruby-align: center !important;
+        ruby-overhang: none !important;
+        math-style: compact !important;
+        math-shift: compact !important;
+        caret-shape: block !important;
+        caret-animation: manual !important;
+        speak: none !important;
+        fill-opacity: 0.5 !important;
+        fill-rule: evenodd !important;
+        stroke-width: 3px !important;
+        stroke-dasharray: 2 !important;
+        stroke-dashoffset: 1px !important;
+        stroke-linecap: round !important;
+        stroke-linejoin: round !important;
+        stroke-miterlimit: 2 !important;
+        stroke-opacity: 0.5 !important;
+        clip-rule: evenodd !important;
+        shape-rendering: crispEdges !important;
+        text-anchor: middle !important;
+        color-interpolation: linearRGB !important;
+        color-interpolation-filters: sRGB !important;
+        marker: url(#m) !important;
+        -webkit-locale: 'ja' !important;
+        -webkit-rtl-ordering: visual !important;
+        -webkit-nbsp-mode: space !important;
+        -webkit-text-zoom: reset !important;
+        -webkit-cursor-visibility: auto-hide !important;
+        -webkit-box-direction: reverse !important;
+      }
+      #holds > div > div {
+        border: 0 !important;
+      }
+      #aligns > div > div {
+        align-content: end !important;
+        aspect-ratio: 1 !important;
+        filter: blur(0) !important;
+        backdrop-filter: blur(1px) !important;
+        perspective: 100px !important;
+        will-change: transform !important;
+        transform-style: preserve-3d !important;
+        offset-path: path('M 0 0') !important;
+        opacity: 0.5 !important;
+        clip-path: inset(10px) !important;
+        mask: linear-gradient(transparent, black) !important;
+        mix-blend-mode: multiply !important;
+        isolation: isolate !important;
+        scroll-snap-align: start !important;
+        scroll-margin: 20px !important;
+        background: red !important;
+        box-shadow: 0 0 0 5px red !important;
+        outline: 3px solid red !important;
+        counter-reset: a 3 !important;
+        counter-increment: b 5 !important;
+        counter-set: c 2 !important;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Each pin releases at its own .end reaching the viewport's top. #holds' trigger has a bottom
+         margin escaping it from its content, which outer carries after a read through inner's
+         border. -->
+    <div class="gap"></div>
+    <div id="moves"><div id="moves-pin" class="pin"></div></div>
+    <div class="gap"></div>
+    <div id="moves-pin-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="clips"><div id="clips-pin" class="pin"></div></div>
+    <div class="gap"></div>
+    <div id="clips-pin-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="grows"><div id="grows-pin" class="pin"></div></div>
+    <div class="gap"></div>
+    <div id="grows-pin-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="aligns">
+      <div id="aligns-pin" class="pin"><div id="fixed" style="position: fixed; top: 10px; height: 5px"></div></div>
+    </div>
+    <div class="gap"></div>
+    <div id="aligns-pin-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="fonts">
+      <div id="fonts-pin" class="pin" style="height: auto; margin-top: 30px">Some text in the pin</div>
+    </div>
+    <div class="gap"></div>
+    <div id="fonts-pin-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="all">
+      <div id="all-pin" class="pin"></div>
+    </div>
+    <div class="gap"></div>
+    <div id="all-pin-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="indents" style="text-indent: 30px">
+      <div id="indents-pin" class="pin" style="width: 50%">
+        <p id="indents-text" style="margin: 0">Text</p>
+      </div>
+    </div>
+    <div class="gap"></div>
+    <div id="indents-pin-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="holds">
+      <div id="holds-pin" class="pin" style="height: auto"><p style="margin: 0 0 40px; height: 100px"></p></div>
+    </div>
+    <div id="after" style="height: 10px; margin-top: 10px"></div>
+    <div class="gap"></div>
+    <div id="holds-pin-end" class="end"></div>
+    <div class="tail"></div>
+    <div class="root"></div>
+
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const ids = [
+        'moves-pin', 'clips-pin', 'grows-pin', 'aligns-pin', 'fonts-pin', 'all-pin', 'indents-pin',
+        'holds-pin',
+      ];
+      const top = (el) => el.getBoundingClientRect().top + window.scrollY;
+      const natural = Object.fromEntries(ids.map((id) => [id, top(document.getElementById(id))]));
+      const naturalSizes = Object.fromEntries(ids.map((id) => {
+        const { left, width, height } = document.getElementById(id).getBoundingClientRect();
+
+        return [id, { left, width, height }];
+      }));
+
+      window.__naturalAfter = top(document.getElementById('after'));
+
+      // Every computed property of #indents-pin's text.
+      const inherited = (el) => {
+        const style = getComputedStyle(el);
+
+        return [...style].map((property) => `${property}: ${style.getPropertyValue(property)}`);
+      };
+      const textEl = document.getElementById('indents-text');
+
+      window.__naturalText = inherited(textEl);
+      window.__text = () => inherited(textEl);
+      // #indents-pin's inner and outer user-select, which trigger's text doesn't show: it isn't
+      // inherited.
+      window.__select = () => {
+        const inner = document.getElementById('indents-pin').parentElement;
+
+        return [inner, inner.parentElement].map((el) => getComputedStyle(el).userSelect);
+      };
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      ids.forEach((id) => {
+        sticky.createStickyPin({ trigger: `#${id}`, endTrigger: `#${id}-end`, end: 'top top' });
+      });
+      sticky.refresh();
+
+      // Where the pin's top sits in the viewport a pixel before and at the scroll it engages at
+      // unpinned, and at the scroll its end names and a pixel later; and how far right, how much
+      // wider and how much taller it is than unpinned.
+      window.__tops = (id) => {
+        const pin = document.getElementById(id);
+
+        window.scrollTo(0, 0);
+
+        const release = top(document.getElementById(`${id}-end`));
+        const topAt = (y) => {
+          window.scrollTo(0, y);
+
+          return pin.getBoundingClientRect().top;
+        };
+
+        return {
+          left: pin.getBoundingClientRect().left - naturalSizes[id].left,
+          width: pin.getBoundingClientRect().width - naturalSizes[id].width,
+          height: pin.getBoundingClientRect().height - naturalSizes[id].height,
+          beforeEngage: topAt(natural[id] - 1),
+          atEngage: topAt(natural[id]),
+          atRelease: topAt(release),
+          after: topAt(release + 1),
+        };
+      };
+      // Where #fixed, position: fixed inside #aligns-pin, sits in the viewport at two scrolls.
+      window.__fixed = () => [0, 1000].map((y) => {
+        window.scrollTo(0, y);
+
+        return document.getElementById('fixed').getBoundingClientRect().top;
+      });
+      // #aligns-pin's inner's paint, snap and counter properties, which its rule sets otherwise.
+      window.__paint = () => {
+        const style = getComputedStyle(document.getElementById('aligns-pin').parentElement);
+
+        return [
+          style.opacity, style.clipPath, style.maskImage || style.webkitMaskImage, style.mixBlendMode,
+          style.isolation, style.scrollSnapAlign, style.scrollMarginTop, style.backgroundColor,
+          style.boxShadow, style.outlineStyle, style.counterReset, style.counterIncrement,
+          style.counterSet,
+        ];
+      };
+      window.__after = () => {
+        window.scrollTo(0, 0);
+
+        return top(document.getElementById('after'));
+      };
+    </script>
+  </body>
+</html>

@@ -54,6 +54,7 @@ import {
 import type { ScrollTriggerClass } from './gsap';
 import {
   clearHeightForRead,
+  clearRangeForRead,
   clearStickyForRead,
   commitCarriedMargin,
   commitContainerMargin,
@@ -63,6 +64,7 @@ import {
   commitInert,
   commitMarginProbe,
   commitPosition,
+  commitRange,
   commitSticky,
 } from './commit';
 import {
@@ -976,7 +978,7 @@ export default class StickyScrollTrigger {
     // against inner is fitPinBoxes' to hold.
     wrapped.forEach(({ outer, inner }) => {
       clearHeightForRead(outer);
-      clearHeightForRead(inner);
+      clearRangeForRead(inner);
     });
 
     let reserved: number[];
@@ -995,7 +997,7 @@ export default class StickyScrollTrigger {
       // better guess. trigger keeps whichever box fitPinBoxes left on it.
       wrapped.forEach(({ outer, inner, savedStyle, range }) => {
         commitCssText(outer, savedStyle);
-        commitHeight(inner, range);
+        commitRange(inner, range);
       });
 
       throw error;
@@ -1009,7 +1011,7 @@ export default class StickyScrollTrigger {
     // keeps them out of the flow either way. With a range back, trigger's bottom margin stops
     // inside inner, and the one fitPinBoxes carried onto outer stands in for it, so phase 1
     // measures the same layout with them present.
-    wrapped.forEach(({ inner, range }) => commitHeight(inner, range));
+    wrapped.forEach(({ inner, range }) => commitRange(inner, range));
   }
 
   // #wrapUnwrappedPins's counterpart. Nulling outer keeps it idempotent: destroy() and a kill
@@ -1198,7 +1200,7 @@ export default class StickyScrollTrigger {
         // The ranges stay on through phase 1, so a Scene layer measures the layout the page
         // shows. outer, which #reservePinSpace has already sized, keeps them out of the flow.
         pins.forEach(({ layer }) => {
-          if (layer.inner) clearHeightForRead(layer.inner);
+          if (layer.inner) clearRangeForRead(layer.inner);
         });
         plannedPins = this.#planPinLayers(viewportHeight, measureDocumentHeightWithoutPinRanges());
       }
@@ -1208,7 +1210,7 @@ export default class StickyScrollTrigger {
         if (!layer.inner) return;
 
         commitPosition(layer.trigger, position);
-        commitHeight(layer.inner, range);
+        commitRange(layer.inner, range);
       });
 
       throw error;
@@ -1220,7 +1222,7 @@ export default class StickyScrollTrigger {
       if (!layer.inner) return;
 
       commitSticky(layer.trigger, topPx);
-      commitHeight(layer.inner, `${range}px`);
+      commitRange(layer.inner, `${range}px`);
     });
     // Last, because these values derive from the freeze windows settled above.
     this.#syncScrollMargins(marginTops);

@@ -2966,17 +2966,25 @@ describe('createStickyPin()', () => {
   // makes a formatting context, so a pinned trigger rests at exactly the top its start clause
   // names. An overflow or contain on inner would make it a formatting context too, and the margin
   // would push trigger down inside the reserved box instead.
-  it('leaves inner without a formatting context of its own', () => {
+  it('leaves inner without a formatting context of its own, whatever a page rule on divs sets', () => {
     const { query, controller } = setup();
     const trigger = query('.inside');
+    const rule = document.createElement('style');
 
-    controller.createStickyPin({ trigger, endTrigger: query('.scene') });
-    controller.refresh();
+    rule.textContent = 'div { overflow: hidden; contain: paint }';
+    document.head.append(rule);
 
-    const inner = trigger.parentElement!;
+    try {
+      controller.createStickyPin({ trigger, endTrigger: query('.scene') });
+      controller.refresh();
 
-    expect(inner.style.overflow).toBe('');
-    expect(inner.style.contain).toBe('');
+      const inner = trigger.parentElement!;
+
+      expect(getComputedStyle(inner).overflow).toBe('visible');
+      expect(getComputedStyle(inner).contain).toBe('none');
+    } finally {
+      rule.remove();
+    }
   });
 
   // A dwell end is the one pin arithmetic jsdom can check in full: the distance comes from the

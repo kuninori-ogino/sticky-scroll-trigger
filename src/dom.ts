@@ -104,13 +104,13 @@ export const measureDocumentHeightWithoutPinRanges = (): number => {
   const saved = [...pinRanges].map((inner) => ({ inner, height: inner.style.height }));
 
   saved.forEach(({ inner }) => {
-    inner.style.height = '';
+    setRangeHeight(inner, 'auto');
   });
 
   const height = measureDocumentHeight();
 
   saved.forEach(({ inner, height: range }) => {
-    inner.style.height = range;
+    setRangeHeight(inner, range);
   });
 
   return height;
@@ -298,6 +298,68 @@ const createEmptyBlock = (styles: Record<string, string> = {}): HTMLDivElement =
   }).forEach(([property, value]) => el.style.setProperty(property, value, 'important'));
 
   return el;
+};
+
+// inner's border, which the margin read takes back to after its own.
+const RANGE_BORDER = '0';
+// Inherited properties, which trigger then takes from outer as it would with no rule on inner: a
+// relative font size compounds no more than through GSAP's pin-spacer, and an inline-level trigger
+// keeps its strut, indent and alignment. user-select isn't inherited, but an auto under a none
+// can't be selected; WebKit keeps -webkit-user-select apart from it. text-size-adjust (one property
+// in Chromium under both names) and -webkit-touch-callout act only in mobile engines.
+// -webkit-font-smoothing is Firefox's -moz-osx-font-smoothing too.
+const RANGE_INHERITED = [
+  'font', 'letter-spacing', 'word-spacing', 'text-align', 'text-indent', 'text-transform',
+  'white-space', 'word-break', 'overflow-wrap', 'hyphens', 'direction', 'text-wrap',
+  'text-align-last', 'tab-size', 'line-break', 'visibility', 'color', 'cursor', 'pointer-events',
+  'color-scheme', 'accent-color', 'caret-color', 'text-shadow', 'list-style', 'quotes',
+  'font-synthesis', 'font-palette', 'text-rendering', '-webkit-font-smoothing', 'text-size-adjust',
+  '-webkit-text-size-adjust', 'text-orientation', 'text-spacing-trim', 'hanging-punctuation',
+  'ruby-position', 'text-emphasis', 'text-emphasis-position', 'text-underline-offset',
+  'text-underline-position', 'text-decoration-skip-ink', '-webkit-text-stroke',
+  '-webkit-text-fill-color', '-webkit-text-security', 'paint-order', 'fill', 'stroke',
+  'dominant-baseline', 'image-rendering', 'border-collapse', 'border-spacing', 'caption-side',
+  'empty-cells', 'widows', 'orphans', 'math-depth', 'print-color-adjust', 'forced-color-adjust',
+  'dynamic-range-limit', 'interpolate-size', 'user-select', '-webkit-user-select',
+  '-webkit-user-modify', 'scrollbar-color', '-webkit-tap-highlight-color', '-webkit-touch-callout',
+  'hyphenate-character', 'hyphenate-limit-chars', 'text-justify', 'text-combine-upright',
+  'ruby-align', 'ruby-overhang', 'math-style', 'math-shift', 'caret-shape', 'caret-animation',
+  'speak', 'fill-opacity', 'fill-rule', 'stroke-width', 'stroke-dasharray', 'stroke-dashoffset',
+  'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit', 'stroke-opacity', 'clip-rule',
+  'shape-rendering', 'text-anchor', 'color-interpolation', 'color-interpolation-filters', 'marker',
+  '-webkit-locale', '-webkit-rtl-ordering', '-webkit-nbsp-mode', '-webkit-text-zoom',
+  '-webkit-cursor-visibility', '-webkit-box-direction',
+];
+// A pin's inner, the range its trigger sticks in, a plain block whatever a page rule sets on divs
+// (ARCHITECTURE.md has what each rule did): an empty block's properties with an auto height
+// (setRangeHeight replaces it) and the width left to outer, those an empty box can leave alone but
+// a tall range or a trigger inside it would show, and RANGE_INHERITED.
+const createRangeBox = (): HTMLDivElement => createEmptyBlock({
+  'height': 'auto', 'width': 'auto', 'min-width': '0', 'max-width': 'none', 'border': RANGE_BORDER,
+  'align-content': 'normal', 'aspect-ratio': 'auto', 'margin-trim': 'none',
+  // A containing block for trigger's fixed descendants; Safari before 18 knows only the prefixed
+  // backdrop-filter.
+  'filter': 'none', 'backdrop-filter': 'none', '-webkit-backdrop-filter': 'none',
+  'perspective': 'none', 'will-change': 'auto', 'transform-style': 'flat', 'offset-path': 'none',
+  // A clip, a group effect or a snap area: one more over trigger than GSAP's pin-spacer puts.
+  'opacity': '1', 'clip-path': 'none', 'mask': 'none', 'mix-blend-mode': 'normal',
+  'isolation': 'auto', 'scroll-snap-align': 'none', 'scroll-margin': '0',
+  // Paint over the whole range, which runs past outer onto what follows, and a counter step more.
+  'background': 'none', 'box-shadow': 'none', 'outline': 'none', 'counter-reset': 'none',
+  'counter-increment': 'none', 'counter-set': 'none',
+  ...Object.fromEntries(RANGE_INHERITED.map((property) => [property, 'inherit'])),
+});
+
+// inner's height, the range or auto for a read, !important as createRangeBox's properties are. ''
+// (a range saved before the pin was wrapped) is auto, which removing the value wouldn't be.
+export const setRangeHeight = (inner: HTMLElement, height: string): void => {
+  writeInline(inner, 'height', height || 'auto', 'important');
+};
+
+// inner's display through the reads, contents or createRangeBox's block, !important so a page
+// rule's !important can't win over either.
+const setRangeDisplay = (inner: HTMLElement, display: 'contents' | 'block') => {
+  writeInline(inner, 'display', display, 'important');
 };
 
 // Far beyond any page's margin, so a margin of it collapses with any other to itself.
@@ -665,7 +727,7 @@ export const wrapPin = (trigger: HTMLElement) => {
   }
 
   const outer = createStructureElement();
-  const inner = createStructureElement();
+  const inner = createRangeBox();
 
   setOuterLayout(outer, null);
   transparentNodes.add(outer);
@@ -912,9 +974,12 @@ const fitReleasedPins = (
   const measured = pins.flatMap((pin, index) =>
     (rendered[index] ? [{ ...pin, index, layout: layouts[index] }] : []));
   const aroundDisplays = around.map(({ outer, inner }) =>
-    [outer.style.display, inner.style.display]);
+    [outer.style.display, captureInline(inner, 'display')] as const);
   const restoreAround = () => around.forEach(({ outer, inner }, i) => {
-    [outer.style.display, inner.style.display] = aroundDisplays[i];
+    const [display, innerDisplay] = aroundDisplays[i];
+
+    outer.style.display = display;
+    restoreInline(inner, 'display', innerDisplay);
   });
 
   pins.forEach(({ outer }, i) => {
@@ -928,7 +993,7 @@ const fitReleasedPins = (
   });
   [...measured, ...around].forEach(({ outer, inner }) => {
     outer.style.display = 'contents';
-    inner.style.display = 'contents';
+    setRangeDisplay(inner, 'contents');
   });
 
   try {
@@ -977,8 +1042,7 @@ const fitInsideAround = (
     restoreCarried();
     measured.forEach(({ outer, inner, layout }) => {
       setOuterLayout(outer, layout);
-
-      inner.style.display = '';
+      setRangeDisplay(inner, 'block');
     });
   }
 
@@ -1151,28 +1215,29 @@ const fitEscapingMargins = (
   pins: readonly (WrappedPin & { ownMargin: string })[],
   gaps: readonly number[],
 ) => {
-  const plain = pins.map(({ inner }) => measureUsedHeight(inner) - bottomBorder(inner));
+  const plain = pins.map(({ inner }) => measureUsedHeight(inner));
   // Bottom edges, not heights: a page rule's top padding or border on outer keeps trigger's top
   // margin inside it too. An inner with no height has every margin inside it collapsing through:
   // they leave through outer's top, so none is left for its bottom.
   const holding = pins.map(({ outer }, j) => plain[j] < 0.01
     || holdsBottomMargin(getComputedStyle(outer), gaps[j], outer.parentElement));
 
+  // !important, as createRangeBox's border is, which goes back on after.
   pins.forEach(({ inner }) => {
-    inner.style.borderBottom = HOLD_MARGINS;
+    inner.style.setProperty('border-bottom', HOLD_MARGINS, 'important');
   });
 
   let margins: number[];
 
   try {
-    // Each less its border as measureUsedHeight counts it: this one can snap below 1px under a
-    // zoom, and the plain one is a page rule's, if any.
+    // Less the border as measureUsedHeight counts it, which can snap below 1px under a zoom.
     margins = pins.map(({ inner }, j) => (holding[j]
       ? 0
       : measureUsedHeight(inner) - bottomBorder(inner) - plain[j]));
   } finally {
+    // The shorthand createRangeBox sets, so every side goes back.
     pins.forEach(({ inner }) => {
-      inner.style.borderBottom = '';
+      inner.style.setProperty('border', RANGE_BORDER, 'important');
     });
   }
 
@@ -1213,7 +1278,7 @@ const probeInner = <T extends WrappedPin & { i: number }>(
   const saved = blocks.map(({ inner }) => inner.style.height);
 
   blocks.forEach((block) => {
-    block.inner.style.height = height(block);
+    setRangeHeight(block.inner, height(block));
   });
 
   try {
@@ -1221,7 +1286,7 @@ const probeInner = <T extends WrappedPin & { i: number }>(
       (getComputedStyle(trigger).height !== boxes[i].box[0] ? [i] : []));
   } finally {
     blocks.forEach(({ inner }, j) => {
-      inner.style.height = saved[j];
+      setRangeHeight(inner, saved[j]);
     });
   }
 };
