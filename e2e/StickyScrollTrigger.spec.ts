@@ -4553,6 +4553,50 @@ for (const fromEnd of [0, 150]) {
   });
 }
 
+// liveEndSpacer.html's hooks.
+interface LiveEndSpacerWindow {
+  __ready?: boolean;
+  __expected: number;
+  __end: () => number;
+}
+
+// During the end function's call, the spacer for an earlier layer's dwell moves what follows by
+// exactly the dwell (margins collapse, a row gap stays single), so a position read below comes out
+// where the element arrives. Where it can't (free space a flex column spreads, a clearing element),
+// a bare block stands in, which the fixture's plain param models.
+for (const [description, query] of [
+  ['collapsing margins', { a: 'margin-bottom:30px', n: 'margin-top:50px' }],
+  ['margins of both signs', { a: 'margin-bottom:10px', ac: 'margin-bottom:-40px', n: 'margin-top:30px' }],
+  ['a transformed trigger', { a: 'transform:translateY(100px);margin-bottom:30px', n: 'margin-top:50px' }],
+  ['a flex column gap', { root: 'display:flex;flex-direction:column;gap:20px' }],
+  ['a percentage gap', { root: 'display:grid;row-gap:2%;min-height:4000px', plain: 'a' }],
+  ['a stylesheet setting the layout of divs', { css: '.root > div { display: flow-root; min-height: 4px; float: left; width: 100% }', a: 'margin-bottom:30px', n: 'margin-top:50px' }],
+  ['spread free space', { root: 'display:flex;flex-direction:column;gap:20px;min-height:4000px;justify-content:space-between', plain: 'a' }],
+  ['a sticky element after it', { a: 'margin-bottom:30px', n: 'margin-top:50px', z: 'position:sticky;bottom:0' }],
+  ['a stylesheet clearing divs', { s0: 'float:left;width:30%;height:350px', a: 'margin-bottom:30px', n: 'margin-top:50px', css: '.root div { clear: both }' }],
+  ['a sidebar beside it', { css: 'body { display: flex; align-items: flex-start } .root { flex: 1 } .tail { flex: none; width: 200px; height: 300px }', s0: 'display:none', a: 'margin-bottom:30px', n: 'margin-top:50px' }],
+  ['a stylesheet containing divs', { css: '.root div { contain: content }', a: 'margin-bottom:30px', n: 'margin-top:50px' }],
+  ['a stylesheet setting a writing mode on divs', { css: '.root div { writing-mode: vertical-rl }', a: 'margin-bottom:30px', n: 'margin-top:50px' }],
+  ['a grid column with named lines', { root: 'display:grid;row-gap:20px;grid-template-columns:[full-start] minmax(0,1fr) [full-end]' }],
+  ['a clearing element', { s0: 'float:left;width:30%;height:350px', a: 'margin-bottom:30px', n: 'clear:both;margin-top:50px', plain: 'a' }],
+  ['a layer inside another', { a: 'margin-bottom:30px', n: 'margin-top:50px', b: 'inA' }],
+  ['one layer each way', { a: 'margin-bottom:30px', n: 'margin-top:50px', b: '1', w: 'display:flex;flex-direction:column;min-height:1500px;justify-content:space-between', plain: 'b' }],
+] as const) {
+  test(`an end function reading a position below an earlier layer gets where it arrives (${description})`, async ({ page }) => {
+    await page.goto(`/fixtures/liveEndSpacer.html?${new URLSearchParams(query)}`);
+    await page.waitForFunction(() => (window as never as LiveEndSpacerWindow).__ready === true);
+
+    const { end, expected } = await page.evaluate(() => {
+      const w = window as never as LiveEndSpacerWindow;
+
+      return { end: w.__end(), expected: w.__expected };
+    });
+
+    // The end comes out whole px, a fractional position included.
+    expect(Math.abs(end - expected)).toBeLessThanOrEqual(0.5);
+  });
+}
+
 interface PinStickyResetWindow {
   __ready: boolean;
   __reads: (positions: number[]) => Promise<number[]>;

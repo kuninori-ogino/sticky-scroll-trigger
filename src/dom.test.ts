@@ -27,6 +27,7 @@ import {
   wrapPin,
   wrapScene,
   writeInline,
+  type SpacerPlans,
 } from './dom';
 
 // jsdom has no layout engine, so offsetTop/offsetParent/clientTop/offsetHeight are always 0/null,
@@ -1318,6 +1319,24 @@ describe('insertSpacers', () => {
     remove();
 
     expect(ids(parent)).toEqual(['a', 'b']);
+  });
+
+  // jsdom lays nothing out, so nothing after a spacer moves and every plan goes plain.
+  it('keeps the plans it makes and plans again only for another height', () => {
+    document.body.innerHTML = '<div id="parent"><div id="a"></div><div id="b"></div></div>';
+
+    const a = document.getElementById('a')!;
+    const plans: SpacerPlans = new Map();
+
+    insertSpacers([{ after: a, height: 300 }], plans)();
+    plans.set(a, { ...plans.get(a)!, margins: [7, -7] });
+    insertSpacers([{ after: a, height: 300 }], plans)();
+
+    expect(plans.get(a)).toEqual({ kind: 'plain', margins: [7, -7], height: 300 });
+
+    insertSpacers([{ after: a, height: 50 }], plans)();
+
+    expect(plans.get(a)).toEqual({ kind: 'plain', margins: [0, 0], height: 50 });
   });
 });
 

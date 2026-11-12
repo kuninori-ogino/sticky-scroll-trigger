@@ -28,6 +28,7 @@ import {
   stripStickyPositions,
   unwrapPin,
   wrapPin,
+  type SpacerPlans,
 } from './dom';
 import {
   clearDormancy,
@@ -1554,6 +1555,7 @@ export default class StickyScrollTrigger {
 
     if (!live.length) return;
 
+    const spacerPlans: SpacerPlans = new Map();
     // Taking the padding out can shorten the page, and the browser clamps the scroll to it. The
     // layout is back to this one when the loop ends, so the scroll can go back to this too.
     const scrollBefore = window.scrollY;
@@ -1570,6 +1572,7 @@ export default class StickyScrollTrigger {
             index,
             liveEnd,
             realScroll() ?? scrollBefore,
+            spacerPlans,
           );
           const current = measured[index].end;
 
@@ -1599,6 +1602,7 @@ export default class StickyScrollTrigger {
     index: number,
     liveEnd: () => EndSpec,
     scroll: number,
+    spacerPlans: SpacerPlans,
   ): EndSpec | null {
     const spacers = active.flatMap((layer, k) => (k < index && layer.kind === 'scene' && planned[k]
       ? [{ after: layer.trigger, height: planned[k] }]
@@ -1627,7 +1631,7 @@ export default class StickyScrollTrigger {
         commitCarriedMargin(padding, null);
       });
 
-      const removeSpacers = insertSpacers(spacers);
+      const removeSpacers = insertSpacers(spacers, spacerPlans);
 
       return () => {
         removeSpacers();

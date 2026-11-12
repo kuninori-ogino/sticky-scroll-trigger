@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>liveEndSpacer fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        display: block;
+      }
+      .tail {
+        height: 400vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="root"></div>
+    <div class="tail"></div>
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      // Layer #a dwells 400px; #b dwells 200px, inside #w with b=1 and inside #a with b=inA. Layer
+      // #c's end function returns where #mark sits. Each param is a style: root for .root, a/ac
+      // for #a and its child, n for the section after #a, w for #w, s0 for the first section, z
+      // for the last; css is a stylesheet. plain lists the triggers whose spacer the expected value
+      // models as a bare block: elsewhere what follows moves by exactly the dwell.
+      const params = new URLSearchParams(location.search);
+      const style = (key) => params.get(key) || '';
+      const root = document.querySelector('.root');
+
+      if (params.has('css')) document.head.append(Object.assign(document.createElement('style'), { textContent: style('css') }));
+      root.style.cssText = style('root');
+      root.innerHTML = `<section id="s0" style="height:300px;${style('s0')}"></section>`
+        + `<section id="a" style="${style('a')}"><div style="height:200px;${style('ac')}"></div>`
+        + (params.get('b') === 'inA' ? '<section id="b" style="height:200px;margin-bottom:20px"></section>' : '')
+        + '</section>'
+        + `<section id="n" style="height:200px;${style('n')}"></section>`
+        + (params.get('b') === '1'
+          ? `<div id="w" style="${style('w')}"><section style="height:100px"></section>`
+            + '<section id="b" style="height:200px"></section><section style="height:100px"></section></div>'
+          : '')
+        + '<section id="c" style="height:200px"></section><section style="height:400px"></section>'
+        + `<section id="mark" style="height:100px"></section><section style="height:300px;${style('z')}"></section>`;
+
+      const markTop = () => document.getElementById('mark').getBoundingClientRect().top + scrollY;
+      const dwells = { a: 400, b: 200 };
+      const plain = (params.get('plain') || '').split(',').filter(Boolean);
+      const bare = plain.map((id) => {
+        const spacer = document.createElement('div');
+
+        spacer.style.cssText = `height:${dwells[id]}px;margin:0;padding:0;border:0`;
+        document.getElementById(id).after(spacer);
+
+        return spacer;
+      });
+      const exact = Object.keys(dwells).filter((id) => document.getElementById(id) && !plain.includes(id));
+
+      window.__expected = markTop() + exact.reduce((sum, id) => sum + dwells[id], 0);
+      bare.forEach((spacer) => spacer.remove());
+
+      const sticky = new StickyScrollTrigger(root);
+
+      ScrollTrigger.create(sticky.createStickyTrigger({ trigger: '#a', end: '+=400' }));
+      if (params.has('b')) ScrollTrigger.create(sticky.createStickyTrigger({ trigger: '#b', end: '+=200' }));
+
+      const c = ScrollTrigger.create(sticky.createStickyTrigger({ trigger: '#c', end: markTop }));
+
+      ScrollTrigger.refresh();
+
+      if (document.readyState !== 'complete') {
+        await new Promise((resolve) => window.addEventListener('load', resolve, { once: true }));
+      }
+
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      window.__end = () => c.end;
+      window.__ready = true;
+    </script>
+  </body>
+</html>

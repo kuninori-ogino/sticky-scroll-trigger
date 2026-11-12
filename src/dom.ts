@@ -271,22 +271,6 @@ export const readThenRestore = <T>(restore: () => void, read: () => T): T => {
   }
 };
 
-// Puts a block of each height right after its element and returns a function that takes them out.
-export const insertSpacers = (
-  spacers: readonly { after: HTMLElement; height: number }[],
-): (() => void) => {
-  const inserted = spacers.map(({ after, height }) => {
-    const spacer = document.createElement('div');
-
-    spacer.style.cssText = `height:${height}px;margin:0;padding:0;border:0`;
-    after.after(spacer);
-
-    return spacer;
-  });
-
-  return () => inserted.forEach((spacer) => spacer.remove());
-};
-
 // An element the structure adds, with transition: none !important so a broad page rule (* or
 // .section div, !important or not) can't animate what the library writes: a wrapper's top would
 // slide on each demotion instead of landing where the table computed it.
@@ -296,6 +280,210 @@ const createStructureElement = (): HTMLDivElement => {
   el.style.setProperty('transition', 'none', 'important');
 
   return el;
+};
+
+// An empty block whatever a page rule sets on divs (.section div { display: flex }, say): every
+// property that sizes or places an empty box or stops margins collapsing through it is set, then
+// the given styles. A list, since all: initial made refresh() about three times slower in WebKit.
+const createEmptyBlock = (styles: Record<string, string> = {}): HTMLDivElement => {
+  const el = createStructureElement();
+
+  Object.entries({
+    'display': 'block', 'writing-mode': 'inherit', 'float': 'none', 'clear': 'none',
+    'position': 'static', 'order': '0', 'grid-area': 'auto', 'flex': 'none', 'overflow': 'visible',
+    'contain': 'none', 'content-visibility': 'visible', 'container-type': 'normal',
+    'columns': 'auto', 'transform': 'none', 'translate': 'none', 'scale': 'none', 'rotate': 'none',
+    'zoom': '1', 'animation': 'none', 'box-sizing': 'content-box', 'height': '0', 'min-height': '0',
+    'max-height': 'none', 'padding': '0', 'border': '0', 'margin': '0', ...styles,
+  }).forEach(([property, value]) => el.style.setProperty(property, value, 'important'));
+
+  return el;
+};
+
+// Far beyond any page's margin, so a margin of it collapses with any other to itself.
+const SPACER_PROBE_PX = 1e6;
+// How far what follows a spacer may move off the spacer's height and still count as exact.
+const SPACER_SHIFT_TOLERANCE_PX = 0.5;
+
+// How a spacer goes after its element. 'block' (block flow): the margins escaping the element's
+// bottom edge, positive and negative part, are cancelled before the spacer and emitted again after
+// it, so they still collapse with what follows. 'stack' (a flex column or one-column grid): the
+// spacer takes the row gap back, so the element and what follows stay one gap apart. 'plain': a
+// bare block, which stops the margins collapsing and adds a gap.
+// margins: the top and bottom margin of the block carrying them, the one after the spacer for
+// 'block', the spacer (minus the gap, 0) for 'stack'. height: the one the plan was checked at.
+type SpacerPlan = { kind: 'block' | 'stack' | 'plain'; margins: [number, number]; height: number };
+
+// Plans by element, for the evaluations of one refresh() to share.
+export type SpacerPlans = Map<HTMLElement, SpacerPlan>;
+
+const plainPlan = (height: number): SpacerPlan => ({ kind: 'plain', margins: [0, 0], height });
+
+// A 'block' plan's margins are read afterwards (readEscapingMargins).
+const planSpacer = (el: HTMLElement, height: number): SpacerPlan => {
+  const style = getComputedStyle(el);
+  const parent = layoutContainer(el);
+  const parentStyle = parent && getComputedStyle(parent);
+
+  if (!parentStyle || !el.offsetHeight || style.position === 'absolute' || style.position === 'fixed'
+    || FLOATS.includes(style.cssFloat) || style.display.startsWith('inline')) {
+    return plainPlan(height);
+  }
+
+  const flex = parentStyle.display.includes('flex');
+
+  if (!flex && !parentStyle.display.includes('grid')) return { kind: 'block', margins: [0, 0], height };
+
+  const oneColumn = flex
+    ? parentStyle.flexDirection.startsWith('column') && parentStyle.flexWrap === 'nowrap'
+    // Line names ([full-start], say) aren't tracks.
+    : parentStyle.gridTemplateColumns.replace(/\[[^\]]*\]/g, '').trim().split(/\s+/).length === 1;
+
+  // 'normal' is 0. A % gap reads as its number, and the check below sends it plain.
+  return oneColumn
+    ? { kind: 'stack', margins: [-(parseFloat(parentStyle.rowGap) || 0), 0], height }
+    : plainPlan(height);
+};
+
+// The positive and negative part of the margins escaping each element's bottom edge: a probe
+// right after it with its top margin at 0, -SPACER_PROBE_PX and +SPACER_PROBE_PX, each giving
+// the collapsed margin as the distance to a 1px marker after it. The marker's bottom margin
+// takes the probe's back, so what follows moves by the margins the pair splits, never by
+// SPACER_PROBE_PX. Distances, not positions, so a transform or relative offset on the element
+// cancels out. An element inside another is read first, with nothing of the outer one's in place.
+const readEscapingMargins = (elements: readonly HTMLElement[], plans: SpacerPlans) => {
+  let left = [...elements];
+
+  while (left.length) {
+    const batch = left.filter((el) => !left.some((other) => other !== el && el.contains(other)));
+    const probes = batch.map((el) => {
+      const probe = createEmptyBlock();
+      const marker = createEmptyBlock({ height: '1px' });
+
+      el.after(probe, marker);
+
+      return { el, probe, marker };
+    });
+
+    const read = (margin: number) => {
+      probes.forEach(({ probe, marker }) => {
+        probe.style.setProperty('margin-top', `${margin}px`, 'important');
+        marker.style.setProperty('margin-bottom', `${-margin}px`, 'important');
+      });
+
+      return probes.map(({ el, marker }) =>
+        marker.getBoundingClientRect().top - el.getBoundingClientRect().bottom);
+    };
+
+    const collapsed = read(0);
+    const withNegative = read(-SPACER_PROBE_PX);
+    const withPositive = read(SPACER_PROBE_PX);
+
+    probes.forEach(({ el, probe, marker }, i) => {
+      probe.remove();
+      marker.remove();
+      plans.get(el)!.margins = [
+        collapsed[i] - withPositive[i] + SPACER_PROBE_PX,
+        collapsed[i] - withNegative[i] - SPACER_PROBE_PX,
+      ];
+    });
+    left = left.filter((el) => !batch.includes(el));
+  }
+};
+
+const buildSpacer = (height: number, { kind, margins: [top, bottom] }: SpacerPlan) => {
+  const spacer = createEmptyBlock({ height: `${height}px` });
+
+  if (kind === 'stack') spacer.style.setProperty('margin-top', `${top}px`, 'important');
+
+  // With no margin escaping, a block plan's spacer alone lays out the same.
+  if (kind !== 'block' || (!top && !bottom)) return [spacer];
+
+  return [
+    createEmptyBlock({
+      'margin-top': `${SPACER_PROBE_PX}px`, 'margin-bottom': `${-SPACER_PROBE_PX}px`,
+    }),
+    spacer,
+    createEmptyBlock({ 'margin-top': `${top}px`, 'margin-bottom': `${bottom}px` }),
+  ];
+};
+
+// What comes after el, at each level up to the body's children, starting below el's top: what
+// sits beside el or an ancestor (a sidebar in a flex row, say) is left out, as is anything out of
+// flow, boxless or sticky (a stuck one stays where it is).
+const followingInFlow = (el: HTMLElement): Element[] => {
+  const found: Element[] = [];
+  const top = el.getBoundingClientRect().top;
+
+  for (let node: Element | null = el; node && node !== document.body; node = node.parentElement) {
+    for (let next = node.nextElementSibling; next; next = next.nextElementSibling) {
+      if (next.getClientRects().length && next.getBoundingClientRect().top > top
+        && !['absolute', 'fixed', 'sticky'].includes(getComputedStyle(next).position)) found.push(next);
+    }
+  }
+
+  return found;
+};
+
+const placeSpacers = (spacers: readonly { after: HTMLElement; height: number }[],
+  plans: SpacerPlans) => spacers.flatMap(({ after, height }) => {
+  const elements = buildSpacer(height, plans.get(after)!);
+
+  after.after(...elements);
+
+  return elements;
+});
+
+// Whether these spacers, in place together, move everything after each by exactly the heights of
+// those before it.
+const movesFollowingExactly = (spacers: readonly { after: HTMLElement; height: number }[],
+  plans: SpacerPlans) => {
+  const following = [...new Set(spacers.flatMap(({ after }) => followingInFlow(after)))];
+  const before = following.map((el) => el.getBoundingClientRect().top);
+  const inserted = placeSpacers(spacers, plans);
+  const exact = following.length > 0 && following.every((el, i) => {
+    const expected = spacers.reduce((sum, { after, height }) => sum
+      + (after.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING
+        && !after.contains(el)
+        ? height
+        : 0), 0);
+
+    return Math.abs(el.getBoundingClientRect().top - before[i] - expected)
+      <= SPACER_SHIFT_TOLERANCE_PX;
+  });
+
+  inserted.forEach((el) => el.remove());
+
+  return exact;
+};
+
+// Puts a block of each height right after its element, shaped so that what follows sits where the
+// dwell would put it (see SpacerPlan), and returns a function that takes them out. A plan stays
+// only where it moves everything after its element by exactly the height (this call's plans
+// together or, failing that, each alone); one that doesn't (a grid row's minimum height, free space
+// a flex column spreads, a clearing element, ...) goes plain.
+export const insertSpacers = (
+  spacers: readonly { after: HTMLElement; height: number }[],
+  plans: SpacerPlans = new Map(),
+): (() => void) => {
+  // Planned again at another height: whether a plan moves what follows exactly can depend on it.
+  const fresh = spacers.filter(({ after, height }) => plans.get(after)?.height !== height);
+
+  fresh.forEach(({ after, height }) => plans.set(after, planSpacer(after, height)));
+  readEscapingMargins(fresh.map(({ after }) => after)
+    .filter((after) => plans.get(after)!.kind === 'block'), plans);
+
+  const shaped = fresh.filter(({ after }) => plans.get(after)!.kind !== 'plain');
+
+  if (shaped.length && !movesFollowingExactly(shaped, plans)) {
+    shaped.forEach(({ after, height }) => {
+      if (!movesFollowingExactly([{ after, height }], plans)) plans.set(after, plainPlan(height));
+    });
+  }
+
+  const inserted = placeSpacers(spacers, plans);
+
+  return () => inserted.forEach((el) => el.remove());
 };
 
 type MoveTarget = Node & { moveBefore?: (node: Node, child: Node | null) => void };
