@@ -26,9 +26,10 @@
     </style>
   </head>
   <body>
-    <!-- Each pin releases at its own .end reaching the viewport's top, except #self, which keeps
-         the default end and releases at its own bottom edge. The spacers keep one pin's range
-         clear of the next. -->
+    <!-- Each pin releases at its own .end reaching the viewport's top, except #strut-self and
+         #self, which keep the default end and release at their own bottom edge, and
+         #float-before (data-release="top"), whose end comes before it engages and which pins
+         nothing. The spacers keep one pin's range clear of the next. -->
     <div id="bottom" class="pin" style="margin-bottom: 50px"></div>
     <div class="gap"></div>
     <div id="bottom-end" class="end"></div>
@@ -45,6 +46,42 @@
     <div class="gap"></div>
     <div id="percent-end" class="end"></div>
     <div class="spacer"></div>
+    <div id="float" class="pin" style="float: left; width: 50%; margin-top: 40px"></div>
+    <div class="gap" style="clear: both"></div>
+    <div id="float-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="float-negative" class="pin" style="float: left; width: 50%; margin-top: -20px"></div>
+    <div class="gap" style="clear: both"></div>
+    <div id="float-negative-end" class="end"></div>
+    <div class="spacer"></div>
+    <div>
+      <div id="inline" class="pin" style="display: inline-block; width: 50%; margin-top: 40px; vertical-align: top"></div>
+    </div>
+    <div class="gap"></div>
+    <div id="inline-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="float-all" class="pin" style="float: left; width: 50%; margin: 40px 30px 50px 20px"></div>
+    <div class="gap" style="clear: both"></div>
+    <div id="float-all-end" class="end"></div>
+    <div class="spacer"></div>
+    <div style="display: flex">
+      <div id="item-inline" class="pin" style="display: inline-flex; width: 50%; margin-top: 40px; vertical-align: top"></div>
+    </div>
+    <div class="gap"></div>
+    <div id="item-inline-end" class="end"></div>
+    <div class="spacer"></div>
+    <div style="font-size: 40px; line-height: 60px">
+      text <div id="strut" class="pin" style="display: inline-block; width: 50%; height: 10px; vertical-align: bottom"></div>
+    </div>
+    <div class="gap"></div>
+    <div id="strut-end" class="end"></div>
+    <div class="spacer"></div>
+    <div style="font-size: 40px; line-height: 60px">
+      text <div id="strut-self" class="pin" style="display: inline-block; width: 50%; height: 10px; vertical-align: bottom"></div>
+    </div>
+    <div class="spacer"></div>
+    <div id="float-before" class="pin" data-release="top" style="float: left; width: 50%; margin-top: -20px"></div>
+    <div class="spacer" style="clear: both"></div>
     <div id="self" class="pin" style="margin-bottom: 50px"></div>
     <div class="tail"></div>
     <div class="root"></div>
@@ -54,9 +91,14 @@
 
       const sticky = new StickyScrollTrigger('.root');
 
-      ['bottom', 'both', 'negative', 'percent'].forEach((id) => {
+      [
+        'bottom', 'both', 'negative', 'percent', 'float', 'float-negative', 'inline', 'float-all',
+        'item-inline', 'strut',
+      ].forEach((id) => {
         sticky.createStickyPin({ trigger: `#${id}`, endTrigger: `#${id}-end`, end: 'top top' });
       });
+      sticky.createStickyPin({ trigger: '#strut-self' });
+      sticky.createStickyPin({ trigger: '#float-before', end: 'top bottom' });
       sticky.createStickyPin({ trigger: '#self' });
       sticky.refresh();
 
@@ -68,9 +110,10 @@
         // Measured from scroll 0, where no pin is stuck yet.
         window.scrollTo(0, 0);
 
+        const top = pin.getBoundingClientRect().top + window.scrollY;
         const release = end
           ? end.getBoundingClientRect().top + window.scrollY
-          : pin.getBoundingClientRect().top + window.scrollY + pin.getBoundingClientRect().height;
+          : top + (pin.dataset.release === 'top' ? 0 : pin.getBoundingClientRect().height);
         const topAt = (y) => {
           window.scrollTo(0, y);
 

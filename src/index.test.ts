@@ -2962,10 +2962,10 @@ describe('createStickyPin()', () => {
     expect([outer.getAttribute('style'), inner.style.height]).toEqual(before);
   });
 
-  // trigger's own top margin collapses through inner and stops at outer, which contain:layout
-  // makes a formatting context, so a pinned trigger rests at exactly the top its start clause
-  // names. An overflow or contain on inner would make it a formatting context too, and the margin
-  // would push trigger down inside the reserved box instead.
+  // A block-level trigger's own top margin collapses through inner and stops at outer, which
+  // contain:layout makes a formatting context, so a pinned trigger rests at exactly the top its
+  // start clause names. An overflow or contain on inner would make it a formatting context too,
+  // and the margin would push trigger down inside the reserved box instead.
   it('leaves inner without a formatting context of its own, whatever a page rule on divs sets', () => {
     const { query, controller } = setup();
     const trigger = query('.inside');

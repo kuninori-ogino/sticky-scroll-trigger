@@ -1447,7 +1447,9 @@ test('createStickyPin releases on time with trigger and endTrigger across the co
 });
 
 // Each pin holds through the scroll its end names and moves a pixel later, whatever its margins,
-// negative and percentage ones included.
+// negative and percentage ones too. So do floated and inline-level pins and an inline-level flex
+// item, whose top margin and line strut sit inside the range. One whose end comes before it
+// engages moves on at once.
 test('createStickyPin releases at the scroll its end names, whatever trigger\'s margins', async ({
   page,
 }) => {
@@ -1457,7 +1459,10 @@ test('createStickyPin releases at the scroll its end names, whatever trigger\'s 
     __topsAroundRelease: (id: string) => { atRelease: number; after: number };
   };
 
-  for (const id of ['bottom', 'both', 'negative', 'percent', 'self']) {
+  for (const id of [
+    'bottom', 'both', 'negative', 'percent', 'float', 'float-negative', 'inline', 'float-all',
+    'item-inline', 'strut', 'strut-self', 'float-before', 'self',
+  ]) {
     const tops = await page.evaluate(
       (pinId) => (window as unknown as FixtureWindow).__topsAroundRelease(pinId),
       id,

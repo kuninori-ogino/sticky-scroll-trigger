@@ -1230,11 +1230,12 @@ export default class StickyScrollTrigger {
 
   // Works out pin layers' sticky top and spacer height. Pinning here is plain position:sticky, so
   // unlike Scene/Cover layers this never hands GSAP an absolute scroll position. The spacer height
-  // spans from trigger's natural top to the release scroll resolvePinReleaseScroll returns, plus
-  // the sticky top, trigger's own height and its bottom margin (a sticky element unpins once its
-  // margin box catches up to the bottom of its containing block). A pin inside the shared
-  // container stands still with it through every freeze, so its range, measured in the
-  // container's own coordinates, leaves out the dwell gone by at release.
+  // spans from inner's top (trigger's natural top in block flow) to the release scroll
+  // resolvePinReleaseScroll returns, plus the sticky top, trigger's own height and its bottom
+  // margin (a sticky element unpins once its margin box catches up to the bottom of its
+  // containing block). A pin inside the shared container stands still with it through every
+  // freeze, so its range, measured in the container's own coordinates, leaves out the dwell gone
+  // by at release.
   //
   // Every pin is measured before any is written: a pin inside an earlier pin's trigger would
   // otherwise be read with that pin stuck, off by its stuck offset.
@@ -1297,18 +1298,24 @@ export default class StickyScrollTrigger {
       const frozenAtRelease = this.#rootElement.contains(layer.trigger)
         ? dwellConsumedAt(releaseScroll, this.#engagedWindows())
         : 0;
-      const height = releaseScroll - frozenAtRelease - triggerTop + topPx + triggerHeight
+      // The range runs from inner's top, which can sit above or below trigger's: a floated or
+      // inline-level trigger's top margin doesn't collapse through it, and a line puts its strut
+      // above an inline-level one. A trigger with no box (display: none or contents) has no top in
+      // inner, so its range runs from its documentTop of 0, and one shown before the next
+      // refresh() still pins for a '+=' end.
+      const innerTop = documentTop(layer.inner);
+      const rangeTop = layer.trigger.getClientRects().length > 0 ? innerTop : triggerTop;
+      const height = releaseScroll - frozenAtRelease - rangeTop + topPx + triggerHeight
         + triggerMarginBottom;
       // Nothing contains inner's overflow, so a range running past the page's end would make the
       // page taller. Such a pin can't release before the scroll runs out anyway, so the range
-      // stops at the end, measured from inner: a trigger with no box (display: none or contents)
-      // has a documentTop of 0. Wrappers carrying the pin down don't matter: all three engines
-      // leave sticky offsets out of the scrollable area. jsdom reports no height, so there's no
-      // end.
-      const room = documentHeight > 0 ? documentHeight - documentTop(layer.inner) : Infinity;
-      // A pin released before it engages still gets trigger's own height, which pins nothing just
-      // as 0 does, so a percentage height on trigger doesn't collapse to 0.
-      const still = triggerHeight + triggerMarginBottom;
+      // stops at the end, measured from inner. Wrappers carrying the pin down don't matter: all
+      // three engines leave sticky offsets out of the scrollable area. jsdom reports no height, so
+      // there's no end.
+      const room = documentHeight > 0 ? documentHeight - innerTop : Infinity;
+      // A pin released before it engages still gets a range down to trigger's bottom margin edge,
+      // which pins nothing just as 0 does, so a percentage height on trigger doesn't collapse to 0.
+      const still = triggerTop - rangeTop + triggerHeight + triggerMarginBottom;
 
       return [{ layer, topPx, range: Math.max(0, Math.min(Math.max(height, still), room)) }];
     });
