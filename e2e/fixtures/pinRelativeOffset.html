@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinRelativeOffset fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .pin {
+        height: 100px;
+        background: #c33;
+      }
+      .gap {
+        height: 400px;
+      }
+      .end {
+        height: 100px;
+      }
+      .spacer {
+        height: 150vh;
+      }
+      .tail {
+        height: 200vh;
+      }
+      #rule {
+        position: relative;
+        top: 30px;
+        left: 20px;
+      }
+      #rule-em {
+        position: relative;
+        top: 2em;
+      }
+      #rule-float,
+      #rule-float-before {
+        position: relative;
+        top: 30px;
+      }
+      /* On outer as well as trigger, as a descendant rule reaches both. */
+      #every div {
+        position: relative;
+        top: 10px;
+      }
+      #percent-box {
+        height: 300px;
+      }
+      /* Matches outer in trigger's place, but not trigger itself. */
+      #outer-rule > div:not(#outer-rule-pin) {
+        position: relative;
+        top: 10px;
+      }
+      .moved {
+        position: relative;
+        top: 40px;
+      }
+      /* Keeps #imp from going sticky, as from GSAP's fixed. */
+      #imp {
+        position: relative !important;
+        top: 30px;
+        left: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Each pin engages where it sits unpinned, its relative offset included, and releases at its
+         own .end reaching the viewport's top, except #float-before and #rule-float-before, whose
+         end comes before they engage and which pin nothing. The offset a rule gives
+         #outer-rule-pin's outer isn't carried, nor #moved's once it's gone: each engages and
+         releases as with no offset. #abs-rel's and #abs-item's ends are absolute inside them,
+         where a relative trigger lays them out, its border or margin apart from the wrapper's
+         edge. A percentage resolves as unwrapped, against trigger's own container: #percent's
+         box's height, #pct-flex's flex container's, #pct-left's width. #pct-bottom's bottom is
+         ignored beside its top, #pct-auto's top (a percentage under an auto height) beside its
+         bottom on every refresh(), and #pct-rtl's left beside its right, which a right-to-left
+         container takes over a left-to-right trigger's left (padded away from the viewport's edge,
+         where a sticky trigger's own right would hold it there anyway). #imp, kept from going sticky by
+         a rule's !important, never pins and stays where its rule's offset puts it. -->
+    <div class="gap"></div>
+    <div id="inline" class="pin" style="position: relative; top: 40px"></div>
+    <div class="gap"></div>
+    <div id="inline-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="bottom" class="pin" style="position: relative; bottom: 20px"></div>
+    <div class="gap"></div>
+    <div id="bottom-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="rule" class="pin"></div>
+    <div class="gap"></div>
+    <div id="rule-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="rule-em" class="pin"></div>
+    <div class="gap"></div>
+    <div id="rule-em-end" class="end"></div>
+    <div class="spacer"></div>
+    <div style="display: flow-root">
+      <div
+        id="float"
+        class="pin"
+        style="position: relative; top: 40px; float: left; width: 100px; margin-top: 20px"
+      ></div>
+    </div>
+    <div class="gap"></div>
+    <div id="float-end" class="end"></div>
+    <div class="spacer"></div>
+    <div style="display: flow-root">
+      <span id="rule-float" class="pin" style="display: block; float: left; margin-top: 40px">
+        x
+      </span>
+    </div>
+    <div class="gap"></div>
+    <div id="rule-float-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="every">
+      <div id="every-pin" class="pin"></div>
+    </div>
+    <div class="gap"></div>
+    <div id="every-pin-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="percent-box">
+      <div id="percent" class="pin" style="position: relative; top: 10%"></div>
+    </div>
+    <div class="gap"></div>
+    <div id="percent-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="outer-rule">
+      <div id="outer-rule-pin" class="pin"></div>
+    </div>
+    <div class="gap"></div>
+    <div id="outer-rule-pin-end" class="end"></div>
+    <div class="spacer"></div>
+    <div
+      id="abs-rel"
+      class="pin"
+      style="position: relative; top: 30px; border-top: 10px solid; border-bottom: 10px solid"
+    >
+      <div id="abs-rel-end" style="position: absolute; bottom: 0; height: 10px"></div>
+    </div>
+    <div class="spacer"></div>
+    <div style="display: flow-root">
+      <div
+        id="abs-item"
+        class="pin"
+        style="position: relative; display: inline-block; width: 200px; margin-bottom: 30px; border: 10px solid"
+      >
+        <div id="abs-item-end" style="position: absolute; bottom: 0; height: 10px"></div>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <div id="pct-bottom" class="pin" style="position: relative; top: 40px; bottom: 10%"></div>
+    <div class="gap"></div>
+    <div id="pct-bottom-end" class="end"></div>
+    <div class="spacer"></div>
+    <div dir="rtl" style="padding-right: 100px">
+      <div
+        id="pct-rtl"
+        class="pin"
+        dir="ltr"
+        style="position: relative; top: 40px; left: 10%; right: 20px; width: 200px"
+      ></div>
+    </div>
+    <div class="gap"></div>
+    <div id="pct-rtl-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="pct-auto" class="pin" style="position: relative; top: 10%; bottom: 20px"></div>
+    <div class="gap"></div>
+    <div id="pct-auto-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="pct-left" class="pin" style="position: relative; left: 10%; width: 200px"></div>
+    <div class="gap"></div>
+    <div id="pct-left-end" class="end"></div>
+    <div class="spacer"></div>
+    <div style="display: flex; height: 300px">
+      <div id="pct-flex" class="pin" style="position: relative; top: 10%; width: 200px"></div>
+    </div>
+    <div class="gap"></div>
+    <div id="pct-flex-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="moved" class="pin moved"></div>
+    <div class="gap"></div>
+    <div id="moved-end" class="end"></div>
+    <div class="spacer"></div>
+    <div id="nest" class="pin" style="position: relative; top: 40px; height: 300px">
+      <div class="end"></div>
+      <div id="nest-child" class="pin" style="position: relative; top: 20px"></div>
+    </div>
+    <div class="spacer"></div>
+    <div id="imp" class="pin"></div>
+    <div class="spacer"></div>
+    <div
+      id="float-before"
+      class="pin"
+      style="position: relative; top: 40px; float: left; width: 100px"
+    ></div>
+    <div style="clear: both"></div>
+    <div class="spacer"></div>
+    <div style="display: flow-root">
+      <div id="rule-float-before" class="pin" style="float: left; width: 100px"></div>
+    </div>
+    <div class="tail"></div>
+    <div class="root"></div>
+    <script type="module">
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      const ids = [
+        'inline', 'bottom', 'rule', 'rule-em', 'float', 'rule-float', 'every-pin', 'percent',
+        'outer-rule-pin', 'moved', 'float-before', 'rule-float-before', 'abs-rel', 'abs-item',
+        'pct-bottom', 'pct-rtl', 'pct-auto', 'pct-left', 'pct-flex',
+      ];
+      const box = (id) => {
+        const { top, left } = document.getElementById(id).getBoundingClientRect();
+
+        return { top: top + window.scrollY, left };
+      };
+      // Where each pin sits unpinned, its offset included.
+      const natural = Object.fromEntries([...ids, 'nest', 'nest-child', 'imp'].map((id) => [id, box(id)]));
+
+      // #moved loses its offset after the first refresh().
+      natural.moved.top -= 40;
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      ids.forEach((id) => {
+        const before = id.endsWith('before');
+
+        sticky.createStickyPin({
+          trigger: `#${id}`,
+          ...(before ? { end: 'top bottom' } : { endTrigger: `#${id}-end`, end: 'top top' }),
+        });
+      });
+      // Nested, each with its own offset.
+      sticky.createStickyPin({ trigger: '#nest', end: '+=100' });
+      sticky.createStickyPin({ trigger: '#nest-child', end: '+=100' });
+      // Never pins, so stays where its rule's offset puts it, a sticky top of 50vh apart.
+      sticky.createStickyPin({ trigger: '#imp', start: 'top center', end: '+=100' });
+      sticky.refresh();
+      document.getElementById('moved').classList.remove('moved');
+      // A second one, as GSAP's own refresh at load would make: inner holds a range by then, which a
+      // percentage offset would resolve against.
+      sticky.refresh();
+
+      // How far a pin sits from its unpinned place at scroll 0, and resolveScrollPosition's 'top top'
+      // for it from there.
+      window.__rest = (id) => {
+        window.scrollTo(0, 0);
+
+        const { top, left } = box(id);
+
+        return [top - natural[id].top, left - natural[id].left];
+      };
+      window.__resolved = (id) => sticky.resolveScrollPosition(`#${id}`, 'top top') - natural[id].top;
+
+      // Where the pin's top sits in the viewport a pixel before and at the scroll it engages at
+      // unpinned, and at the scroll its end names and a pixel later (for one whose end comes
+      // before it engages, the scroll it engages at), with how far its left edge sits from its
+      // unpinned one while it's pinned.
+      window.__tops = (id) => {
+        const pin = document.getElementById(id);
+        const end = document.getElementById(`${id}-end`);
+
+        window.scrollTo(0, 0);
+
+        const release = end ? box(`${id}-end`).top : natural[id].top;
+        const topAt = (y) => {
+          window.scrollTo(0, y);
+
+          return pin.getBoundingClientRect().top;
+        };
+
+        return {
+          beforeEngage: topAt(natural[id].top - 1),
+          atEngage: topAt(natural[id].top),
+          left: pin.getBoundingClientRect().left - natural[id].left,
+          atRelease: topAt(release),
+          after: topAt(release + 1),
+        };
+      };
+    </script>
+  </body>
+</html>

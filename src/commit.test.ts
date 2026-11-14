@@ -10,10 +10,14 @@ import {
   commitHeldMargin,
   commitInert,
   commitMarginProbe,
+  captureOuterPosition,
+  commitOuterPosition,
+  commitPinOffsets,
   commitPosition,
   commitSticky,
+  holdRelativeForRead,
 } from './commit';
-import { captureInlinePosition } from './dom';
+import { captureInlinePosition, liftAboveStickyWrapper } from './dom';
 
 // Only inline styles, which jsdom handles in full.
 
@@ -213,5 +217,90 @@ describe('commitCssText', () => {
 
     expect(el.style.cssText).toBe('height: 5px; width: 20px;');
     expect(setAttribute).not.toHaveBeenCalled();
+  });
+});
+
+describe('commitPinOffsets', () => {
+  const offsets = (el: HTMLElement) => ['position', 'top', 'right', 'bottom', 'left'].map(
+    (property) => `${el.style.getPropertyValue(property)} ${el.style.getPropertyPriority(property)}`,
+  );
+
+  it('makes outer relative with the offset in px, all !important', () => {
+    const outer = element();
+
+    commitPinOffsets(outer, { top: 40, left: -12.5 });
+
+    expect(offsets(outer)).toEqual([
+      'relative important', '40px important', 'auto important', 'auto important',
+      '-12.5px important',
+    ]);
+  });
+
+  it('makes outer static with none, relative where a cover\'s lift raises it', () => {
+    document.body.innerHTML = '<div id="cover"></div><div id="outer"></div>';
+
+    const outer = document.getElementById('outer')!;
+
+    commitPinOffsets(outer, null);
+    expect(offsets(outer)[0]).toBe('static important');
+
+    const restore = liftAboveStickyWrapper(document.getElementById('cover')!);
+
+    commitPinOffsets(outer, null);
+    expect(offsets(outer).slice(0, 2)).toEqual(['relative important', 'auto important']);
+
+    // The lift wrote relative !important too, so its restore finds its own value: static is back.
+    restore();
+    expect(offsets(outer)[0]).toBe('static important');
+  });
+
+  // The lift's restore gives outer what the last commit would without the lift, whichever of the
+  // two wrote position first.
+  it.each([
+    ['an offset carried since the lift', 'position: static !important', { top: 40, left: 0 }, 'relative'],
+    ['none, over a lift made before outer had a position', '', null, 'static'],
+  ])('leaves outer as unlifted on the lift\'s restore: %s', (_, style, carried, position) => {
+    document.body.innerHTML = `<div id="cover"></div><div id="outer" style="${style}"></div>`;
+
+    const outer = document.getElementById('outer')!;
+    const restore = liftAboveStickyWrapper(document.getElementById('cover')!);
+
+    commitPinOffsets(outer, carried);
+    restore();
+
+    expect(offsets(outer).slice(0, 2))
+      .toEqual([`${position} important`, carried ? '40px important' : 'auto important']);
+  });
+});
+
+describe('holdRelativeForRead', () => {
+  it('keeps trigger relative with every offset at auto, !important', () => {
+    const el = element('position: relative; top: 40px; left: 20px');
+
+    holdRelativeForRead(el);
+
+    expect(el.style.cssText).toBe('position: relative !important; top: auto !important; '
+      + 'left: auto !important; bottom: auto !important; right: auto !important;');
+  });
+});
+
+describe('commitOuterPosition', () => {
+  // A rollback puts the lift's record back with outer's offset, so a lift coming off later leaves
+  // outer as the last successful refresh() did.
+  it('rolls back outer\'s offset and the position handed to the lift', () => {
+    document.body.innerHTML = '<div id="cover"></div><div id="outer"></div>';
+
+    const outer = document.getElementById('outer')!;
+    const restore = liftAboveStickyWrapper(document.getElementById('cover')!);
+
+    commitPinOffsets(outer, { top: 40, left: 0 });
+
+    const saved = captureOuterPosition(outer);
+
+    commitPinOffsets(outer, null);
+    commitOuterPosition(outer, saved);
+    restore();
+
+    expect([outer.style.position, outer.style.top]).toEqual(['relative', '40px']);
   });
 });

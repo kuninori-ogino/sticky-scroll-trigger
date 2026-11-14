@@ -1473,6 +1473,52 @@ test('createStickyPin releases at the scroll its end names, whatever trigger\'s 
   }
 });
 
+// A relative offset on trigger, inline or from a page rule, moves the pin as it moves trigger
+// unpinned (GSAP's spacer carries it): each pin engages where it sits unpinned, keeps its left
+// edge there, and releases where its end names, a percentage one resolved as unwrapped. One whose
+// end comes before it engages pins nothing, and a rule's offset on outer and an offset since
+// removed are left out. A pin inside another carries its own offset only. An end absolute inside a
+// relative trigger is read where trigger lays it out, as GSAP's pin keeps its position. One a page
+// rule keeps from pinning stays where the rule's offset puts it, and is resolved there.
+test('createStickyPin keeps trigger\'s relative offset', async ({ page }) => {
+  await page.goto('/fixtures/pinRelativeOffset.html');
+
+  type FixtureWindow = Window & {
+    __tops: (id: string) => Record<
+      'beforeEngage' | 'atEngage' | 'left' | 'atRelease' | 'after', number
+    >;
+    __rest: (id: string) => number[];
+    __resolved: (id: string) => number;
+  };
+
+  for (const id of [
+    'inline', 'bottom', 'rule', 'rule-em', 'float', 'rule-float', 'every-pin', 'percent',
+    'outer-rule-pin', 'moved', 'float-before', 'rule-float-before', 'abs-rel', 'abs-item',
+    'pct-bottom', 'pct-rtl', 'pct-auto', 'pct-left', 'pct-flex',
+  ]) {
+    const tops = await page.evaluate(
+      (pinId) => (window as unknown as FixtureWindow).__tops(pinId),
+      id,
+    );
+
+    expect(tops.beforeEngage, `#${id} a pixel before it engages`).toBeCloseTo(1, 0);
+    expect(tops.atEngage, `#${id} where it engages`).toBeCloseTo(0, 0);
+    expect(tops.left, `#${id}'s left edge off its own`).toBeCloseTo(0, 0);
+    expect(tops.atRelease, `#${id} at release`).toBeCloseTo(0, 0);
+    expect(tops.after, `#${id} a pixel later`).toBeCloseTo(-1, 0);
+  }
+
+  for (const id of ['nest', 'nest-child', 'imp']) {
+    expect(await page.evaluate(
+      (pinId) => (window as unknown as FixtureWindow).__rest(pinId),
+      id,
+    ), `#${id} at rest`).toEqual([0, 0]);
+  }
+
+  expect(await page.evaluate(() => (window as unknown as FixtureWindow).__resolved('imp')), '#imp resolved')
+    .toBeCloseTo(0, 0);
+});
+
 // A page rule on divs that matches a pin's inner, or one on every div as a descendant rule is,
 // leaves the range as the plan sizes it: the pin keeps its size, engages where it sits unpinned and
 // releases where its end names, what follows stays put, a fixed element inside trigger stays fixed,
@@ -4687,7 +4733,7 @@ const loadPinStickyReset = async (page: Page, query: Record<string, string>) => 
 };
 
 // A read gives the unstuck position at every scroll: before the pin (0), stuck (900) and past its
-// range (1600).
+// range (1600). A relative offset on the pin moves it there, as it does unpinned.
 for (const [description, query, expected] of [
   ['a pin the page makes position: sticky', { sheet: 'position: sticky; top: 50px' }, 700],
   ['a pin the page makes position: sticky !important', { sheet: 'position: sticky !important; top: 50px !important' }, 700],
@@ -4695,7 +4741,7 @@ for (const [description, query, expected] of [
   ['a pin with a stylesheet top !important', { sheet: 'top: 30px !important' }, 700],
   ['a pin with a stylesheet bottom', { sheet: 'bottom: 40px' }, 700],
   ['a pin with a stylesheet bottom !important', { sheet: 'bottom: 40px !important' }, 700],
-  ['a pin with a stylesheet position: relative and a top', { sheet: 'position: relative; top: 30px' }, 700],
+  ['a pin with a stylesheet position: relative and a top', { sheet: 'position: relative; top: 30px' }, 730],
   ['an absolute child of a pin', { abs: '1' }, 720],
   ['an absolute child of a layer', { kind: 'scene', abs: '1' }, 320],
 ] as const) {

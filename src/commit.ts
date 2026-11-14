@@ -6,8 +6,11 @@
  * A value cleared to measure past it is written again by the caller, even when unchanged.
  */
 
-import { restoreInlinePosition, setRangeHeight } from './dom';
-import type { InlinePosition } from './dom';
+import {
+  adoptLiftedPosition, captureInline, captureLiftedPosition, isLifted, resetStickyPosition,
+  restoreInline, restoreInlinePosition, restoreLiftedPosition, setRangeHeight,
+} from './dom';
+import type { InlinePosition, InlineValue, LiftedPosition, PinOffsets } from './dom';
 
 export const commitSticky = (el: HTMLElement, topPx: number): void => {
   el.style.position = 'sticky';
@@ -76,6 +79,67 @@ export const commitInert = (
   }
 
   if (container) commitContainerMargin(container, null);
+};
+
+const OFFSET_PROPERTIES = ['position', 'top', 'right', 'bottom', 'left'] as const;
+
+// trigger's relative offset on outer, as GSAP's spacer has it, !important so a page rule's offset
+// can't move it too. With none, outer is static, as GSAP's spacer isn't: a relative one made it the
+// containing block of a static trigger's absolute content, which the page without the pin lays
+// out against an ancestor (an endTrigger there released 100px early). Relative all the same where
+// a cover's lift raises it, as the lift does any static sibling, so its z-index applies.
+export const commitPinOffsets = (outer: HTMLElement, offsets: PinOffsets | null): void => {
+  const unlifted = offsets ? 'relative' : 'static';
+  const values = {
+    position: isLifted(outer) ? 'relative' : unlifted,
+    top: offsets ? `${offsets.top}px` : 'auto',
+    right: 'auto',
+    bottom: 'auto',
+    left: offsets ? `${offsets.left}px` : 'auto',
+  };
+
+  OFFSET_PROPERTIES.forEach((property) => {
+    outer.style.setProperty(property, values[property], 'important');
+  });
+
+  // The lift's restore leaves outer as this commit would without it.
+  adoptLiftedPosition(outer, { value: unlifted, priority: 'important' });
+};
+
+export interface OuterPosition {
+  values: InlineValue[];
+  lifted: LiftedPosition;
+}
+
+// outer's offset, and the lift's record of its position that commitPinOffsets hands over.
+export const captureOuterPosition = (outer: HTMLElement): OuterPosition => ({
+  values: OFFSET_PROPERTIES.map((property) => captureInline(outer, property)),
+  lifted: captureLiftedPosition(outer),
+});
+
+// Rolls outer's offset back after a pass that throws, so a lift coming off later leaves it as the
+// last successful refresh() would.
+export const commitOuterPosition = (outer: HTMLElement, saved: OuterPosition): void => {
+  OFFSET_PROPERTIES.forEach((property, i) => restoreInline(outer, property, saved.values[i]));
+  restoreLiftedPosition(outer, saved.lifted);
+};
+
+// Holds a trigger with no relative offset static for the reads, where it pins (a relative one goes
+// through holdRelativeForRead). Not !important, so a page rule's !important position, which sticky
+// doesn't get past either, stays.
+// The author's top stays too: static ignores it, and its computed value keeps its unit.
+export const holdPinForRead = (trigger: HTMLElement): void => {
+  trigger.style.position = 'static';
+};
+
+// A relative trigger stays one for the reads after the offset is measured, unshifted, as GSAP's pin
+// keeps its position with top and left at 0: still the containing block of its absolute content,
+// as it is stuck (an endTrigger there released late by trigger's border, or an item's margin).
+// left and right too, which a start or end function can read, so outer's offset isn't doubled.
+export const holdRelativeForRead = (trigger: HTMLElement): void => {
+  resetStickyPosition(trigger);
+  trigger.style.setProperty('left', 'auto', 'important');
+  trigger.style.setProperty('right', 'auto', 'important');
 };
 
 export const clearStickyForRead = (el: HTMLElement): void => {

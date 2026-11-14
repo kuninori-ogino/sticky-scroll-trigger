@@ -30,6 +30,7 @@ import {
   wrapPin,
   type SpacerPlans,
 } from './dom';
+import type { FittedPins, PinOffsets } from './dom';
 import {
   clearDormancy,
   isWebKit,
@@ -53,6 +54,7 @@ import {
 } from './gsap';
 import type { ScrollTriggerClass } from './gsap';
 import {
+  captureOuterPosition,
   clearHeightForRead,
   clearRangeForRead,
   clearStickyForRead,
@@ -63,9 +65,13 @@ import {
   commitHeldMargin,
   commitInert,
   commitMarginProbe,
+  commitOuterPosition,
+  commitPinOffsets,
   commitPosition,
   commitRange,
   commitSticky,
+  holdPinForRead,
+  holdRelativeForRead,
 } from './commit';
 import {
   asLayerHandler,
@@ -965,12 +971,19 @@ export default class StickyScrollTrigger {
   // the flow. Left to #planPinLayers, it would measure every Scene layer against the previous
   // refresh's height whenever a trigger's own height had changed, with no later pass to correct
   // it.
-  #reservePinSpace() {
-    const wrapped = this.#pinLayers.flatMap(({ outer, inner, trigger }) =>
-      outer && inner
-        ? [{ outer, inner, trigger, savedStyle: outer.style.cssText, range: inner.style.height }]
-        : [],
-    );
+  // Returns each pin's relative offset as fitPinBoxes read it, for #carryPinOffsets to write.
+  #reservePinSpace(): Map<PinLayer, PinOffsets | null> {
+    const wrapped = this.#pinLayers.flatMap((layer) => {
+      const { outer, inner, trigger, savedPosition } = layer;
+
+      return outer && inner
+        ? [{
+            layer, outer, inner, trigger, savedPosition,
+            savedStyle: outer.style.cssText,
+            range: inner.style.height,
+          }]
+        : [];
+    });
 
     // Every pin is cleared before any is measured, so a pin nested inside another's trigger
     // doesn't hold that trigger open at the range it's about to replace. inner is cleared too, so
@@ -982,6 +995,7 @@ export default class StickyScrollTrigger {
     });
 
     let reserved: number[];
+    let offsets: FittedPins['offsets'];
 
     try {
       // An item pin's outer is sized from trigger's own box instead: the line stretches outer's
@@ -991,7 +1005,9 @@ export default class StickyScrollTrigger {
 
       // Read in full before anything is written back, so all the writes share one reflow
       // instead of forcing one per pin.
-      reserved = wrapped.map(({ outer }, index) => fitted[index] ?? measureUsedHeight(outer));
+      reserved = wrapped.map(({ outer }, index) =>
+        fitted.reserved[index] ?? measureUsedHeight(outer));
+      ({ offsets } = fitted);
     } catch (error) {
       // outer goes back whole, item box and cleared height with it: the last refresh's box is the
       // better guess. trigger keeps whichever box fitPinBoxes left on it.
@@ -1012,6 +1028,12 @@ export default class StickyScrollTrigger {
     // inside inner, and the one fitPinBoxes carried onto outer stands in for it, so phase 1
     // measures the same layout with them present.
     wrapped.forEach(({ inner, range }) => commitRange(inner, range));
+
+    return new Map(wrapped.flatMap(({ layer }, index) => {
+      const offset = offsets[index];
+
+      return offset === undefined ? [] : [[layer, offset] as const];
+    }));
   }
 
   // #wrapUnwrappedPins's counterpart. Nulling outer keeps it idempotent: destroy() and a kill
@@ -1020,6 +1042,9 @@ export default class StickyScrollTrigger {
   #unwrapPinLayer(layer: PinLayer): boolean {
     if (!layer.outer) return false;
 
+    if (layer.heldPosition) commitPosition(layer.trigger, layer.heldPosition);
+
+    layer.heldPosition = null;
     unwrapPin(layer.outer, layer.trigger, layer.savedPosition);
     layer.outer = null;
     layer.inner = null;
@@ -1045,10 +1070,12 @@ export default class StickyScrollTrigger {
   // Snapshots and resets every wrapped pin's own sticky state, returning a function that puts it
   // back. A stuck pin shifts documentTop for its trigger and everything inside it, as a stuck
   // wrapper does (see #resetSceneCoverStickyState). A pin a start or end function kills meanwhile
-  // already has the caller's values back from its unwrap, so it's skipped.
+  // already has the caller's values back from its unwrap, so it's skipped. So is one that isn't
+  // sticky (see PinLayer's sticky): it can't be stuck, and a reset would undo a page rule's
+  // !important position or a refresh()'s hold.
   #resetPinStickyState(): () => void {
     const restores = this.#pinLayers
-      .filter(({ inner }) => inner)
+      .filter(({ inner, sticky }) => inner && sticky)
       .map((layer) => ({ layer, restore: stripStickyPositions([layer.trigger]) }));
 
     return () => restores.forEach(({ layer, restore }) => {
@@ -1117,12 +1144,20 @@ export default class StickyScrollTrigger {
   // a cover's 'max', and every pin, since a pin below the container moves with it. Sticky goes back
   // on after the last read, which also spares every read a sticky layout (the cost dormancy.ts
   // avoids).
-  #refreshGeometry(viewportHeight: number) {
+  #refreshGeometry(
+    viewportHeight: number,
+    pinOffsets: ReadonlyMap<PinLayer, PinOffsets | null>,
+  ) {
     let restoreAround = () => {};
 
-    readThenRestore(() => restoreAround(), () => this.#refreshOwnGeometry(viewportHeight, () => {
+    const resetAround = () => {
       restoreAround = StickyScrollTrigger.#resetStickyAround(this, this.#measuredElements());
-    }));
+    };
+
+    readThenRestore(
+      () => restoreAround(),
+      () => this.#refreshOwnGeometry(viewportHeight, pinOffsets, resetAround),
+    );
   }
 
   // What refresh() reads the position of. A cover is a sibling of its trigger, so only the cover
@@ -1137,13 +1172,19 @@ export default class StickyScrollTrigger {
     return [this.#rootElement, ...read, ...(this.#scrollMarginSync?.targets() ?? [])];
   }
 
-  #refreshOwnGeometry(viewportHeight: number, resetAround: () => void) {
+  #refreshOwnGeometry(
+    viewportHeight: number,
+    pinOffsets: ReadonlyMap<PinLayer, PinOffsets | null>,
+    resetAround: () => void,
+  ) {
     const active = this.#layers.filter((layer) => layer.wrapper !== null);
     const wrappers = active.flatMap(({ wrapper }) => (wrapper ? [wrapper] : []));
     const savedWrappers = wrappers.map(captureInlinePosition);
     const pins = this.#pinLayers.map((layer) => ({
       layer,
+      sticky: layer.sticky,
       position: captureInlinePosition(layer.trigger),
+      outerPosition: layer.outer ? captureOuterPosition(layer.outer) : null,
       range: layer.inner ? layer.inner.style.height : '',
     }));
     // Neither the writes nor the rollback touch a Scene wrapper once a start or end function's
@@ -1159,14 +1200,16 @@ export default class StickyScrollTrigger {
     // Every one cleared here is written again below, or rolled back on a throw. The rollback skips
     // a pin a start or end function killed meanwhile: its unwrap gave the caller's values back.
     wrappers.forEach(clearStickyForRead);
-    pins.forEach(({ layer }) => clearStickyForRead(layer.trigger));
-    // Its scroll read and its trip to 0 lay out none of them sticky.
-    resetAround();
+
+    StickyScrollTrigger.#carryPinOffsets(pins.map(({ layer }) => layer), pinOffsets);
 
     let stickyTops: Map<HTMLElement, number>;
     let marginTops: Map<HTMLElement, number>;
 
     try {
+      // Its scroll read and its trip to 0 lay out none of them sticky.
+      resetAround();
+
       const measured = active.length ? this.#measureLayers(viewportHeight, active) : null;
 
       marginTops = this.#measureScrollMarginTargets(active);
@@ -1182,8 +1225,13 @@ export default class StickyScrollTrigger {
         wrappers.forEach((wrapper, i) => commitPosition(wrapper, savedWrappers[i]));
       }
 
-      pins.forEach(({ layer, position }) => {
-        if (layer.inner) commitPosition(layer.trigger, position);
+      pins.forEach(({ layer, sticky, position, outerPosition }) => {
+        if (!layer.inner || !layer.outer || !outerPosition) return;
+
+        layer.sticky = sticky;
+        layer.heldPosition = null;
+        commitPosition(layer.trigger, position);
+        commitOuterPosition(layer.outer, outerPosition);
       });
 
       throw error;
@@ -1206,26 +1254,90 @@ export default class StickyScrollTrigger {
       }
     } catch (error) {
       commitWrapperTops(stickyTops);
-      pins.forEach(({ layer, position, range }) => {
-        if (!layer.inner) return;
+      pins.forEach(({ layer, sticky, position, outerPosition, range }) => {
+        if (!layer.inner || !layer.outer || !outerPosition) return;
 
+        layer.sticky = sticky;
+        layer.heldPosition = null;
         commitPosition(layer.trigger, position);
+        commitOuterPosition(layer.outer, outerPosition);
         commitRange(layer.inner, range);
       });
 
       throw error;
     }
 
+    // Read before any write: a trigger a page rule's !important position kept from the static hold
+    // can't go sticky either, so it gets its own position and top back, where sticky's top would
+    // shift it as an offset. GSAP's pin sits there too until it engages.
+    const unstickable = new Set(plannedPins.flatMap(({ layer }) => {
+      if (!layer.inner || layer.heldPosition) return [];
+
+      const { position } = getComputedStyle(layer.trigger);
+
+      return position === 'static' || position === 'sticky' ? [] : [layer];
+    }));
+
     commitWrapperTops(stickyTops);
-    // A later pin's start/end function can kill an earlier one, which unwraps it.
+
     plannedPins.forEach(({ layer, topPx, range }) => {
+      // A later pin's start/end function can kill an earlier one, which unwraps it.
       if (!layer.inner) return;
 
-      commitSticky(layer.trigger, topPx);
+      // The offsets a relative trigger was held at for the reads go.
+      if (layer.heldPosition) commitPosition(layer.trigger, layer.heldPosition);
+
+      layer.heldPosition = null;
+
+      layer.sticky = !unstickable.has(layer);
+
+      if (layer.sticky) {
+        commitSticky(layer.trigger, topPx);
+      } else {
+        commitPosition(layer.trigger, layer.savedPosition);
+      }
+
       commitRange(layer.inner, `${range}px`);
     });
     // Last, because these values derive from the freeze windows settled above.
     this.#syncScrollMargins(marginTops);
+  }
+
+  // trigger's relative offset, inline or from a page rule, goes onto outer, as GSAP's _swapPinIn
+  // moves a pin's onto its spacer, read by fitPinBoxes with trigger in its own containing block.
+  // One it couldn't read (no box: a hidden tab's, say) keeps what outer carries. trigger is held
+  // static, so the reads see it where it pins, and a relative one relative, unshifted
+  // (holdRelativeForRead), its inline position from before the hold kept on the layer.
+  static #carryPinOffsets(
+    layers: readonly PinLayer[],
+    offsets: ReadonlyMap<PinLayer, PinOffsets | null>,
+  ): void {
+    layers.forEach((layer) => {
+      const { outer, trigger } = layer;
+
+      if (!outer) return;
+
+      const offset = offsets.get(layer);
+
+      // Only ours is !important: the first refresh(), or one rolled back, hasn't written it yet.
+      if (offset !== undefined || outer.style.getPropertyPriority('position') !== 'important') {
+        commitPinOffsets(outer, offset && (offset.top || offset.left) ? offset : null);
+      }
+
+      // trigger's own position back first, so the last commit's sticky top doesn't shift one a
+      // page rule's position: relative !important keeps relative through the hold.
+      layer.sticky = false;
+      commitPosition(trigger, layer.savedPosition);
+
+      if (!offset) {
+        holdPinForRead(trigger);
+
+        return;
+      }
+
+      layer.heldPosition = captureInlinePosition(trigger);
+      holdRelativeForRead(trigger);
+    });
   }
 
   // Works out pin layers' sticky top and spacer height. Pinning here is plain position:sticky, so
@@ -1930,11 +2042,13 @@ export default class StickyScrollTrigger {
     // position, so a value the lift wrote there is never mistaken for the caller's.
     this.#restoreCoverLifts();
 
+    let pinOffsets: Map<PinLayer, PinOffsets | null>;
+
     try {
       // Both must happen before #refreshGeometry measures Scene/Cover positions (see each
       // one's own comment for why).
       this.#wrapUnwrappedPins();
-      this.#reservePinSpace();
+      pinOffsets = this.#reservePinSpace();
     } finally {
       // It goes back on after the build and the pin wrapping, so it walks the sibling chain those
       // leave behind rather than the elements they moved out of it. In a finally because wrapPin
@@ -1951,7 +2065,7 @@ export default class StickyScrollTrigger {
     const viewportHeight
       = this.#layers.length || this.#pinLayers.length ? measureViewportHeight() : 0;
 
-    this.#refreshGeometry(viewportHeight);
+    this.#refreshGeometry(viewportHeight, pinOffsets);
   }
 
   #coverLayers(): CoverLayer[] {
@@ -2359,6 +2473,8 @@ export default class StickyScrollTrigger {
       savedPosition: captureInlinePosition(trigger),
       outer: null,
       inner: null,
+      sticky: false,
+      heldPosition: null,
       start: withAfterFunction(top === undefined ? start ?? 'top top' : topToStartClause(top)),
       endTrigger,
       end: withAfterFunction(end),

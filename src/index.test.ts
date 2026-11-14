@@ -3437,6 +3437,47 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
     expect(trigger.style.top).toBe('8px');
   });
 
+  // A relative trigger held for the reads gets the author's values back at a kill there, not the
+  // hold's, a left set since the wrap included.
+  it('a relative pin killed while held for the reads keeps its trigger\'s inline offsets', () => {
+    const { query, controller } = setup();
+    const trigger = query('.inside');
+    let kill: (() => void) | null = null;
+
+    trigger.style.cssText = 'position: relative; top: 40px';
+    trigger.getClientRects = () => [new DOMRect()] as unknown as DOMRectList;
+
+    trigger.getBoundingClientRect = () => {
+      const moved = getComputedStyle(trigger).position === 'relative';
+
+      return { top: moved ? 40 : 0, left: 0 } as DOMRect;
+    };
+
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      start: () => {
+        kill?.();
+
+        return 'top top';
+      },
+      end: '+=500',
+    });
+
+    const vars = controller.createStickyPin({ trigger, endTrigger: query('.scene') });
+
+    controller.refresh();
+    trigger.style.left = '20px';
+
+    kill = () => {
+      kill = null;
+      vars.onKill?.(fakeSelf);
+    };
+
+    controller.refresh();
+
+    expect(trigger.style.cssText).toBe('position: relative; top: 40px; left: 20px;');
+  });
+
   // The rollback after the later pin's throw skips the pin the kill gave back.
   it('a pin killed from an earlier pin\'s end function keeps its inline position when a later pin throws', () => {
     const { query, controller } = setup();
@@ -4279,6 +4320,41 @@ describe('\'max\' end keyword', () => {
     expect(pin.style.top).toBe('39px');
   });
 
+  // Stuck again after either rollback, so the reads between refreshes reset it again.
+  it.each(['scene', 'pin'])('resets a pin rolled back after a %s option throws for later reads', (kind) => {
+    const { query, controller } = setup();
+    const pin = query('.inside');
+    let rejected = false;
+    let seen = '';
+
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: () => (rejected && kind === 'scene' ? 'max' : '+=500'),
+    });
+    controller.createStickyPin({ trigger: pin, endTrigger: query('.scene'), top: 39 });
+    controller.createStickyPin({
+      trigger: query('.outside'),
+      endTrigger: query('.scene'),
+      end: () => (rejected && kind === 'pin' ? 'max' : 'top top'),
+    });
+    controller.refresh();
+    rejected = true;
+
+    expect(() => controller.refresh()).toThrow(/'max'/);
+
+    Object.defineProperty(pin, 'offsetTop', {
+      configurable: true,
+      get: () => {
+        seen = pin.style.top;
+
+        return 0;
+      },
+    });
+    controller.resolveScrollPosition(pin, 'top top');
+
+    expect(seen).toBe('auto');
+  });
+
   // The third case in the same family, and the one the two above leave open: the pins' own state.
   // The throwing pin is registered first here, so pass 2 aborts before it reaches the good one.
   it('leaves the other pins\' sticky state intact when a pin option throws mid-refresh', () => {
@@ -4336,6 +4412,379 @@ describe('\'max\' end keyword', () => {
 
     expect(() => controller.refresh()).toThrow(/'max' keyword/);
     expect(good.style.top).toBe('39px');
+  });
+
+  // jsdom lays nothing out: trigger's rect stands in for how far a relative position moves it.
+  const offsetBy = (el: HTMLElement, top: number, left = 0) => {
+    el.getClientRects = () => [new DOMRect()] as unknown as DOMRectList;
+
+    el.getBoundingClientRect = () => {
+      const moved = getComputedStyle(el).position === 'relative';
+
+      return { top: moved ? top : 0, left: moved ? left : 0 } as DOMRect;
+    };
+  };
+
+  // trigger's relative offset goes onto outer, as GSAP's spacer carries it, stays there through a
+  // refresh() that throws, with trigger sticky again and nothing of the read's hold left on it, and
+  // comes off once trigger has none.
+  it('carries trigger\'s relative offset on outer', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+    let rejected = false;
+
+    good.style.cssText = 'position: relative; top: 40px; left: 30px';
+    offsetBy(good, 40, 30);
+    controller.createStickyPin({
+      trigger: good,
+      endTrigger: query('.scene'),
+      end: () => (rejected ? 'max' : 'top top'),
+    });
+    controller.refresh();
+
+    const outer = good.parentElement!.parentElement!;
+    const offset = () => [outer.style.position, outer.style.top, outer.style.getPropertyPriority('top')];
+
+    expect(offset()).toEqual(['relative', '40px', 'important']);
+    expect(good.style.position).toBe('sticky');
+
+    // The failing refresh() carries a new offset before it throws.
+    rejected = true;
+    offsetBy(good, 70);
+
+    expect(() => controller.refresh()).toThrow(/'max' keyword/);
+    expect(offset()).toEqual(['relative', '40px', 'important']);
+    expect(['position', 'bottom', 'left', 'right'].map((property) =>
+      `${good.style.getPropertyValue(property)} ${good.style.getPropertyPriority(property)}`))
+      .toEqual(['sticky ', ' ', '30px ', ' ']);
+
+    rejected = false;
+    offsetBy(good, 0);
+    controller.refresh();
+
+    // Static with none, so outer contains nothing of trigger's that the page doesn't.
+    expect(offset()).toEqual(['static', 'auto', 'important']);
+
+    controller.destroy();
+
+    expect(good.style.cssText).toBe('position: relative; top: 40px; left: 30px;');
+  });
+
+  // A Scene layer's read that throws comes before the pins are planned, and rolls back the same.
+  it('rolls outer\'s offset back when a Scene layer\'s read throws', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+    let rejected = false;
+
+    good.style.cssText = 'position: relative; top: 40px';
+    offsetBy(good, 40);
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: () => {
+        if (rejected) throw new Error('read failed');
+
+        return '+=100';
+      },
+    });
+    controller.createStickyPin({ trigger: good, endTrigger: query('.scene') });
+    controller.refresh();
+
+    const outer = good.parentElement!.parentElement!;
+
+    rejected = true;
+    offsetBy(good, 70);
+
+    expect(() => controller.refresh()).toThrow('read failed');
+    expect(outer.style.top).toBe('40px');
+  });
+
+  // Read with outer and inner out of the layout, where a percentage resolves against trigger's own
+  // containing block as unwrapped, as GSAP reads its pin taken out of the spacer.
+  it('reads the offset with the wrappers out of the layout, a percentage one included', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+
+    good.style.cssText = 'position: relative; top: 10%; left: 5%';
+    controller.createStickyPin({ trigger: good, endTrigger: query('.scene') });
+    good.getClientRects = () => [new DOMRect()] as unknown as DOMRectList;
+
+    good.getBoundingClientRect = () => {
+      const moved = getComputedStyle(good).position === 'relative'
+        && good.parentElement!.parentElement!.style.display === 'contents';
+
+      return { top: moved ? 30 : 0, left: moved ? 12 : 0 } as DOMRect;
+    };
+
+    controller.refresh();
+
+    const { style } = good.parentElement!.parentElement!;
+
+    expect([style.top, style.left]).toEqual(['30px', '12px']);
+  });
+
+  // trigger is sticky after a refresh(), so the next reads it with its own position put back.
+  it('reads the offset again on the next refresh(), trigger sticky in between', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+
+    good.style.cssText = 'position: relative; top: 40px';
+    offsetBy(good, 40);
+    controller.createStickyPin({ trigger: good, endTrigger: query('.scene') });
+    controller.refresh();
+    controller.refresh();
+
+    expect([good.style.position, good.parentElement!.parentElement!.style.top])
+      .toEqual(['sticky', '40px']);
+  });
+
+  // A cover's lift raises what follows it, a pin's outer included, which stays relative for it,
+  // its offsets written even where trigger has no box to read (jsdom's) and the lift wrote
+  // position first.
+  it('keeps an outer a cover lifts relative with no offset, so its z-index applies', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+
+    controller.createOverlapScroll({ trigger: query('.scene') });
+    controller.createStickyPin({ trigger: good, endTrigger: query('.scene') });
+    controller.refresh();
+
+    const { style } = good.parentElement!.parentElement!;
+
+    expect([style.position, style.zIndex, style.getPropertyPriority('top')])
+      .toEqual(['relative', '1', 'important']);
+  });
+
+  // A display: contents trigger has no box but no offset either, so outer's goes.
+  it('takes the offset off outer once trigger is display: contents', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+    const outer = () => good.parentElement!.parentElement!;
+
+    good.style.cssText = 'position: relative; top: 40px';
+    offsetBy(good, 40);
+    controller.createStickyPin({ trigger: good, endTrigger: query('.scene') });
+    controller.refresh();
+
+    expect(outer().style.top).toBe('40px');
+
+    good.style.display = 'contents';
+    good.getClientRects = () => [] as unknown as DOMRectList;
+    controller.refresh();
+
+    expect([outer().style.position, outer().style.top]).toEqual(['static', 'auto']);
+  });
+
+  // Static from the first refresh(), even one that can't measure trigger.
+  it('makes outer static through a first refresh() with trigger hidden', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+
+    good.getClientRects = () => [] as unknown as DOMRectList;
+    controller.createStickyPin({ trigger: good, endTrigger: query('.scene') });
+    controller.refresh();
+
+    const { style } = good.parentElement!.parentElement!;
+
+    expect([style.position, style.getPropertyPriority('position')]).toEqual(['static', 'important']);
+  });
+
+  // Unmeasurable with no box (a hidden tab, say), the offset stays for when trigger shows.
+  it('keeps the offset outer carries through a refresh() with trigger hidden', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+
+    good.style.cssText = 'position: relative; top: 40px';
+    offsetBy(good, 40);
+    controller.createStickyPin({ trigger: good, endTrigger: query('.scene') });
+    controller.refresh();
+    good.getClientRects = () => [] as unknown as DOMRectList;
+    controller.refresh();
+
+    expect(good.parentElement!.parentElement!.style.top).toBe('40px');
+  });
+
+  // Still the containing block of its absolute content, unshifted, as GSAP's pin is during a
+  // refresh, and sticky again after with nothing of the hold left on it.
+  it('reads a relative trigger as relative with no offset, and leaves nothing of it after', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+    let seen: string[] = [];
+
+    good.style.cssText = 'position: relative; top: 40px; left: 30px';
+    offsetBy(good, 40, 30);
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: () => {
+        seen = ['position', 'top', 'bottom', 'left', 'right'].map((property) =>
+          `${good.style.getPropertyValue(property)} ${good.style.getPropertyPriority(property)}`);
+
+        return '+=100';
+      },
+    });
+    controller.createStickyPin({ trigger: good, endTrigger: query('.scene') });
+    controller.refresh();
+
+    expect(seen).toEqual([
+      'relative important', 'auto important', 'auto important', 'auto important', 'auto important',
+    ]);
+    expect([good.style.position, good.style.bottom, good.style.left, good.style.right])
+      .toEqual(['sticky', '', '30px', '']);
+  });
+
+  // A page rule's position: relative !important keeps trigger relative, with its offset, through
+  // the reads and after: it can't go sticky, so no sticky top shifts it, in the next refresh()
+  // either.
+  it('leaves a trigger kept relative by a page rule\'s !important unheld for the reads', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+    const sheet = document.createElement('style');
+    const seen: string[] = [];
+
+    sheet.textContent = '.inside { position: relative !important; top: 40px }';
+    document.head.append(sheet);
+    offsetBy(good, 40);
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: () => {
+        seen.push(`${good.style.getPropertyValue('top')} ${getComputedStyle(good).position}`);
+
+        return '+=100';
+      },
+    });
+    controller.createStickyPin({ trigger: good, start: 'top 100px', endTrigger: query('.scene') });
+    controller.refresh();
+    controller.refresh();
+
+    const after = [good.style.position, good.style.top];
+
+    sheet.remove();
+
+    expect([...new Set(seen)]).toEqual([' relative']);
+    expect(after).toEqual(['', '']);
+  });
+
+  // A rule that arrives after a refresh() made trigger sticky doesn't meet that sticky top in the
+  // next one's reads.
+  it('reads a trigger a page rule keeps relative since the last refresh() without its sticky top', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+    const sheet = document.createElement('style');
+    const seen: string[] = [];
+
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: () => {
+        seen.push(good.style.top);
+
+        return '+=100';
+      },
+    });
+    controller.createStickyPin({ trigger: good, start: 'top 100px', endTrigger: query('.scene') });
+    controller.refresh();
+    sheet.textContent = '.inside { position: relative !important; top: 40px }';
+    document.head.append(sheet);
+    seen.length = 0;
+    controller.refresh();
+    sheet.remove();
+
+    expect([...new Set(seen)]).toEqual(['']);
+  });
+
+  // Nor one kept from it by a fixed or absolute !important.
+  it.each(['fixed', 'absolute'])('leaves a trigger a page rule keeps %s with !important its own top', (position) => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+    const sheet = document.createElement('style');
+
+    sheet.textContent = `.inside { position: ${position} !important }`;
+    document.head.append(sheet);
+    controller.createStickyPin({ trigger: good, start: 'top 100px', endTrigger: query('.scene') });
+    controller.refresh();
+
+    const after = [good.style.position, good.style.top];
+
+    sheet.remove();
+
+    expect(after).toEqual(['', '']);
+  });
+
+  // A page rule's sticky !important is sticky all the same, so the pin's top goes on.
+  it('gives a trigger a page rule keeps sticky with !important the pin\'s top', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+    const sheet = document.createElement('style');
+
+    sheet.textContent = '.inside { position: sticky !important }';
+    document.head.append(sheet);
+    controller.createStickyPin({ trigger: good, start: 'top 100px', endTrigger: query('.scene') });
+    controller.refresh();
+
+    const top = good.style.top;
+
+    sheet.remove();
+
+    expect(top).toBe('100px');
+  });
+
+  // Not sticky, so not stuck: read between refreshes with the rule's offset, as refresh() reads it.
+  it('leaves a trigger kept relative by a page rule\'s !important unreset between refreshes', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+    const sheet = document.createElement('style');
+    let seen = '';
+
+    sheet.textContent = '.inside { position: relative !important; top: 40px; left: 20px }';
+    document.head.append(sheet);
+    controller.createStickyPin({ trigger: good, endTrigger: query('.scene') });
+    controller.refresh();
+    Object.defineProperty(good, 'offsetTop', {
+      configurable: true,
+      get: () => {
+        seen = `${good.style.top}|${good.style.left}`;
+
+        return 0;
+      },
+    });
+    controller.resolveScrollPosition(good, 'top top');
+    sheet.remove();
+
+    expect(seen).toBe('|');
+  });
+
+  // A read inside refresh() sees trigger as refresh() holds it, static here, as GSAP's refresh
+  // reads a pin taken out of its spacer.
+  it('reads a held trigger as held from a function inside refresh()', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+    let reading = false;
+    let seen = '';
+
+    controller.createStickyTrigger({
+      trigger: query('.scene'),
+      end: () => {
+        if (!reading) return '+=100';
+
+        Object.defineProperty(good, 'offsetTop', {
+          configurable: true,
+          get: () => {
+            // The function's read, not #planPinLayers' after it.
+            seen ||= good.style.position;
+
+            return 0;
+          },
+        });
+        controller.resolveScrollPosition(good, 'top top');
+
+        return '+=100';
+      },
+    });
+    controller.createStickyPin({ trigger: good, endTrigger: query('.scene') });
+    controller.refresh();
+    // The second, once trigger is sticky from the first.
+    reading = true;
+    controller.refresh();
+
+    expect(seen).toBe('static');
   });
 
   // The reserved space is the one pin value the rollback doesn't restore, and doesn't need to:

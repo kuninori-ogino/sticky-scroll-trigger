@@ -177,12 +177,20 @@ export const compareDocumentOrder = (a: HTMLElement, b: HTMLElement): number => 
 
 // The unstuck state a read needs: in flow, unshifted, and still a containing block for absolute
 // children, all !important so no stylesheet rule shifts it. bottom too, though a pin's trigger is
-// the page's: a relative box takes a sheet's bottom as it does top.
-const resetStickyPosition = (el: HTMLElement): void => {
+// the page's: a relative box takes a sheet's bottom as it does top. The reads are vertical, so a
+// horizontal shift is left alone.
+export const resetStickyPosition = (el: HTMLElement): void => {
   el.style.setProperty('position', 'relative', 'important');
   el.style.setProperty('top', 'auto', 'important');
   el.style.setProperty('bottom', 'auto', 'important');
 };
+
+// How far a relative position moves trigger, for outer to carry as GSAP's _swapPinIn copies a pin's
+// offsets onto its spacer (ScrollTrigger.js:652-657).
+export interface PinOffsets {
+  top: number;
+  left: number;
+}
 
 // An element's inline value for one property, with its priority so an !important one goes back as
 // one.
@@ -200,24 +208,31 @@ export const restoreInline = (el: HTMLElement, property: string, saved: InlineVa
   el.style.setProperty(property, saved.value, saved.priority);
 };
 
-// An element's inline position/top/bottom, captured to put back after a clear or overwrite.
+// An element's inline position and offsets, captured to put back after a clear or overwrite.
 export interface InlinePosition {
   position: InlineValue;
   top: InlineValue;
   bottom: InlineValue;
+  left: InlineValue;
+  right: InlineValue;
 }
 
 export const captureInlinePosition = (el: HTMLElement): InlinePosition => ({
   position: captureInline(el, 'position'),
   top: captureInline(el, 'top'),
   bottom: captureInline(el, 'bottom'),
+  left: captureInline(el, 'left'),
+  right: captureInline(el, 'right'),
 });
 
-// bottom goes back only while it holds the reset's value, so one set since (gsap.set, say) stays.
+// bottom, left and right go back only while they hold a reset's value, so one set since
+// (gsap.set, say) stays.
 export const restoreInlinePosition = (el: HTMLElement, saved: InlinePosition): void => {
   restoreInline(el, 'position', saved.position);
   restoreInline(el, 'top', saved.top);
-  restoreIfWritten(el, 'bottom', saved.bottom, 'auto', 'important');
+  (['bottom', 'left', 'right'] as const).forEach((property) => {
+    restoreIfWritten(el, property, saved[property], 'auto', 'important');
+  });
 };
 
 // Returns the value as the browser keeps it, for restoreIfWritten to compare.
@@ -743,9 +758,9 @@ export const wrapPin = (trigger: HTMLElement) => {
 // Where trigger sits among its siblings, which outer takes over with trigger's place. GSAP's
 // pin-spacer copies most of these (_propNamesToCopy, where placeSelf and gridArea stand for the
 // longhands) but not flexGrow or clear, without which a grown flex item or a cleared float moves.
-// The offsets, margins and z-index it also copies stay on trigger. The flex longhands are what
-// outer goes by until a refresh() can measure trigger (one in a hidden tab, say), flex: 0 0 auto
-// after.
+// The margins and z-index it also copies stay on trigger, and its offsets go onto outer measured
+// (commitPinOffsets), not copied. The flex longhands are what outer goes by until a refresh() can
+// measure trigger (one in a hidden tab, say), flex: 0 0 auto after.
 const PIN_ITEM_PROPERTIES = [
   'flexGrow',
   'flexShrink',
@@ -817,6 +832,15 @@ interface WrappedPin {
   outer: HTMLDivElement;
   inner: HTMLDivElement;
   trigger: HTMLElement;
+  // trigger's own inline position, put back to read its relative offset with (see readPinOffsets).
+  savedPosition: InlinePosition;
+}
+
+// offsets: each trigger's relative offset; undefined with nothing rendered to read it on, null with
+// none, or with one static can't take off (a page rule's position: relative !important).
+export interface FittedPins {
+  reserved: (number | undefined)[];
+  offsets: (PinOffsets | null | undefined)[];
 }
 
 // trigger's own box as the item, held on it in px as GSAP's _swapPinIn holds a pin's (max-width at
@@ -913,24 +937,27 @@ const releaseTriggerBox = (trigger: HTMLElement): HeldBox | undefined => {
 //
 // At each depth all reads come before the writes, so a refresh costs a fixed number of style and
 // layout passes per nesting depth.
-export const fitPinBoxes = (pins: readonly WrappedPin[]): (number | undefined)[] => {
+export const fitPinBoxes = (pins: readonly WrappedPin[]): FittedPins => {
   // Released first, so trigger's box is read as its own rules make it.
   const held = pins.map(({ trigger }) => releaseTriggerBox(trigger));
   const enclosing = pins.map(({ trigger }) =>
     pins.filter((other) => other.trigger !== trigger && other.trigger.contains(trigger)));
-  const reserved: (number | undefined)[] = pins.map(() => undefined);
+  const reserved: FittedPins['reserved'] = pins.map(() => undefined);
+  const offsets: FittedPins['offsets'] = pins.map(() => undefined);
 
   try {
     for (let depth = Math.max(0, ...enclosing.map(({ length }) => length)); depth >= 0; depth--) {
       const indexes = pins.flatMap((_, i) => (enclosing[i].length === depth ? [i] : []));
       const around = new Set(indexes.flatMap((i) => enclosing[i]));
+      const fitted = fitReleasedPins(indexes.map((i) => pins[i]), [...around]);
 
-      fitReleasedPins(indexes.map((i) => pins[i]), [...around]).forEach((height, j) => {
-        reserved[indexes[j]] = height;
+      indexes.forEach((index, j) => {
+        reserved[index] = fitted.reserved[j];
+        offsets[index] = fitted.offsets[j];
       });
     }
 
-    return reserved;
+    return { reserved, offsets };
   } catch (error) {
     // Held again as before, to match the outer the caller puts back.
     pins.forEach(({ trigger }, i) => {
@@ -960,7 +987,7 @@ interface MeasuredBox {
 const fitReleasedPins = (
   pins: readonly WrappedPin[],
   around: readonly WrappedPin[],
-): (number | undefined)[] => {
+): FittedPins => {
   // Live, so the reads below see the layout as it stands by then.
   const styles = pins.map(({ trigger }) => getComputedStyle(trigger));
   const layouts = pins.map(({ outer }, i) => itemLayout(outer, styles[i]));
@@ -1010,8 +1037,11 @@ const fitInsideAround = (
   measured: readonly MeasuredPin[],
   styles: readonly CSSStyleDeclaration[],
   pins: readonly WrappedPin[],
-): (number | undefined)[] => {
+): FittedPins => {
   let boxes: MeasuredBox[];
+  // A display: contents trigger has no box, but no offset either.
+  const offsets: FittedPins['offsets'] = pins.map((_, i) =>
+    (styles[i].display === 'contents' ? null : undefined));
   // Taken off for the reads below, so outer's own margin reads as the page's rules give it, in the
   // layout those reads flush anyway.
   const restoreCarried = takeCarriedMargins(measured.map(({ outer }) => outer));
@@ -1038,6 +1068,9 @@ const fitInsideAround = (
         box: readHeldBox(style, TRIGGER_BOX),
       };
     });
+    readPinOffsets(measured).forEach((offset, j) => {
+      offsets[measured[j].index] = offset;
+    });
   } finally {
     restoreCarried();
     measured.forEach(({ outer, inner, layout }) => {
@@ -1046,7 +1079,51 @@ const fitInsideAround = (
     });
   }
 
-  return fitBlocksAndItems(measured, boxes, styles, pins);
+  return { reserved: fitBlocksAndItems(measured, boxes, styles, pins), offsets };
+};
+
+// Each trigger's relative offset: how far it moves from its own inline position to static, read
+// with outer and inner out of the layout, as GSAP's refresh reads a pin out of its spacer, so a
+// percentage resolves as unwrapped and the containing block's writing mode picks the side. The
+// current inline position goes back after. Only a relative trigger is measured, so a page with none
+// costs a style pass, but no layout.
+const readPinOffsets = (measured: readonly MeasuredPin[]): (PinOffsets | null)[] => {
+  const current = measured.map(({ trigger }) => captureInlinePosition(trigger));
+  const restore = () => measured.forEach(({ trigger }, i) => {
+    restoreInlinePosition(trigger, current[i]);
+  });
+
+  try {
+    measured.forEach(({ trigger, savedPosition }) => restoreInlinePosition(trigger, savedPosition));
+
+    const relative = measured.map(({ trigger }) => getComputedStyle(trigger).position === 'relative');
+
+    if (!relative.includes(true)) return measured.map(() => null);
+
+    // Back as they were, so one positioned otherwise (absolute, say) doesn't leave the flow.
+    measured.forEach(({ trigger }, i) => {
+      if (!relative[i]) restoreInlinePosition(trigger, current[i]);
+    });
+
+    const before = measured.map(({ trigger }, i) =>
+      (relative[i] ? trigger.getBoundingClientRect() : null));
+
+    measured.forEach(({ trigger }, i) => {
+      if (relative[i]) trigger.style.position = 'static';
+    });
+
+    return measured.map(({ trigger }, i) => {
+      const from = before[i];
+
+      if (!from || getComputedStyle(trigger).position === 'relative') return null;
+
+      const to = trigger.getBoundingClientRect();
+
+      return { top: from.top - to.top, left: from.left - to.left };
+    });
+  } finally {
+    restore();
+  }
 };
 
 const fitBlocksAndItems = (
@@ -1316,6 +1393,7 @@ interface LiftedProperty {
   property: LiftProperty;
   authored: InlineValue;
   written: string;
+  priority: string;
 }
 
 // State for an already-lifted element, reference-counted because several cover layers can lift
@@ -1327,6 +1405,48 @@ interface LiftState {
 }
 
 const liftStates = new WeakMap<HTMLElement, LiftState>();
+
+// Raised by a cover's lift (a pin's outer after the cover, say).
+export const isLifted = (el: HTMLElement): boolean => liftStates.has(el);
+
+// Makes the lift's record of el's position match the value on it now, with `unlifted` as what the
+// last restore puts back. commitPinOffsets writes over the lift on a pin's outer, so a lift coming
+// off leaves outer as the commit would without one.
+export const adoptLiftedPosition = (el: HTMLElement, unlifted: InlineValue): void => {
+  const state = liftStates.get(el);
+
+  if (!state) return;
+
+  const adopted: LiftedProperty = {
+    property: 'position',
+    authored: unlifted,
+    written: el.style.getPropertyValue('position'),
+    priority: el.style.getPropertyPriority('position'),
+  };
+
+  state.applied = [...state.applied.filter(({ property }) => property !== 'position'), adopted];
+};
+
+// The lift's record of a lifted element's position, for a rollback to put back with the position
+// itself: undefined with none, null for an element not lifted.
+export type LiftedPosition = LiftedProperty | undefined | null;
+
+export const captureLiftedPosition = (el: HTMLElement): LiftedPosition => {
+  const state = liftStates.get(el);
+
+  return state ? state.applied.find(({ property }) => property === 'position') : null;
+};
+
+export const restoreLiftedPosition = (el: HTMLElement, saved: LiftedPosition): void => {
+  const state = liftStates.get(el);
+
+  if (!state || saved === null) return;
+
+  state.applied = [
+    ...state.applied.filter(({ property }) => property !== 'position'),
+    ...(saved ? [saved] : []),
+  ];
+};
 
 // Raises the covering side above the sticky wrapper (position:sticky creates a stacking context).
 // Only sets a property whose computed value is static/auto, so other values are respected. Both go
@@ -1354,11 +1474,18 @@ export const liftAboveStickyWrapper = (cover: HTMLElement): (() => void) => {
 
       if (computed.zIndex === 'auto') properties.push('z-index');
 
-      const applied = properties.map((property) => ({
-        property,
-        authored: captureInline(element, property),
-        written: writeInline(element, property, LIFT_VALUES[property]),
-      }));
+      // At the priority of the inline value it replaces, so an !important one (a pin's outer
+      // static, say) doesn't drop to a value a page rule's !important wins over.
+      const applied = properties.map((property) => {
+        const authored = captureInline(element, property);
+
+        return {
+          property,
+          authored,
+          written: writeInline(element, property, LIFT_VALUES[property], authored.priority),
+          priority: authored.priority,
+        };
+      });
 
       liftStates.set(element, { count: 1, applied });
     }
@@ -1376,8 +1503,8 @@ export const liftAboveStickyWrapper = (cover: HTMLElement): (() => void) => {
 
       if (state.count > 0) return;
 
-      state.applied.forEach(({ property, authored, written }) => {
-        restoreIfWritten(el, property, authored, written);
+      state.applied.forEach(({ property, authored, written, priority }) => {
+        restoreIfWritten(el, property, authored, written, priority);
       });
       liftStates.delete(el);
     });

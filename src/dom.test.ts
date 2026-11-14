@@ -8,7 +8,11 @@ import {
   fitPinBoxes,
   insertSpacers,
   isMovingDom,
+  adoptLiftedPosition,
+  captureLiftedPosition,
+  isLifted,
   liftAboveStickyWrapper,
+  restoreLiftedPosition,
   measureDocumentHeightWithoutPinRanges,
   measureDocumentMaxScroll,
   measureUsedHeight,
@@ -367,6 +371,8 @@ describe('wrapPin', () => {
       position: { value: 'relative', priority: '' },
       top: { value: '8px', priority: '' },
       bottom: { value: '', priority: '' },
+      left: { value: '', priority: '' },
+      right: { value: '', priority: '' },
     });
 
     expect(trigger.style.position).toBe('relative');
@@ -411,7 +417,7 @@ describe('fitPinBoxes', () => {
 
     rendered(trigger);
 
-    return { trigger, ...wrapPin(trigger) };
+    return { trigger, savedPosition: captureInlinePosition(trigger), ...wrapPin(trigger) };
   };
 
   it('gives outer trigger\'s place among a flex item\'s siblings', () => {
@@ -430,7 +436,7 @@ describe('fitPinBoxes', () => {
     fitPinBoxes([pin]);
     document.getElementById('host')!.style.display = 'block';
 
-    expect(fitPinBoxes([pin])).toEqual([0]);
+    expect(fitPinBoxes([pin]).reserved).toEqual([0]);
     expect(pin.outer.style.order).toBe('');
     expect(pin.outer.style.clear).toBe('both');
     expect(pin.outer.style.width).toBe('');
@@ -441,7 +447,7 @@ describe('fitPinBoxes', () => {
 
     pin.trigger.getClientRects = () => [] as unknown as DOMRectList;
 
-    expect(fitPinBoxes([pin])).toEqual([undefined]);
+    expect(fitPinBoxes([pin]).reserved).toEqual([undefined]);
     expect(pin.outer.style.flexGrow).toBe('1');
     expect(pin.outer.style.flexBasis).toBe('30px');
     expect(pin.outer.style.width).toBe('');
@@ -452,7 +458,7 @@ describe('fitPinBoxes', () => {
     const pin = wrapIn('display: flex', 'flex: 0 0 200px');
     const inner = declarations(pin.inner);
 
-    expect(fitPinBoxes([pin])).toEqual([0]);
+    expect(fitPinBoxes([pin]).reserved).toEqual([0]);
     expect(pin.outer.style.display).toBe('flow-root');
     expect(pin.outer.style.flex).toBe('0 0 auto');
     expect(pin.outer.style.width).toBe('0px');
@@ -462,7 +468,7 @@ describe('fitPinBoxes', () => {
   it('floats outer with trigger and sizes it in px', () => {
     const pin = wrapIn('', 'float: left');
 
-    expect(fitPinBoxes([pin])).toEqual([0]);
+    expect(fitPinBoxes([pin]).reserved).toEqual([0]);
     expect(pin.outer.style.float).toBe('left');
     expect(pin.outer.style.width).toBe('0px');
   });
@@ -470,7 +476,7 @@ describe('fitPinBoxes', () => {
   it('leaves a grid item\'s width to its cell', () => {
     const pin = wrapIn('display: grid', 'grid-column-start: 2');
 
-    expect(fitPinBoxes([pin])).toEqual([0]);
+    expect(fitPinBoxes([pin]).reserved).toEqual([0]);
     expect(pin.outer.style.width).toBe('');
     expect(pin.outer.style.gridColumnStart).toBe('2');
   });
@@ -483,9 +489,9 @@ describe('fitPinBoxes', () => {
 
     rendered(trigger);
 
-    const pin = { trigger, ...wrapPin(trigger) };
+    const pin = { trigger, savedPosition: captureInlinePosition(trigger), ...wrapPin(trigger) };
 
-    expect(fitPinBoxes([pin])).toEqual([0]);
+    expect(fitPinBoxes([pin]).reserved).toEqual([0]);
     expect(pin.outer.style.flex).toBe('0 0 auto');
   });
 
@@ -494,7 +500,7 @@ describe('fitPinBoxes', () => {
 
     pin.trigger.getClientRects = () => [] as unknown as DOMRectList;
 
-    expect(fitPinBoxes([pin])).toEqual([undefined]);
+    expect(fitPinBoxes([pin]).reserved).toEqual([undefined]);
     expect(pin.outer.style.flexBasis).toBe('');
     expect(pin.outer.style.clear).toBe('');
   });
@@ -502,7 +508,7 @@ describe('fitPinBoxes', () => {
   it('keeps outer in the line an inline-level trigger sat in, sized in px', () => {
     const pin = wrapIn('', 'display: inline-block; vertical-align: top');
 
-    expect(fitPinBoxes([pin])).toEqual([0]);
+    expect(fitPinBoxes([pin]).reserved).toEqual([0]);
     expect(pin.outer.style.display).toBe('inline-block');
     expect(pin.outer.style.verticalAlign).toBe('top');
     expect(pin.outer.style.width).toBe('0px');
@@ -560,7 +566,7 @@ describe('fitPinBoxes', () => {
 
     followInner();
 
-    expect(fitPinBoxes([pin])).toEqual([0]);
+    expect(fitPinBoxes([pin]).reserved).toEqual([0]);
     expect(pin.trigger.style.cssText).toBe(BLOCK_HELD);
     expect(pin.outer.style.display).toBe('block');
     expect(pin.inner.style.display).toBe('block');
@@ -572,7 +578,7 @@ describe('fitPinBoxes', () => {
     document.getElementById('host')!.style.display = 'block';
     pin.inner.style.height = '7px';
 
-    const [reserved] = fitPinBoxes([pin]);
+    const { reserved: [reserved] } = fitPinBoxes([pin]);
 
     expect(pin.trigger.style.cssText).toBe('');
     expect(pin.inner.style.height).toBe('7px');
@@ -709,7 +715,7 @@ describe('fitPinBoxes', () => {
   it('leaves a box that doesn\'t come out in px to outer\'s own height', () => {
     const pin = wrapIn('display: flex', 'margin-left: auto');
 
-    expect(fitPinBoxes([pin])).toEqual([undefined]);
+    expect(fitPinBoxes([pin]).reserved).toEqual([undefined]);
     expect(pin.outer.style.width).toBe('');
     expect(pin.trigger.style.width).toBe('');
   });
@@ -739,7 +745,7 @@ describe('fitPinBoxes', () => {
 
       rendered(trigger);
 
-      return { trigger, ...wrapPin(trigger) };
+      return { trigger, savedPosition: captureInlinePosition(trigger), ...wrapPin(trigger) };
     });
 
     return { a, b };
@@ -804,10 +810,69 @@ describe('fitPinBoxes', () => {
     expect(b.trigger.style.cssText).toBe('');
   });
 
+  // Read with trigger's own inline position given back, and the current one restored after.
+  describe('offsets', () => {
+    const shifted = (pin: { trigger: HTMLElement }, top: number, left: number) => {
+      pin.trigger.getBoundingClientRect = () => {
+        const moved = getComputedStyle(pin.trigger).position === 'relative';
+
+        return { top: moved ? top : 0, left: moved ? left : 0 } as DOMRect;
+      };
+    };
+
+    it('reads a relative trigger\'s offset with its own position, and puts the current one back', () => {
+      const pin = wrapIn('', 'position: relative; top: 40px; left: 30px');
+
+      shifted(pin, 40, 30);
+      pin.trigger.style.cssText = 'position: sticky; top: 0px';
+
+      expect(fitPinBoxes([pin]).offsets).toEqual([{ top: 40, left: 30 }]);
+      expect(pin.trigger.style.cssText).toBe('position: sticky; top: 0px;');
+    });
+
+    it('reads none for a trigger that isn\'t relative, or has no box of its own', () => {
+      const pin = wrapIn('', 'position: absolute; top: 40px');
+
+      shifted(pin, 40, 0);
+
+      expect(fitPinBoxes([pin]).offsets).toEqual([null]);
+
+      // No client rects, as a browser gives a display: contents box.
+      pin.trigger.style.cssText = 'position: relative; top: 40px; display: contents';
+      pin.trigger.getClientRects = () => [] as unknown as DOMRectList;
+      pin.savedPosition = captureInlinePosition(pin.trigger);
+
+      expect(fitPinBoxes([pin]).offsets).toEqual([null]);
+    });
+
+    it('reads none for a trigger a rule\'s !important keeps relative', () => {
+      const pin = wrapIn('', 'top: 40px');
+      const sheet = document.createElement('style');
+
+      sheet.textContent = '#trigger { position: relative !important }';
+      document.head.append(sheet);
+      shifted(pin, 40, 0);
+
+      const { offsets } = fitPinBoxes([pin]);
+
+      sheet.remove();
+
+      expect(offsets).toEqual([null]);
+    });
+
+    it('reads nothing for a trigger that isn\'t rendered', () => {
+      const pin = wrapIn('', 'position: relative; top: 40px');
+
+      pin.trigger.getClientRects = () => [] as unknown as DOMRectList;
+
+      expect(fitPinBoxes([pin]).offsets).toEqual([undefined]);
+    });
+  });
+
   it('leaves a plain inline trigger in block flow, without its clear', () => {
     const pin = wrapIn('', 'display: inline; clear: both');
 
-    expect(fitPinBoxes([pin])).toEqual([0]);
+    expect(fitPinBoxes([pin]).reserved).toEqual([0]);
     expect(pin.outer.style.display).toBe('block');
     expect(pin.outer.style.clear).toBe('');
   });
@@ -867,7 +932,7 @@ describe('fitPinBoxes', () => {
     escaping(pin, 30);
 
     const inner = declarations(pin.inner);
-    const [reserved] = fitPinBoxes([pin]);
+    const { reserved: [reserved] } = fitPinBoxes([pin]);
 
     expect(pin.outer.style.marginBottom).toBe('30px');
     expect(pin.outer.style.height).toBe(`${reserved}px`);
@@ -972,7 +1037,7 @@ describe('fitPinBoxes', () => {
 
       rendered(trigger);
 
-      return { trigger, ...wrapPin(trigger) };
+      return { trigger, savedPosition: captureInlinePosition(trigger), ...wrapPin(trigger) };
     });
     let seen = '';
 
@@ -1151,6 +1216,69 @@ describe('liftAboveStickyWrapper', () => {
     liftAboveStickyWrapper(byId('cover'));
 
     expect(lifted('cover')).toBe('absolute/5');
+  });
+
+  // A pin's outer is static !important: a lift with no priority would let a page rule's !important
+  // position take it.
+  it('writes at the priority of the inline value it replaces, and restores it', () => {
+    document.body.innerHTML
+      = '<div id="host"><div id="cover" style="position: static !important"></div></div>';
+
+    const restore = liftAboveStickyWrapper(byId('cover'));
+
+    expect(byId('cover').style.getPropertyPriority('position')).toBe('important');
+    expect(byId('cover').style.position).toBe('relative');
+
+    restore();
+
+    expect(byId('cover').style.cssText).toBe('position: static !important;');
+  });
+
+  // An element the lift found relative has no position record until one is adopted.
+  it('puts back an adopted position on the last restore, and adopts nothing unlifted', () => {
+    document.body.innerHTML
+      = '<div id="host"><div id="cover"></div><div id="outer" style="position: relative"></div></div>';
+
+    adoptLiftedPosition(byId('outer'), { value: 'static', priority: '' });
+    expect(byId('outer').style.position).toBe('relative');
+
+    const restore = liftAboveStickyWrapper(byId('cover'));
+
+    adoptLiftedPosition(byId('outer'), { value: 'static', priority: 'important' });
+    restore();
+
+    expect(byId('outer').style.cssText).toBe('position: static !important;');
+  });
+
+  // A capture with no record restores to none, so the lift's restore leaves position alone.
+  it('puts the position record captured before an adoption back, none included', () => {
+    document.body.innerHTML
+      = '<div id="host"><div id="cover"></div><div id="outer" style="position: relative"></div></div>';
+
+    expect(captureLiftedPosition(byId('outer'))).toBeNull();
+
+    const restore = liftAboveStickyWrapper(byId('cover'));
+    const saved = captureLiftedPosition(byId('outer'));
+
+    expect(saved).toBeUndefined();
+
+    adoptLiftedPosition(byId('outer'), { value: 'static', priority: '' });
+    restoreLiftedPosition(byId('outer'), saved);
+    restore();
+
+    expect(byId('outer').style.position).toBe('relative');
+  });
+
+  it('marks what it raised as lifted until the last restore', () => {
+    document.body.innerHTML = '<div id="host"><div id="base"></div><div id="cover"></div></div>';
+
+    const restore = liftAboveStickyWrapper(byId('cover'));
+
+    expect([isLifted(byId('base')), isLifted(byId('cover'))]).toEqual([false, true]);
+
+    restore();
+
+    expect(isLifted(byId('cover'))).toBe(false);
   });
 
   it('fills in only the missing half when just one is specified explicitly', () => {
@@ -1371,6 +1499,27 @@ describe('restoreInlinePosition', () => {
     restoreInlinePosition(el, saved);
 
     expect(el.style.bottom).toBe('9px');
+  });
+
+  it('takes off the left and right a reset wrote, and leaves ones set since alone', () => {
+    document.body.innerHTML = '<div id="el" style="position: sticky; left: 4px"></div>';
+
+    const el = document.getElementById('el') as HTMLElement;
+    const saved = captureInlinePosition(el);
+    const hold = () => ['left', 'right'].forEach((property) => {
+      el.style.setProperty(property, 'auto', 'important');
+    });
+
+    hold();
+    restoreInlinePosition(el, saved);
+
+    expect([el.style.left, el.style.right]).toEqual(['4px', '']);
+
+    hold();
+    el.style.left = '9px';
+    restoreInlinePosition(el, saved);
+
+    expect([el.style.left, el.style.right]).toEqual(['9px', '']);
   });
 });
 
