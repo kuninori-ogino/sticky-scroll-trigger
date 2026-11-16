@@ -10,7 +10,9 @@ import {
   isMovingDom,
   adoptLiftedPosition,
   captureLiftedPosition,
+  clearWrapperStyle,
   isLifted,
+  leaveScenePlace,
   liftAboveStickyWrapper,
   restoreLiftedPosition,
   measureDocumentHeightWithoutPinRanges,
@@ -138,6 +140,15 @@ const transitionOff = (el: HTMLElement) => [
   el.style.getPropertyValue('transition'),
   el.style.getPropertyPriority('transition'),
 ];
+// A wrapper's inline value and priority for a sample of what a page rule on divs could set: layout
+// (position, padding, float, margin) and paint and inheritance (clip-path, font), which stay the
+// page's.
+const GROUP_SAMPLES = ['position', 'padding', 'float', 'margin', 'clip-path', 'font'] as const;
+const NEUTRAL_SAMPLES = ['static', '0px', 'none', '0px', 'none', 'inherit'];
+const inlineSamples = (el: HTMLElement) => GROUP_SAMPLES.map((property) =>
+  `${el.style.getPropertyValue(property)} ${el.style.getPropertyPriority(property)}`.trim());
+const neutralIn = (groups: readonly boolean[]) =>
+  NEUTRAL_SAMPLES.map((value, i) => (groups[i] ? `${value} important` : ''));
 
 describe('wrapScene', () => {
   it('wraps inner in container{wrapper[inner], padding} and inserts it at the original position', () => {
@@ -208,8 +219,69 @@ describe('wrapScene', () => {
     });
   });
 
+  // A page rule on divs can't pad, size or move them. container, in inner's place, takes a rule
+  // there as inner would until another level wraps it.
+  it('writes the neutral values, !important, on every wrapper but the container in inner\'s place', () => {
+    document.body.innerHTML = '<div><div id="inner"></div></div>';
+
+    const inner = document.getElementById('inner')!;
+    const { container, wrapper, padding } = wrapScene(inner, true);
+    const placed = neutralIn([true, true, true, true, false, false]);
+
+    expect(inlineSamples(wrapper)).toEqual(placed);
+    expect(inlineSamples(padding)).toEqual(placed);
+    expect(inlineSamples(sceneSentinel(inner)!)).toEqual(placed);
+    expect(inlineSamples(container)).toEqual(neutralIn([false, false, false, false, false, false]));
+
+    leaveScenePlace(container);
+
+    expect(inlineSamples(container)).toEqual(placed);
+  });
+
+  it('keeps the sentinel and padding\'s own display and pointer-events', () => {
+    document.body.innerHTML = '<div><div id="inner"></div></div>';
+
+    const inner = document.getElementById('inner')!;
+    const { padding } = wrapScene(inner, true);
+
+    expect(sceneSentinel(inner)!.style.display).toBe('none');
+    expect(padding.style.pointerEvents).toBe('none');
+  });
+
   it('throws for an inner not attached to the document', () => {
     expect(() => wrapScene(document.createElement('div'), false)).toThrow(/not attached to the document/);
+  });
+});
+
+describe('clearWrapperStyle', () => {
+  it('puts a wrapper\'s neutral value back, longhands of a shorthand included', () => {
+    document.body.innerHTML = '<div><div id="inner"></div></div>';
+
+    const { wrapper, padding } = wrapScene(document.getElementById('inner')!, false);
+
+    wrapper.style.position = 'sticky';
+    wrapper.style.top = '10px';
+    padding.style.marginBottom = '16px';
+    clearWrapperStyle(wrapper, 'position');
+    clearWrapperStyle(wrapper, 'top');
+    clearWrapperStyle(padding, 'margin-bottom');
+
+    expect([wrapper, wrapper, padding].map((el, i) => {
+      const property = ['position', 'top', 'margin-bottom'][i];
+
+      return [el.style.getPropertyValue(property), el.style.getPropertyPriority(property)];
+    })).toEqual([['static', 'important'], ['auto', 'important'], ['0px', 'important']]);
+  });
+
+  it('takes off a property with no neutral value', () => {
+    document.body.innerHTML = '<div><div id="trigger"></div></div>';
+
+    const { outer } = wrapPin(document.getElementById('trigger')!);
+
+    outer.style.height = '50px';
+    clearWrapperStyle(outer, 'height');
+
+    expect(outer.style.height).toBe('');
   });
 });
 
@@ -343,6 +415,21 @@ describe('wrapPin', () => {
 
   it('throws for a trigger not attached to the document', () => {
     expect(() => wrapPin(document.createElement('div'))).toThrow(/not attached to the document/);
+  });
+
+  // outer takes a rule in trigger's place as trigger would, its padding included, but not one that
+  // makes it the box trigger sticks in or cuts trigger off where it sticks past it.
+  it('writes outer\'s overflow, columns, clip-path and mask, and nothing else of a rule\'s', () => {
+    document.body.innerHTML = '<div><div id="trigger"></div></div>';
+
+    const { outer } = wrapPin(document.getElementById('trigger')!);
+
+    expect(['overflow', 'columns', 'clip-path', 'mask'].map((property) => [
+      outer.style.getPropertyValue(property), outer.style.getPropertyPriority(property),
+    ])).toEqual([
+      ['visible', 'important'], ['auto', 'important'], ['none', 'important'], ['none', 'important'],
+    ]);
+    expect(inlineSamples(outer)).toEqual(['', '', '', '', 'none important', '']);
   });
 
   it('unwrapPin restores the original position', () => {
@@ -1171,6 +1258,14 @@ describe('wrapCover', () => {
     expect(Array.from(wrapper.children, (el) => el.id || 'outer')).toEqual(['a', 'b', 'outer']);
     expect(wrapper.lastElementChild).toBe(outer);
     expect(ids(host).slice(1)).toEqual(['cover', 'tail']);
+  });
+
+  // In the first sibling's place, the wrapper takes a rule there as that sibling would.
+  it('writes none of a neutral layout', () => {
+    const { base } = setup();
+
+    expect(inlineSamples(wrapCover(base)))
+      .toEqual(neutralIn([false, false, false, false, false, false]));
   });
 
   it('unwrapCover restores the original position and order', () => {

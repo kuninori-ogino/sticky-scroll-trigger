@@ -493,6 +493,7 @@ for (const layout of [
   'collapseAfterNoDwell',
   'collapseAfterNegative',
   'collapseAfterContainerMargin',
+  'collapseAfterPageMargin',
   'collapseAfterEm',
   'collapseAfterMixed',
   'collapseAfterMixedNear',
@@ -1590,6 +1591,82 @@ test('createStickyPin\'s range keeps its size and place under a page rule on div
   );
 
   expect(innerSelect).toBe(outerSelect);
+});
+
+// Under a page rule on divs, a Scene level's wrapper and padding keep their own layout, so the
+// scene still dwells (`.page div div` leaves out the outermost container, which takes a rule as the
+// shared container would); a pin's outer takes the rule, but not one that makes it the box trigger
+// sticks in or clips trigger where it sticks past outer.
+const WRAPPER_RULES = {
+  scene: {
+    selector: '.page div div',
+    rules: [
+      'padding-top: 20px', 'border-top: 5px solid', 'position: relative; top: 10px',
+      'overflow: hidden', 'height: 50px', 'max-height: 300px', 'display: inline', 'display: flex',
+      'float: left', 'position: absolute', 'columns: 2', 'padding-bottom: 20px', 'margin-top: 20px',
+      'margin-bottom: 20px', 'width: 50%',
+    ],
+  },
+  pin: {
+    selector: '.page div',
+    rules: ['overflow: hidden', 'overflow: clip', 'columns: 2', 'clip-path: inset(0)', 'mask: linear-gradient(#000, #000)'],
+  },
+};
+
+for (const [mode, { selector, rules }] of Object.entries(WRAPPER_RULES)) {
+  test(`${mode} wrappers keep their layout under a page rule on divs`, async ({ page }) => {
+    type LayoutWindow = Window & { __layout: () => unknown };
+
+    const layout = async (rule: string) => {
+      await page.goto(`/fixtures/wrapperRules.html?${new URLSearchParams({ mode, rule })}`);
+
+      return page.evaluate(() => (window as unknown as LayoutWindow).__layout());
+    };
+
+    const without = await layout('');
+
+    for (const rule of rules) {
+      expect(await layout(`${selector} { ${rule} }`), rule).toEqual(without);
+    }
+  });
+}
+
+// The outermost Scene wrapper takes a grid's gutters (Bootstrap's `.row > *`) as the shared
+// container in its place would, border-box included, so the content narrows by them as unwrapped.
+test('a Scene keeps the gutters a grid gives the shared container', async ({ page }) => {
+  type LayoutWindow = Window & { __layout: () => { width: number } };
+
+  const layout = async (rule: string) => {
+    const css = `* { box-sizing: border-box } ${rule}`;
+
+    await page.goto(`/fixtures/wrapperRules.html?${new URLSearchParams({ mode: 'scene', rule: css })}`);
+
+    return page.evaluate(() => (window as unknown as LayoutWindow).__layout());
+  };
+
+  const without = await layout('');
+
+  expect(await layout('.page { display: flex; flex-wrap: wrap } .page > * { width: 100%; padding: 0 12px }'))
+    .toEqual({ ...without, width: without.width - 24 });
+});
+
+// A container the next Scene level wraps is in no element's place: unlike the outermost one, it
+// keeps its own layout against a rule on divs. `.page div div` matches every wrapper but the
+// outermost container.
+test('an inner Scene container keeps its place under a page rule on divs', async ({ page }) => {
+  type LayoutWindow = Window & { __layout: () => unknown };
+
+  const layout = async (rule: string) => {
+    await page.goto(`/fixtures/wrapperRules.html?${new URLSearchParams({ mode: 'scenes', rule })}`);
+
+    return page.evaluate(() => (window as unknown as LayoutWindow).__layout());
+  };
+
+  const without = await layout('');
+
+  for (const rule of ['margin-top: 20px', 'margin-bottom: 20px', 'width: 50%', 'max-width: 50%', 'padding-top: 20px']) {
+    expect(await layout(`.page div div { ${rule} }`), rule).toEqual(without);
+  }
 });
 
 type MarginLayout = Record<string, number | null>;

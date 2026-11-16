@@ -297,6 +297,63 @@ const createStructureElement = (): HTMLDivElement => {
   return el;
 };
 
+// A Scene wrapper's layout at an unstyled div's values, written !important: under a page rule on
+// divs (.prose div), an offset, padding, border, height, overflow, columns or margin moved or took
+// a Scene layer's dwell. The outermost container and a cover's wrapper don't get it: a rule that
+// steps from the parent (.row > *) can't be told from one on divs, so they take a rule as the
+// element in their place would, and a top padding or border there still takes the dwell, measured
+// from the container's top. Paint, transform, containment and inherited properties stay the page's,
+// but for writing-mode, which lays the wrapper out.
+const WRAPPER_LAYOUT = {
+  'display': 'block', 'position': 'static', 'inset': 'auto', 'float': 'none', 'clear': 'none',
+  'writing-mode': 'inherit', 'overflow': 'visible', 'content-visibility': 'visible',
+  'container-type': 'normal', 'columns': 'auto', 'zoom': '1', 'box-sizing': 'content-box',
+  'height': 'auto', 'min-height': 'auto', 'max-height': 'none', 'padding': '0', 'border': '0',
+  'aspect-ratio': 'auto', 'align-content': 'normal', 'margin-trim': 'none', 'margin': '0',
+  'width': 'auto', 'min-width': 'auto', 'max-width': 'none', 'flex': '0 1 auto', 'order': '0',
+  'grid-area': 'auto', 'align-self': 'auto', 'justify-self': 'auto', 'vertical-align': 'baseline',
+};
+const LONGHANDS: Record<string, readonly string[]> = {
+  inset: ['top', 'right', 'bottom', 'left'],
+  margin: ['margin-top', 'margin-right', 'margin-bottom', 'margin-left'],
+};
+// Each wrapper's neutral values by property, with margin's and inset's longhands.
+const neutralStyles = new WeakMap<HTMLElement, Map<string, string>>();
+
+const neutralize = (el: HTMLElement, styles: Record<string, string>) => {
+  let neutral = neutralStyles.get(el);
+
+  if (!neutral) {
+    neutral = new Map();
+    neutralStyles.set(el, neutral);
+  }
+
+  for (const [property, value] of Object.entries(styles)) {
+    el.style.setProperty(property, value, 'important');
+    neutral.set(property, value);
+    LONGHANDS[property]?.forEach((longhand) => neutral.set(longhand, value));
+  }
+};
+
+// Clears a wrapper's property to its neutral value, since removing it would hand it to a page
+// rule; removes it where there is none.
+export const clearWrapperStyle = (el: HTMLElement, property: string): void => {
+  const value = neutralStyles.get(el)?.get(property);
+
+  if (value === undefined) el.style.removeProperty(property);
+  else el.style.setProperty(property, value, 'important');
+};
+
+// Whether a wrapper's property holds no value the library wrote: its neutral one, or none.
+export const isNeutralWrapperStyle = (el: HTMLElement, property: string): boolean =>
+  !el.style.getPropertyValue(property) || (neutralStyles.get(el)?.has(property) === true
+    && el.style.getPropertyPriority(property) === 'important');
+
+// A Scene container the next level wraps, no longer in the shared container's place.
+export const leaveScenePlace = (container: HTMLElement): void => {
+  neutralize(container, WRAPPER_LAYOUT);
+};
+
 // An empty block whatever a page rule sets on divs (.section div { display: flex }, say): every
 // property that sizes or places an empty box or stops margins collapsing through it is set, then
 // the given styles. A list, since all: initial made refresh() about three times slower in WebKit.
@@ -671,6 +728,9 @@ export const wrapScene = (inner: HTMLElement, withSentinel: boolean) => {
   const wrapper = createStructureElement();
   const padding = createStructureElement();
 
+  // container takes inner's place, and a rule there as inner would.
+  neutralize(wrapper, WRAPPER_LAYOUT);
+  neutralize(padding, WRAPPER_LAYOUT);
   [container, wrapper, padding].forEach((node) => transparentNodes.add(node));
   padding.setAttribute('aria-hidden', 'true');
   padding.style.pointerEvents = 'none';
@@ -682,6 +742,7 @@ export const wrapScene = (inner: HTMLElement, withSentinel: boolean) => {
   if (withSentinel) {
     const sentinel = createStructureElement();
 
+    neutralize(sentinel, WRAPPER_LAYOUT);
     sentinel.style.display = 'none';
     transparentNodes.add(sentinel);
     sentinels.add(sentinel);
@@ -744,6 +805,10 @@ export const wrapPin = (trigger: HTMLElement) => {
   const outer = createStructureElement();
   const inner = createRangeBox();
 
+  // In trigger's place, outer takes a rule there as trigger would (see ARCHITECTURE.md), but for
+  // what would stop or cut off the pin: an overflow or columns made outer the box trigger sticks
+  // in, and a clip or mask cut trigger off where it sticks past outer.
+  neutralize(outer, { 'overflow': 'visible', 'columns': 'auto', 'clip-path': 'none', 'mask': 'none' });
   setOuterLayout(outer, null);
   transparentNodes.add(outer);
   transparentNodes.add(inner);

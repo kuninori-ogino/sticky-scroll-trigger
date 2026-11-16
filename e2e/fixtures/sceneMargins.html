@@ -81,6 +81,13 @@
           after: 'margin-top:30px',
           scenes: [['#first', '+=300']],
         },
+        // A page rule's margin on the shared container's place, which the outermost wrapper takes.
+        collapseAfterPageMargin: {
+          css: 'body > div:nth-child(2) { margin-bottom: 60px }',
+          html: twoScenes('margin-bottom:40px'),
+          after: 'margin-top:30px',
+          scenes: [['#first', '+=300']],
+        },
         // Margins in em, which computed heights round.
         collapseAfterEm: {
           root: 'font-size:15.3px',

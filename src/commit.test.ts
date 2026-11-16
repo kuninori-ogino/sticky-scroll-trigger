@@ -17,7 +17,7 @@ import {
   commitSticky,
   holdRelativeForRead,
 } from './commit';
-import { captureInlinePosition, liftAboveStickyWrapper } from './dom';
+import { captureInlinePosition, liftAboveStickyWrapper, wrapScene } from './dom';
 
 // Only inline styles, which jsdom handles in full.
 
@@ -67,6 +67,51 @@ describe('clearStickyForRead', () => {
     expect(el.style.zIndex).toBe('0');
     expect(el.style.willChange).toBe('opacity');
     expect(el.style.height).toBe('5px');
+  });
+});
+
+// What a clear takes off goes back to the neutral value, !important, so a page rule on divs can't
+// take its place.
+describe('clears on a Scene level', () => {
+  const level = () => {
+    document.body.innerHTML = '<div><div id="inner"></div></div>';
+
+    return wrapScene(document.getElementById('inner')!, false);
+  };
+
+  const inline = (el: HTMLElement, properties: string[]) => properties.map((property) =>
+    `${el.style.getPropertyValue(property)} ${el.style.getPropertyPriority(property)}`);
+
+  it('clearStickyForRead leaves the wrapper static', () => {
+    const { wrapper } = level();
+
+    commitSticky(wrapper, 10);
+    clearStickyForRead(wrapper);
+
+    expect(inline(wrapper, ['position', 'top'])).toEqual(['static important', 'auto important']);
+  });
+
+  it('commitCarriedMargin(null) and commitContainerMargin(null) leave no margin', () => {
+    const { container, padding } = level();
+
+    commitCarriedMargin(padding, 16);
+    commitContainerMargin(container, -10);
+    commitCarriedMargin(padding, null);
+    commitContainerMargin(container, null);
+
+    expect(inline(padding, ['margin-top', 'margin-bottom']))
+      .toEqual(['0px important', '0px important']);
+    // container holds the shared container's place: a rule's margin there is the page's.
+    expect(container.style.marginBottom).toBe('');
+  });
+
+  it('commitInert leaves the wrapper static', () => {
+    const { container, wrapper, padding } = level();
+
+    commitSticky(wrapper, 10);
+    commitInert(wrapper, padding, container);
+
+    expect(inline(wrapper, ['position', 'top'])).toEqual(['static important', 'auto important']);
   });
 });
 

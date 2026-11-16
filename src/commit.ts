@@ -7,8 +7,8 @@
  */
 
 import {
-  adoptLiftedPosition, captureInline, captureLiftedPosition, isLifted, resetStickyPosition,
-  restoreInline, restoreInlinePosition, restoreLiftedPosition, setRangeHeight,
+  adoptLiftedPosition, captureInline, captureLiftedPosition, clearWrapperStyle, isLifted,
+  resetStickyPosition, restoreInline, restoreInlinePosition, restoreLiftedPosition, setRangeHeight,
 } from './dom';
 import type { InlinePosition, InlineValue, LiftedPosition, PinOffsets } from './dom';
 
@@ -41,15 +41,21 @@ export const commitCssText = (el: HTMLElement, cssText: string): void => {
 // freeze. margin-top cancels it there and margin-bottom carries it out through the container's
 // bottom to collapse with what follows. null clears both: an empty padding lets the margin through.
 export const commitCarriedMargin = (padding: HTMLElement, margin: number | null): void => {
-  padding.style.marginTop = margin === null ? '' : `${-margin}px`;
-  padding.style.marginBottom = margin === null ? '' : `${margin}px`;
+  if (margin === null) {
+    clearWrapperStyle(padding, 'margin-top');
+    clearWrapperStyle(padding, 'margin-bottom');
+  } else {
+    padding.style.marginTop = `${-margin}px`;
+    padding.style.marginBottom = `${margin}px`;
+  }
 };
 
 // Margins of both signs collapse to the largest plus the most negative, so only minus the larger
 // part cancels them: the padding carries that one, and its container's margin-bottom the other, so
 // both leave the container as they reached the padding.
 export const commitContainerMargin = (container: HTMLElement, margin: number | null): void => {
-  container.style.marginBottom = margin === null ? '' : `${margin}px`;
+  if (margin === null) clearWrapperStyle(container, 'margin-bottom');
+  else container.style.marginBottom = `${margin}px`;
 };
 
 // A margin-top larger than the positive part of the margins above the padding collapses with them
@@ -70,8 +76,8 @@ export const commitInert = (
   padding: HTMLElement | null,
   container: HTMLElement | null,
 ): void => {
-  wrapper.style.position = '';
-  wrapper.style.top = '';
+  clearWrapperStyle(wrapper, 'position');
+  clearWrapperStyle(wrapper, 'top');
 
   if (padding) {
     padding.style.height = '0px';
@@ -142,9 +148,10 @@ export const holdRelativeForRead = (trigger: HTMLElement): void => {
   trigger.style.setProperty('right', 'auto', 'important');
 };
 
-export const clearStickyForRead = (el: HTMLElement): void => {
-  el.style.position = '';
-  el.style.top = '';
+// A Scene wrapper goes back to its neutral layout, a cover's to the page's.
+export const clearStickyForRead = (wrapper: HTMLElement): void => {
+  clearWrapperStyle(wrapper, 'position');
+  clearWrapperStyle(wrapper, 'top');
 };
 
 export const clearHeightForRead = (el: HTMLElement): void => {

@@ -57,6 +57,20 @@ describe('buildStructure - Scene layers', () => {
     expect(layer.wrapper!.children).toHaveLength(2); // root, then the margin sentinel
   });
 
+  // Only the outermost container is in the shared container's place, where its layout is the
+  // page's; one another level wraps is neutral.
+  it('leaves the layout to the outermost container only', () => {
+    const { root, byId } = setup('<div id="host"><div id="root"><div id="s1"></div><div id="s2"></div></div></div>');
+    const layers = [sceneLayer(byId('s1')), sceneLayer(byId('s2'))];
+
+    buildStructure(root, layers);
+
+    expect([layers[0].container!, layers[1].container!].map((container) => ['margin', 'padding', 'display']
+      .map((property) => container.style.getPropertyValue(property)))).toEqual([
+      ['0px', '0px', 'block'], ['', '', ''],
+    ]);
+  });
+
   it('layers earlier in DOM order end up deeper (= freeze first)', () => {
     const { root, byId } = setup(
       '<div id="host"><div id="root"><div id="s1"></div><div id="s2"></div></div></div>',

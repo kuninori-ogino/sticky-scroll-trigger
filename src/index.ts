@@ -12,6 +12,7 @@ import {
   fitPinBoxes,
   insertSpacers,
   isMovingDom,
+  isNeutralWrapperStyle,
   liftAboveStickyWrapper,
   logicalNextSibling,
   logicalParent,
@@ -1550,8 +1551,9 @@ export default class StickyScrollTrigger {
   // container's height less its own, so every level must come out at its dwell. Where one doesn't,
   // the margin may mix signs (see commitContainerMargin): a probe reads the negative part and the
   // carry goes again in two parts. Where one still doesn't (a flex or grid parent, or a page rule
-  // matching a wrapper), the sentinel holds the margin in, as unwrapped there. It also holds when
-  // there is no margin to carry, so one added before the next refresh() can't lengthen a freeze.
+  // padding the outermost wrapper), the sentinel holds the margin in, as unwrapped there. It also
+  // holds when there is no margin to carry, so one added before the next refresh() can't lengthen a
+  // freeze.
   #carryTrailingMargin() {
     // Far above what computed heights round away (Chromium's are a few hundredths off); a margin
     // below it lengthens a freeze by less than a quarter pixel.
@@ -1744,8 +1746,9 @@ export default class StickyScrollTrigger {
       // On an empty padding the carried margins would collapse with the margin passing through and
       // cancel it too, so they come off with the dwell. A container's carried part stays: the
       // margin passing through has that part already.
-      const margins = held.map(({ padding }) =>
-        (padding.style.marginBottom ? parseFloat(padding.style.marginBottom) : null));
+      const margins = held.map(({ padding }) => (isNeutralWrapperStyle(padding, 'margin-bottom')
+        ? null
+        : parseFloat(padding.style.marginBottom)));
 
       held.forEach(({ padding }) => {
         commitHeight(padding, '0px');

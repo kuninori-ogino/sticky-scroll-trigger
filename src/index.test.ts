@@ -140,7 +140,7 @@ const query = (sel: string) => document.querySelector<HTMLElement>(sel)!;
 const livePaddings = () => Array.from(
   document.querySelectorAll<HTMLElement>('div[aria-hidden="true"]'),
 ).filter((padding) => padding.style.height !== '0px'
-  || (padding.previousElementSibling as HTMLElement | null)?.style.position !== '');
+  || (padding.previousElementSibling as HTMLElement | null)?.style.position !== 'static');
 
 // jsdom puts every element at 0, and resolveScrollPosition only adds a Scene layer's dwell to an
 // element that reaches its anchor after that freeze starts, so a test that needs the dwell counted
@@ -1027,7 +1027,7 @@ describe('batching kill()', () => {
     }
 
     expect(query('.root').parentElement).toBe(wrapper);
-    expect(wrapper.style.position).toBe('');
+    expect(wrapper.style.position).toBe('static');
     expect(livePaddings()).toHaveLength(1);
   });
 
@@ -1110,7 +1110,7 @@ describe('batching kill()', () => {
 
     expect(() => controller.refresh()).toThrow('end');
     expect(query('.root').parentElement).toBe(wrapper);
-    expect(wrapper.style.position).toBe('');
+    expect(wrapper.style.position).toBe('static');
     expect(livePaddings()).toHaveLength(1);
     expect(survivor.style.position).toBe('sticky');
     expect(survivor.style.top).not.toBe('999px');
@@ -5104,34 +5104,6 @@ describe('scroll-margin-top synchronization', () => {
 // below trace DOM access instead of reading a result. Comments in index.ts are their only other
 // record, so any structural change to refresh() has to keep these passing.
 describe('refresh() pass ordering', () => {
-  // Shadows one CSSOM property on a single element's own style object, logging each write on its
-  // way to the real setter. That setter is on the prototype chain, hence the walk.
-  const traceStyleProperty = (
-    el: HTMLElement,
-    property: string,
-    onWrite: (value: string) => void,
-  ) => {
-    const style = el.style;
-    let node: object | null = style;
-    let descriptor: PropertyDescriptor | undefined;
-
-    while (node && !descriptor) {
-      descriptor = Object.getOwnPropertyDescriptor(node, property);
-      node = Object.getPrototypeOf(node) as object | null;
-    }
-
-    const { get, set } = descriptor!;
-
-    Object.defineProperty(style, property, {
-      configurable: true,
-      get: () => get!.call(style),
-      set: (value: string) => {
-        onWrite(value);
-        set!.call(style, value);
-      },
-    });
-  };
-
   // Measuring an element after the sync's style writes forces a style recalc. Only the offset
   // getters are traced, since the sync's own getComputedStyle and applyRamps' scroll read are
   // intended.
@@ -5200,11 +5172,16 @@ describe('refresh() pass ordering', () => {
       controller.refresh();
 
       let strips = 0;
-
       // A Scene layer freezes the whole shared container, so its wrapper is around the root, not
-      // around trigger. Only a reset writes '', so the count is how many passes reached one.
-      traceStyleProperty(query('.root').parentElement!, 'position', (value) => {
-        if (value === '') strips += 1;
+      // around trigger. Only a reset puts its static back, so the count is how many passes reached
+      // one.
+      const { style } = query('.root').parentElement!;
+      const setProperty = style.setProperty.bind(style);
+
+      vi.spyOn(style, 'setProperty').mockImplementation((property, value, priority) => {
+        if (property === 'position' && value === 'static') strips += 1;
+
+        setProperty(property, value, priority);
       });
       controller.refresh();
 
@@ -5572,6 +5549,18 @@ describe('an end function called again in the layout GSAP shows it', () => {
     below: paddingsIn('.below'),
     afterS1: (query('.s1').nextElementSibling as HTMLElement | null)?.style.height ?? null,
     divs: document.querySelectorAll('div').length,
+  });
+
+  // A padding carrying no margin holds the neutral one, which a page rule on divs can't override.
+  it('leaves a padding that carries no margin at its neutral one', () => {
+    const { controller } = setupInstances(() => '+=100');
+
+    controller.refresh();
+
+    const margins = Array.from(document.querySelectorAll<HTMLElement>('div[aria-hidden="true"]'), (el) =>
+      `${el.style.marginBottom} ${el.style.getPropertyPriority('margin-bottom')}`);
+
+    expect(margins).toEqual(margins.map(() => '0px important'));
   });
 
   it('takes out this instance\'s padding and the padding below, with a spacer for each earlier layer', () => {
@@ -6532,10 +6521,17 @@ describe('nestedStickyOptimization', () => {
 
     expect(inert).toHaveLength(1);
 
+    // Back to the neutral values it was built with, none a demotion's.
+    const { style } = inert[0];
+    const inertStyle = style.cssText;
+
+    expect([style.position, style.top, style.zIndex, style.willChange])
+      .toEqual(['static', 'auto', '', '']);
+
     for (const at of [5000, 0]) {
       scroll = at;
       window.dispatchEvent(new Event('scroll'));
-      expect(inert[0].style.cssText).toBe('transition: none !important;');
+      expect(style.cssText).toBe(inertStyle);
     }
 
     controller.destroy();
@@ -6740,7 +6736,10 @@ describe('nestedStickyOptimization', () => {
     try {
       // A caller like #scheduleCatchUp carries on to GSAP's refresh: the error comes off the stack.
       expect(() => other.refresh()).not.toThrow();
-      expect(wrapper.style.cssText).toBe('transition: none !important; position: sticky; top: 0px;');
+
+      const { position, top, zIndex, willChange } = wrapper.style;
+
+      expect([position, top, zIndex, willChange]).toEqual(['sticky', '0px', '', '']);
       await flushMicrotasks();
     } finally {
       process.off('uncaughtException', onUncaught);

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>wrapperRules fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        display: block;
+      }
+    </style>
+    <!-- ?rule= : a page rule on divs. Only the library's wrappers are divs under .page: root is a
+         main, every element of the page in it a section. -->
+    <style id="rule"></style>
+  </head>
+  <body>
+    <div class="page"><main class="root"></main></div>
+    <section style="height: 400vh"></section>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const params = new URLSearchParams(location.search);
+      const mode = params.get('mode');
+
+      document.getElementById('rule').textContent = params.get('rule') ?? '';
+
+      // trigger (#t) after 500px, 100px tall, with a fixed element in it; #after follows.
+      const root = document.querySelector('.root');
+
+      root.innerHTML = `<section style="height: 500px"></section>
+        <section id="t" style="height: 100px; background: #ccc">
+          <section id="fixed" style="position: fixed; top: 5px; height: 5px"></section>
+        </section>
+        <section id="after" style="height: 2000px"></section>`;
+
+      const sticky = new StickyScrollTrigger(root, { nestedStickyOptimization: 'off' });
+
+      if (mode === 'pin') ScrollTrigger.create(sticky.createStickyPin({ trigger: '#t', end: '+=300' }));
+
+      if (mode === 'scene' || mode === 'scenes') {
+        ScrollTrigger.create(sticky.createStickyTrigger({ trigger: '#t', start: 'top top', end: '+=300' }));
+      }
+
+      // A second level, which wraps the first one's container.
+      if (mode === 'scenes') {
+        ScrollTrigger.create(sticky.createStickyTrigger({ trigger: '#after', start: 'top top', end: '+=200' }));
+      }
+
+      sticky.refresh();
+
+      const el = (id) => document.getElementById(id);
+      const rect = (id) => el(id).getBoundingClientRect();
+
+      // At a few scrolls: trigger's and #after's viewport tops, whether trigger is what shows at the
+      // top of the viewport, and #fixed's top; and trigger's width and the page's height.
+      window.__layout = () => {
+        const at = [0, 300, 500, 650, 800, 801, 1000, 1300].map((y) => {
+          window.scrollTo(0, y);
+
+          const shown = document.elementFromPoint(400, 50);
+
+          return {
+            y,
+            t: rect('t').top,
+            after: rect('after').top,
+            shows: Boolean(shown?.closest('#t')),
+            fixed: rect('fixed').top,
+          };
+        });
+
+        window.scrollTo(0, 0);
+
+        return { at, width: rect('t').width, page: document.documentElement.scrollHeight };
+      };
+    </script>
+  </body>
+</html>

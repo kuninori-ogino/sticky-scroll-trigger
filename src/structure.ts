@@ -3,7 +3,9 @@
  * These don't depend on layout; they only rearrange the DOM and assign layer references.
  */
 
-import { compareDocumentOrder, moveInto, unwrapCover, wrapCover, wrapScene } from './dom';
+import {
+  compareDocumentOrder, leaveScenePlace, moveInto, unwrapCover, wrapCover, wrapScene,
+} from './dom';
 import type { CoverLayer, Layer } from './types';
 
 // Returns whether layers is out of DOM order. buildStructure always sorts before building, so
@@ -45,6 +47,8 @@ export const buildStructure = (
 
     // Only the innermost wrapper gets the sentinel: the margin it holds ends the shared container.
     const wrapped = wrapScene(inner, inner === rootElement);
+
+    if (inner !== rootElement) leaveScenePlace(inner);
 
     layer.container = wrapped.container;
     layer.wrapper = wrapped.wrapper;
