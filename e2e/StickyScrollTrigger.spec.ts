@@ -834,7 +834,7 @@ for (const shape of ['top', 'pin']) {
       __directAt: (scroll: number) => Promise<{ direct: number; writes: number }>;
     };
 
-    await page.goto(`/fixtures/stuckAtScrollZero.html?case=${shape}&nested=0`);
+    await page.goto(`/fixtures/stuckAtScrollZero.html?case=${shape}`);
     await page.waitForFunction(() => (window as never as FixtureWindow).__ready === true);
 
     const fresh = await page.evaluate(() => (window as never as FixtureWindow).__read());
@@ -850,45 +850,43 @@ for (const shape of ['top', 'pin']) {
 // GSAP measures at scroll 0, where a page sticky element with a top larger than its natural top,
 // or a bottom-sticky one, is stuck already, as is another instance's pin with such a top.
 for (const shape of ['top', 'bottom', 'fraction', 'contents', 'pin']) {
-  for (const nested of ['0', '1']) {
-    test(`a sticky element stuck at scroll 0 is measured where GSAP measures it (${shape}, nested=${nested})`, async ({ page }) => {
-      type Read = {
-        scene: number;
-        gscene: number;
-        resolved: number;
-        plain: number;
-        held: boolean;
-      };
+  test(`a sticky element stuck at scroll 0 is measured where GSAP measures it (${shape})`, async ({ page }) => {
+    type Read = {
+      scene: number;
+      gscene: number;
+      resolved: number;
+      plain: number;
+      held: boolean;
+    };
 
-      type FixtureWindow = Window & {
-        __ready?: boolean;
-        __read: () => Read;
-        __refreshAt: (scroll: number) => Read;
-      };
+    type FixtureWindow = Window & {
+      __ready?: boolean;
+      __read: () => Read;
+      __refreshAt: (scroll: number) => Read;
+    };
 
-      await page.goto(`/fixtures/stuckAtScrollZero.html?case=${shape}&nested=${nested}`);
-      await page.waitForFunction(() => (window as never as FixtureWindow).__ready === true);
+    await page.goto(`/fixtures/stuckAtScrollZero.html?case=${shape}`);
+    await page.waitForFunction(() => (window as never as FixtureWindow).__ready === true);
 
-      const fresh = await page.evaluate(() => (window as never as FixtureWindow).__read());
+    const fresh = await page.evaluate(() => (window as never as FixtureWindow).__read());
 
-      expect(fresh.scene).toBe(fresh.gscene);
+    expect(fresh.scene).toBe(fresh.gscene);
 
-      for (const y of [0, 1500, 0]) {
-        const read = await page.evaluate(
-          (scroll) => (window as never as FixtureWindow).__refreshAt(scroll),
-          y,
-        );
+    for (const y of [0, 1500, 0]) {
+      const read = await page.evaluate(
+        (scroll) => (window as never as FixtureWindow).__refreshAt(scroll),
+        y,
+      );
 
-        expect(read, `scroll ${y}`).toEqual({
-          scene: fresh.gscene,
-          gscene: fresh.gscene,
-          resolved: fresh.plain + 200,
-          plain: fresh.plain,
-          held: false,
-        });
-      }
-    });
-  }
+      expect(read, `scroll ${y}`).toEqual({
+        scene: fresh.gscene,
+        gscene: fresh.gscene,
+        resolved: fresh.plain + 200,
+        plain: fresh.plain,
+        held: false,
+      });
+    }
+  });
 }
 
 // measureViewportHeight follows the same technique GSAP itself uses to dodge resizes caused
@@ -4672,6 +4670,8 @@ interface LiveEndWindow {
   __windows: () => [number, number][];
   __gsapRefresh: () => void;
   __refresh: () => void;
+  __isRefreshing: () => boolean;
+  __callGsapRefresh?: boolean;
 }
 
 const loadLiveEnd = async (page: Page, query: string) => {
@@ -4710,22 +4710,34 @@ for (const end of ['height', 'below']) {
   }
 }
 
-// A ScrollTrigger.refresh() from the end function's second call, which runs with this padding and
-// the one below out, measures the page refresh() left, as a top-level one does.
-test('an end function that calls ScrollTrigger.refresh() gets GSAP\'s windows', async ({ page }) => {
+// GSAP carries out a ScrollTrigger.refresh() an end function calls, then refresh() throws, and
+// GSAP's next refresh measures the windows it would have.
+test('a ScrollTrigger.refresh() from an end function throws out of refresh() and leaves GSAP working', async ({ page }) => {
   const read = () => page.evaluate(() => (window as never as LiveEndWindow).__windows());
 
   await loadLiveEnd(page, 'end=height&instances=two&impl=gsap');
 
   const gsapWindows = await read();
 
-  await loadLiveEnd(page, 'end=height&instances=two&call=gsapRefresh');
+  await loadLiveEnd(page, 'end=height&instances=two');
 
   expect(await read()).toEqual(gsapWindows);
+  expect(await page.evaluate(() => {
+    const w = window as never as LiveEndWindow;
 
-  await page.evaluate(() => (window as never as LiveEndWindow).__refresh());
+    w.__callGsapRefresh = true;
 
-  expect(await read()).toEqual(gsapWindows);
+    try {
+      w.__refresh();
+    } catch (error) {
+      return { message: (error as Error).message, refreshing: w.__isRefreshing() };
+    }
+
+    return null;
+  })).toEqual({
+    message: expect.stringContaining('ScrollTrigger.refresh() was called from a start or end function'),
+    refreshing: false,
+  });
 
   await page.evaluate(() => (window as never as LiveEndWindow).__gsapRefresh());
 

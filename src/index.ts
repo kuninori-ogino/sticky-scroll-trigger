@@ -76,9 +76,12 @@ import {
 } from './commit';
 import {
   asLayerHandler,
+  asStartEndFunction,
+  assertOutsideStartEndFunction,
   evaluateLive,
-  holdLiveEvaluationForGsapRefresh,
   inLayerHandler,
+  inStartEndFunction,
+  noteStartEndFunctionCall,
   resolveOutsideEvaluation,
 } from './liveEvaluation';
 import { createScrollMarginSync } from './scrollMargin';
@@ -93,7 +96,6 @@ import {
   realScroll,
   scrollBackTo,
   scrollZeroReturnTop,
-  withAfterFunction,
 } from './scrollZero';
 import { buildStructure, isDomOrderStale, unbuildCover, unbuildStructure } from './structure';
 import {
@@ -308,15 +310,11 @@ export default class StickyScrollTrigger {
   #built = false;
   #dirty = false; // Set true when a trigger is added/removed; the next refresh() catches up.
   #outermostContainer: HTMLDivElement | null = null;
-  // Bumped when the structure comes down or loses a level (see structureKept in #refreshGeometry).
-  #structureGeneration = 0;
   #destroyed = false;
-  // #runRefresh frames on the stack: a start or end function's refresh() comes in at 1 or more.
+  // #runRefresh frames on the stack: page code a DOM move runs (see #runRefresh) comes in at 1.
   #depth = 0;
-  // The one nested run for a GSAP refresh a function starts is spent until the outermost run ends.
-  #refreshInitNestedUsed = false;
-  // The outermost run measures again: a function asked for a refresh or registered a layer, or a
-  // nested one ran.
+  // The outermost run measures again: page code inside it asked for a refresh or registered a
+  // layer.
   #measureAgain = false;
   // Set by a kill whose catch-up hasn't run: the next refresh() keeps the content in place.
   #keepContentPending = false;
@@ -624,7 +622,6 @@ export default class StickyScrollTrigger {
 
     unbuildStructure(this.#rootElement, this.#builtLayers, this.#outermostContainer);
     structureChanges += 1;
-    this.#structureGeneration += 1;
     this.#measuredStructure = null;
     this.#outermostContainer = null;
     this.#built = false;
@@ -659,7 +656,6 @@ export default class StickyScrollTrigger {
 
     this.#builtLayers = [...this.#layers];
     structureChanges += 1;
-    this.#structureGeneration += 1;
     this.#measuredStructure = null;
     this.#dirty = false;
   }
@@ -673,8 +669,7 @@ export default class StickyScrollTrigger {
   }
 
   // A kill's catch-up before GSAP measures: a held last kill's teardown (GSAP measures now, so it
-  // goes now), the rebuild, and a last kill's content keep. It runs even once a function has spent
-  // the nested run: another one nested in it needs a new kill's batch, so it ends.
+  // goes now), the rebuild, and a last kill's content keep.
   #catchUp(): void {
     this.#flushPendingDisarm();
     this.#runRefresh();
@@ -711,7 +706,6 @@ export default class StickyScrollTrigger {
     const catchUpNow = (): boolean => {
       if (!pending()) return false;
 
-      // Before the catch-up: a GSAP refresh a function starts in it comes back here.
       pendingCatchUps.delete(this);
 
       if (this.#destroyed) return false;
@@ -729,7 +723,15 @@ export default class StickyScrollTrigger {
 
     pendingCatchUps.set(this, catchUpNow);
 
+    // In a GSAP refresh started from a start or end function, the catch-up waits for the microtask
+    // (see #createAutoRefreshHandler).
     const onRefreshInit = () => {
+      if (inStartEndFunction()) {
+        noteStartEndFunctionCall('ScrollTrigger.refresh()');
+
+        return undefined;
+      }
+
       if (!catchUpNow()) return undefined;
 
       const restoreDormancy = takeGsapRefreshRestore();
@@ -782,6 +784,18 @@ export default class StickyScrollTrigger {
     lastScrollTriggerClass = this.#scrollTriggerClass;
   }
 
+  // A kill from a start or end function would take a layer out of the measurement under way: its
+  // part here waits for a microtask, after the refresh() calling the function has thrown. A layer
+  // already off has nothing to take out.
+  #afterStartEndFunction(registered: () => boolean, handle: () => void): void {
+    if (inStartEndFunction() && registered()) {
+      noteStartEndFunctionCall('kill()');
+      queueMicrotask(handle);
+    } else {
+      handle();
+    }
+  }
+
   // Binds refresh() to the refreshInit GSAP itself fires (resize/load), so callers get the right
   // ordering without writing ScrollTrigger.addEventListener('refreshInit', refresh) themselves.
   // Every layer's handler can refresh: GSAP runs all refreshInit listeners before it measures
@@ -791,11 +805,18 @@ export default class StickyScrollTrigger {
     userOnRefreshInit: ScrollTrigger.Vars['onRefreshInit'],
   ): ScrollTrigger.Vars['onRefreshInit'] {
     const handle = (self: ScrollTrigger) => {
-      this.#captureScrollTriggerClass(self);
+      // A GSAP refresh started from a start or end function would measure mid-measurement, so the
+      // refresh() calling the function throws once it returns. Outside GSAP's refresh, this is a
+      // ScrollTrigger's own refresh(), which needs nothing here: a layer's start and end read no
+      // layout, and a pin's window is the caller's alone. Either way only the user's callback runs,
+      // as in GSAP.
+      if (inStartEndFunction()) {
+        if (isRefreshing(classOf(self))) noteStartEndFunctionCall('ScrollTrigger.refresh()');
 
-      if (isRefreshing(this.#scrollTriggerClass)) {
-        holdLiveEvaluationForGsapRefresh(this.#scrollTriggerClass);
+        return userOnRefreshInit?.(self);
       }
+
+      this.#captureScrollTriggerClass(self);
 
       // GSAP dispatches refreshInit before any measurement, so a callback that puts something in
       // place to be measured expects to run before refresh() too. This call stays outside the
@@ -1070,18 +1091,15 @@ export default class StickyScrollTrigger {
 
   // Snapshots and resets every wrapped pin's own sticky state, returning a function that puts it
   // back. A stuck pin shifts documentTop for its trigger and everything inside it, as a stuck
-  // wrapper does (see #resetSceneCoverStickyState). A pin a start or end function kills meanwhile
-  // already has the caller's values back from its unwrap, so it's skipped. So is one that isn't
-  // sticky (see PinLayer's sticky): it can't be stuck, and a reset would undo a page rule's
-  // !important position or a refresh()'s hold.
+  // wrapper does (see #resetSceneCoverStickyState). A pin that isn't sticky (see PinLayer's sticky)
+  // is skipped: it can't be stuck, and a reset would undo a page rule's !important position or a
+  // refresh()'s hold.
   #resetPinStickyState(): () => void {
     const restores = this.#pinLayers
       .filter(({ inner, sticky }) => inner && sticky)
-      .map((layer) => ({ layer, restore: stripStickyPositions([layer.trigger]) }));
+      .map((layer) => stripStickyPositions([layer.trigger]));
 
-    return () => restores.forEach(({ layer, restore }) => {
-      if (layer.inner) restore();
-    });
+    return () => restores.forEach((restore) => restore());
   }
 
   // Puts what besides `self`'s wrappers and pins can be stuck around the elements in `from` where
@@ -1188,18 +1206,8 @@ export default class StickyScrollTrigger {
       outerPosition: layer.outer ? captureOuterPosition(layer.outer) : null,
       range: layer.inner ? layer.inner.style.height : '',
     }));
-    // Neither the writes nor the rollback touch a Scene wrapper once a start or end function's
-    // refresh() has changed the structure: a level it made inert stays static, and it wrote the
-    // others' values for the new layout.
-    const generation = this.#structureGeneration;
-    const structureKept = () => this.#structureGeneration === generation;
 
-    const commitWrapperTops = (stickyTops: Map<HTMLElement, number>) => {
-      if (structureKept()) stickyTops.forEach((top, wrapper) => commitSticky(wrapper, top));
-    };
-
-    // Every one cleared here is written again below, or rolled back on a throw. The rollback skips
-    // a pin a start or end function killed meanwhile: its unwrap gave the caller's values back.
+    // Every one cleared here is written again below, or rolled back on a throw.
     wrappers.forEach(clearStickyForRead);
 
     StickyScrollTrigger.#carryPinOffsets(pins.map(({ layer }) => layer), pinOffsets);
@@ -1222,9 +1230,7 @@ export default class StickyScrollTrigger {
     } catch (error) {
       // catch rather than finally: after a success the snapshots hold what the writes below
       // replace, and restoring them would undo the lot.
-      if (structureKept()) {
-        wrappers.forEach((wrapper, i) => commitPosition(wrapper, savedWrappers[i]));
-      }
+      wrappers.forEach((wrapper, i) => commitPosition(wrapper, savedWrappers[i]));
 
       pins.forEach(({ layer, sticky, position, outerPosition }) => {
         if (!layer.inner || !layer.outer || !outerPosition) return;
@@ -1254,7 +1260,7 @@ export default class StickyScrollTrigger {
         plannedPins = this.#planPinLayers(viewportHeight, measureDocumentHeightWithoutPinRanges());
       }
     } catch (error) {
-      commitWrapperTops(stickyTops);
+      stickyTops.forEach((top, wrapper) => commitSticky(wrapper, top));
       pins.forEach(({ layer, sticky, position, outerPosition, range }) => {
         if (!layer.inner || !layer.outer || !outerPosition) return;
 
@@ -1279,10 +1285,10 @@ export default class StickyScrollTrigger {
       return position === 'static' || position === 'sticky' ? [] : [layer];
     }));
 
-    commitWrapperTops(stickyTops);
+    stickyTops.forEach((top, wrapper) => commitSticky(wrapper, top));
 
     plannedPins.forEach(({ layer, topPx, range }) => {
-      // A later pin's start/end function can kill an earlier one, which unwraps it.
+      // #planPinLayers plans wrapped pins only.
       if (!layer.inner) return;
 
       // The offsets a relative trigger was held at for the reads go.
@@ -1689,14 +1695,7 @@ export default class StickyScrollTrigger {
         let moved = false;
 
         live.forEach(({ index, liveEnd }) => {
-          const next = this.#evaluateLiveEnd(
-            active,
-            planned,
-            index,
-            liveEnd,
-            realScroll() ?? scrollBefore,
-            spacerPlans,
-          );
+          const next = this.#evaluateLiveEnd(active, planned, index, liveEnd, spacerPlans);
           const current = measured[index].end;
 
           // A function that changes what kind of value it returns between calls keeps the first.
@@ -1724,33 +1723,26 @@ export default class StickyScrollTrigger {
     planned: readonly number[],
     index: number,
     liveEnd: () => EndSpec,
-    scroll: number,
     spacerPlans: SpacerPlans,
   ): EndSpec | null {
     const spacers = active.flatMap((layer, k) => (k < index && layer.kind === 'scene' && planned[k]
       ? [{ after: layer.trigger, height: planned[k] }]
       : []));
+    const later = [...armedInstances].filter((other) => other !== this
+      && compareDocumentOrder(this.#rootElement, other.#rootElement) < 0);
+    const held = [this, ...later].flatMap((instance) => instance.#layers.flatMap((layer) =>
+      (layer.kind === 'scene' && layer.padding ? [layer.padding] : [])));
+    const heights = held.map((padding) => padding.style.height);
+    // On an empty padding the carried margins would collapse with the margin passing through and
+    // cancel it too, so they come off with the dwell. A container's carried part stays: the margin
+    // passing through has that part already.
+    const margins = held.map((padding) => (isNeutralWrapperStyle(padding, 'margin-bottom')
+      ? null
+      : parseFloat(padding.style.marginBottom)));
 
-    // Returns the function that takes this layout down again. A padding goes back only while it
-    // still holds the 0 written here and its layer still holds it: an end function that refreshes
-    // another instance leaves that one's own write, and one whose refresh() made a level inert
-    // leaves it without dwell. The paddings are read at each set-up, since a GSAP refresh the
-    // evaluation was held for (see holdLiveEvaluationForGsapRefresh) may have refreshed any
-    // instance.
+    // Returns the function that takes this layout down again.
     const setUp = () => {
-      const later = [...armedInstances].filter((other) => other !== this
-        && compareDocumentOrder(this.#rootElement, other.#rootElement) < 0);
-      const held = [this, ...later].flatMap((instance) => instance.#layers.flatMap((layer) =>
-        (layer.kind === 'scene' && layer.padding ? [{ layer, padding: layer.padding }] : [])));
-      const heights = held.map(({ padding }) => padding.style.height);
-      // On an empty padding the carried margins would collapse with the margin passing through and
-      // cancel it too, so they come off with the dwell. A container's carried part stays: the
-      // margin passing through has that part already.
-      const margins = held.map(({ padding }) => (isNeutralWrapperStyle(padding, 'margin-bottom')
-        ? null
-        : parseFloat(padding.style.marginBottom)));
-
-      held.forEach(({ padding }) => {
+      held.forEach((padding) => {
         commitHeight(padding, '0px');
         commitCarriedMargin(padding, null);
       });
@@ -1759,25 +1751,26 @@ export default class StickyScrollTrigger {
 
       return () => {
         removeSpacers();
-        held.forEach(({ layer, padding }, k) => {
-          if (layer.padding === padding && padding.style.height === '0px') {
-            commitHeight(padding, heights[k]);
-            commitCarriedMargin(padding, margins[k]);
-          }
+        held.forEach((padding, k) => {
+          commitHeight(padding, heights[k]);
+          commitCarriedMargin(padding, margins[k]);
         });
       };
     };
 
-    return evaluateLive(setUp, scroll, liveEnd);
+    return evaluateLive(setUp, liveEnd);
   }
 
   // Public entry point. Rebuilds the nesting if triggers were added/removed, and recomputes
   // both the Scene/Cover layers and the pin layers.
   refresh(): void {
-    // A start or end function's refresh() leaves the measuring to the outermost run, which goes
-    // again once, so a function that calls it on every evaluation can't recurse.
-    // With nothing to measure (no layer, the last kill's structure waiting, or a DOM move under
-    // way: see #runRefresh), no trip either.
+    // Ignored from a start or end function, as GSAP ignores a ScrollTrigger's refresh() inside its
+    // refresh (ScrollTrigger.js:1306).
+    if (inStartEndFunction()) return;
+
+    // Page code inside a run (see #runRefresh) leaves the measuring to the run, which goes again
+    // once. With nothing to measure (no layer, the last kill's structure waiting, or a DOM move
+    // under way: see #runRefresh), no trip either.
     if (this.#depth > 0 || isRefreshing(this.#scrollTriggerClass) || this.#destroyed
       || !this.#armed || pendingDisarms.has(this) || isMovingDom() || window.scrollY === 0
       || this.#measuresInPlace()) {
@@ -1798,20 +1791,15 @@ export default class StickyScrollTrigger {
       && !mayBeStuckAround(this.#measuredElements(), new Set(this.#ownedStickyElements()));
   }
 
-  // A GSAP refresh a function starts measures right after its refreshInit, so the refresh() for
-  // it runs nested, once per outermost run. A kill or create still owed its rebuild runs
-  // regardless: the next GSAP measurement needs it.
+  // A refreshInit inside a run comes from a GSAP refresh started by page code in a DOM move, which
+  // #runRefresh puts off. Any other page code inside a run (a custom element reacting to a style
+  // write, say) only has the run measure again, after GSAP has measured. A kill or create still
+  // owed its rebuild runs regardless: the next GSAP measurement needs it.
   #refreshFrom(refreshInit: boolean): void {
-    if (this.#depth > 0 && !this.#dirty) {
-      if (!refreshInit) {
-        this.#measureAgain = true;
+    if (this.#depth > 0 && !this.#dirty && !(refreshInit && isMovingDom())) {
+      this.#measureAgain = true;
 
-        return;
-      }
-
-      if (this.#refreshInitNestedUsed) return;
-
-      this.#refreshInitNestedUsed = true;
+      return;
     }
 
     this.#runRefresh();
@@ -1863,7 +1851,7 @@ export default class StickyScrollTrigger {
     try {
       this.#refreshLayout();
 
-      // The first pass read part of the layout before a function or a nested run changed it.
+      // The first pass read part of the layout before page code inside the run changed it.
       if (this.#depth === 1 && this.#measureAgain && !this.#destroyed && this.#armed
         && !pendingDisarms.has(this)) this.#refreshLayout();
     } catch (error) {
@@ -1872,7 +1860,6 @@ export default class StickyScrollTrigger {
       this.#depth -= 1;
 
       if (this.#depth === 0) {
-        this.#refreshInitNestedUsed = false;
         this.#measureAgain = false;
         // This run measured after the move.
         this.#refreshOwed = false;
@@ -2253,7 +2240,7 @@ export default class StickyScrollTrigger {
       // Removes the layer when GSAP kills it (a matchMedia switch, say). It leaves `#layers`
       // immediately; a Scene layer's wrappers stay until the refresh() #scheduleCatchUp defers,
       // or, for the last layer or pin, until the scroll stops (see #disarmIfEmpty).
-      onKill: (self) => {
+      onKill: (self) => this.#afterStartEndFunction(() => this.#layers.includes(layer), () => {
         this.#captureScrollTriggerClass(self);
 
         // Already off: a repeated kill() (GSAP calls onKill on each, ScrollTrigger.js:1935) or a
@@ -2269,7 +2256,7 @@ export default class StickyScrollTrigger {
         this.#scheduleCatchUp();
         this.#disarmIfEmpty();
         onKill?.(self);
-      },
+      }),
       onRefreshInit: this.#createAutoRefreshHandler(rest.onRefreshInit),
     };
   }
@@ -2292,6 +2279,7 @@ export default class StickyScrollTrigger {
     onKill,
     ...rest
   }: CreateStickyTriggerOptions): ScrollTrigger.Vars {
+    assertOutsideStartEndFunction('createStickyTrigger()');
     this.#assertNoExcludedVars(rest, 'createStickyTrigger');
     this.#flushOverlappingDisarms();
 
@@ -2309,8 +2297,8 @@ export default class StickyScrollTrigger {
         container: null,
         wrapper: null,
         padding: null,
-        start: withAfterFunction(start),
-        end: withAfterFunction(end),
+        start: asStartEndFunction(start),
+        end: asStartEndFunction(end),
         freezeStart: 0,
         freezeEnd: 0,
         engagedStart: 0,
@@ -2333,6 +2321,7 @@ export default class StickyScrollTrigger {
     onKill,
     ...rest
   }: CreateOverlapScrollOptions): ScrollTrigger.Vars {
+    assertOutsideStartEndFunction('createOverlapScroll()');
     this.#assertNoExcludedVars(rest, 'createOverlapScroll');
     this.#flushOverlappingDisarms();
 
@@ -2372,8 +2361,8 @@ export default class StickyScrollTrigger {
       endTrigger,
       cover: coverElement,
       wrapper: null,
-      start: withAfterFunction(start),
-      end: end === null ? null : withAfterFunction(end),
+      start: asStartEndFunction(start),
+      end: end === null ? null : asStartEndFunction(end),
       freezeStart: 0,
       freezeEnd: 0,
       engagedStart: 0,
@@ -2431,6 +2420,7 @@ export default class StickyScrollTrigger {
     onKill,
     ...rest
   }: CreateStickyPinOptions): ScrollTrigger.Vars {
+    assertOutsideStartEndFunction('createStickyPin()');
     this.#assertNoExcludedVars(rest, 'createStickyPin');
     this.#flushOverlappingDisarms();
 
@@ -2478,9 +2468,9 @@ export default class StickyScrollTrigger {
       inner: null,
       sticky: false,
       heldPosition: null,
-      start: withAfterFunction(top === undefined ? start ?? 'top top' : topToStartClause(top)),
+      start: asStartEndFunction(top === undefined ? start ?? 'top top' : topToStartClause(top)),
       endTrigger,
-      end: withAfterFunction(end),
+      end: asStartEndFunction(end),
     };
 
     this.#arm();
@@ -2492,7 +2482,7 @@ export default class StickyScrollTrigger {
     return {
       ...rest,
       trigger,
-      onKill: (self) => {
+      onKill: (self) => this.#afterStartEndFunction(() => this.#pinLayers.includes(layer), () => {
         this.#captureScrollTriggerClass(self);
 
         removeItem(this.#pinLayers, layer);
@@ -2506,7 +2496,7 @@ export default class StickyScrollTrigger {
 
         this.#disarmIfEmpty();
         onKill?.(self);
-      },
+      }),
       onRefreshInit: this.#createAutoRefreshHandler(rest.onRefreshInit),
     };
   }
@@ -2649,6 +2639,7 @@ export default class StickyScrollTrigger {
     endTrigger: endTriggerInput,
     ...rest
   }: CreateResolvedTriggerOptions): ScrollTrigger.Vars {
+    assertOutsideStartEndFunction('createResolvedTrigger()');
     this.#assertNoExcludedVars(rest, 'createResolvedTrigger');
     this.#flushOverlappingDisarms();
 
@@ -2692,6 +2683,8 @@ export default class StickyScrollTrigger {
   // the caller's responsibility. Afterwards registration throws and refresh() does nothing.
   destroy(): void {
     if (this.#destroyed) return;
+
+    assertOutsideStartEndFunction('destroy()');
 
     // As the held last kill would have; the rest still runs if that throws.
     runEach(() => this.#flushPendingDisarmForRevert(), () => this.#tearDown());

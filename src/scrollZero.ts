@@ -56,8 +56,8 @@ export const scrollBackTo = (top: number): void => {
 
 // Measures at 0 as GSAP's refresh does, returning the way back: to where it was, or where a kill's
 // catch-up moved scrollZeroReturn to keep the content. Nothing is painted in between. Dormancy's
-// table goes to its state for 0 too, without making anything sticky. Inside another one (whose
-// function's GSAP refresh went back to the real scroll), back to 0, leaving the way back to it.
+// table goes to its state for 0 too, without making anything sticky. Inside another one, the way
+// back is to 0, and the outer one keeps its own.
 export const enterScrollZero = (cls: ScrollTriggerClass | null): (() => void) => {
   if (scrollZeroReturn !== null) {
     scrollBackTo(0);
@@ -87,8 +87,8 @@ export const enterScrollZero = (cls: ScrollTriggerClass | null): (() => void) =>
 // Inside GSAP's refresh, a layer handler measures at 0, where GSAP measures after its refreshInit
 // dispatch, and goes back to GSAP's record, so the listeners after it see GSAP's scroll. The
 // record needs no layout read, and GSAP goes back to it too, wherever a kill's catch-up moved it.
-// Away from 0 again inside one (a function's GSAP refresh went back to its record), it goes there
-// and back, leaving the outer way back alone. Nothing to undo when GSAP has no record.
+// Away from 0 again inside one, it goes there and back, leaving the outer way back alone. Nothing
+// to undo when GSAP has no record.
 let gsapAtZero = false;
 let gsapZeroReturn = 0;
 
@@ -131,8 +131,7 @@ export const gsapScrollToZero = (cls: ScrollTriggerClass | null): (() => void) =
 
 export const isGsapAtZero = (): boolean => gsapAtZero;
 
-// The scroll a measurement at 0 goes back to, or null outside one: a GSAP refresh a function
-// starts there takes it as its record, as it would have at the top level.
+// The scroll a measurement at 0 goes back to, or null outside one.
 export const realScroll = (): number | null =>
   scrollZeroReturn ?? (gsapAtZero ? gsapZeroReturn : null);
 
@@ -161,25 +160,10 @@ export const mayBeStuckAround = (
   });
 };
 
-// A GSAP refresh a function started went back to its record: the rest of the measurement reads
-// at 0.
-const afterFunction = (): void => {
+// After a start or end function refresh() calls, which may have scrolled: the rest of the
+// measurement reads at 0.
+export const backToZeroAfterFunction = (): void => {
   if (gsapAtZero || scrollZeroReturn !== null) scrollBackTo(0);
 
   if (scrollZeroReturn !== null) dormancyAtScrollZero();
-};
-
-// A layer's or pin's start or end function, which refresh() calls in its measurement, running
-// afterFunction once it returns or throws. A function handed to resolveScrollPosition needs none,
-// since its read goes back to 0 itself, nor does createResolvedTrigger's, which GSAP calls.
-export const withAfterFunction = <T>(value: T | (() => T)): T | (() => T) => {
-  if (typeof value !== 'function') return value;
-
-  return () => {
-    try {
-      return (value as () => T)();
-    } finally {
-      afterFunction();
-    }
-  };
 };

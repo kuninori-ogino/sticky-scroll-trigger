@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScrollTriggerClass } from './gsap';
 import {
+  backToZeroAfterFunction,
   enterScrollZero,
   gsapScrollToZero,
   isGsapAtZero,
@@ -11,7 +12,6 @@ import {
   moveScrollZeroReturn,
   realScroll,
   scrollZeroReturnTop,
-  withAfterFunction,
 } from './scrollZero';
 
 // What dormancy moved past its freeze, for mayBeStuckAround.
@@ -83,7 +83,7 @@ describe('enterScrollZero', () => {
   it('inside another, goes back to 0 and leaves the outer way back', () => {
     const back = enterScrollZero(null);
 
-    // A function's GSAP refresh went back to the real scroll.
+    // Something inside the outer one scrolled.
     scroll = 500;
 
     const inner = enterScrollZero(null);
@@ -240,31 +240,20 @@ describe('isPageScrolling', () => {
   });
 });
 
-describe('withAfterFunction', () => {
-  it('passes a value through and calls a function as it is outside a measurement at 0', () => {
-    const fn = vi.fn(() => 7);
+describe('backToZeroAfterFunction', () => {
+  it('leaves the scroll alone outside a measurement at 0', () => {
+    backToZeroAfterFunction();
 
-    expect(withAfterFunction(5)).toBe(5);
-    expect((withAfterFunction(fn) as () => number)()).toBe(7);
     expect(scrolls).toEqual([]);
   });
 
-  it('goes back to 0 after a function, one that throws included, inside a measurement at 0', () => {
+  it('goes back to 0 inside a measurement at 0, keeping the way back', () => {
     const back = enterScrollZero(null);
-    // The function's GSAP refresh went back to the real scroll.
-    const returns = withAfterFunction(() => {
-      scroll = 400;
 
-      return 7;
-    }) as () => number;
-    const throws = withAfterFunction(() => {
-      scroll = 400;
-      throw new Error('end');
-    }) as () => number;
+    // A start or end function scrolled.
+    scroll = 400;
+    backToZeroAfterFunction();
 
-    expect(returns()).toBe(7);
-    expect(scroll).toBe(0);
-    expect(throws).toThrow('end');
     expect(scroll).toBe(0);
 
     back();
@@ -272,13 +261,11 @@ describe('withAfterFunction', () => {
     expect(scroll).toBe(800);
   });
 
-  it('goes back to 0 after a function inside a layer handler\'s measurement in GSAP\'s refresh', () => {
+  it('goes back to 0 inside a layer handler\'s measurement in GSAP\'s refresh', () => {
     const back = gsapScrollToZero(makeClass({ rec: 800 }));
-    const fn = withAfterFunction(() => {
-      scroll = 800;
-    }) as () => void;
 
-    fn();
+    scroll = 800;
+    backToZeroAfterFunction();
 
     expect(scroll).toBe(0);
 

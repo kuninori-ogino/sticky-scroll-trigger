@@ -68,11 +68,9 @@
       gsap.registerPlugin(ScrollTrigger);
 
       // The page's own sticky .auth (case=pin: another instance's pin) holds the instance, stuck
-      // already at scroll 0, where GSAP measures. gscene is GSAP's own trigger on the Scene's element, plain on the element after
-      // it. nested=1: the Scene's end function calls ScrollTrigger.refresh() on the next refresh,
-      // which measures GSAP's own triggers under the library's hold.
+      // already at scroll 0, where GSAP measures. gscene is GSAP's own trigger on the Scene's
+      // element, plain on the element after it.
       const params = new URLSearchParams(location.search);
-      const nested = params.get('nested') === '1';
 
       document.body.className = params.get('case');
 
@@ -92,17 +90,9 @@
       }
 
       const sticky = new StickyScrollTrigger('.root');
-      let callRefresh = false;
       const scene = ScrollTrigger.create(sticky.createStickyTrigger({
         trigger: '.scene',
-        end: () => {
-          if (callRefresh) {
-            callRefresh = false;
-            ScrollTrigger.refresh();
-          }
-
-          return '+=200';
-        },
+        end: () => '+=200',
       }));
       const resolved = ScrollTrigger.create(sticky.createResolvedTrigger({
         trigger: '.plain',
@@ -152,13 +142,7 @@
       };
       window.__refreshAt = (y) => {
         window.scrollTo(0, y);
-
-        if (nested) {
-          callRefresh = true;
-          sticky.refresh();
-        } else {
-          ScrollTrigger.refresh();
-        }
+        ScrollTrigger.refresh();
 
         return read();
       };

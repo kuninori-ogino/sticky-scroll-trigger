@@ -114,8 +114,8 @@ export interface PinLayer {
   // rule's !important position keeps from going sticky.
   sticky: boolean;
   // trigger's inline position from before a refresh() held a relative one for its reads
-  // (holdRelativeForRead), put back as the hold ends: at the commit, or at an unwrap a start or end
-  // function's kill makes meanwhile, so the hold's values never pass for the author's.
+  // (holdRelativeForRead), put back as the hold ends (the commit, the rollback or an unwrap), so
+  // the hold's values never pass for the author's.
   heldPosition: InlinePosition | null;
   // Always a position clause: createStickyPin normalizes a `top` option into one at registration
   // (see its topToStartClause).
