@@ -109,14 +109,6 @@ export interface PinLayer {
   // inner: the pin range).
   outer: HTMLDivElement | null;
   inner: HTMLDivElement | null;
-  // Whether trigger holds the sticky position the last refresh() gave it, the one state the reads
-  // between refreshes reset: not while a refresh() holds it for its reads, nor for one a page
-  // rule's !important position keeps from going sticky.
-  sticky: boolean;
-  // trigger's inline position from before a refresh() held a relative one for its reads
-  // (holdRelativeForRead), put back as the hold ends (the commit, the rollback or an unwrap), so
-  // the hold's values never pass for the author's.
-  heldPosition: InlinePosition | null;
   // Always a position clause: createStickyPin normalizes a `top` option into one at registration
   // (see its topToStartClause).
   start: PositionInput;

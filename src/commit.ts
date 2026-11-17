@@ -7,10 +7,10 @@
  */
 
 import {
-  adoptLiftedPosition, captureInline, captureLiftedPosition, clearWrapperStyle, isLifted,
-  resetStickyPosition, restoreInline, restoreInlinePosition, restoreLiftedPosition, setRangeHeight,
+  clearWrapperStyle, isLifted, resetStickyPosition, restoreInline,
+  restoreInlinePosition, setRangeHeight,
 } from './dom';
-import type { InlinePosition, InlineValue, LiftedPosition, PinOffsets } from './dom';
+import type { InlinePosition, PinOffsets } from './dom';
 
 export const commitSticky = (el: HTMLElement, topPx: number): void => {
   el.style.position = 'sticky';
@@ -95,9 +95,8 @@ const OFFSET_PROPERTIES = ['position', 'top', 'right', 'bottom', 'left'] as cons
 // out against an ancestor (an endTrigger there released 100px early). Relative all the same where
 // a cover's lift raises it, as the lift does any static sibling, so its z-index applies.
 export const commitPinOffsets = (outer: HTMLElement, offsets: PinOffsets | null): void => {
-  const unlifted = offsets ? 'relative' : 'static';
   const values = {
-    position: isLifted(outer) ? 'relative' : unlifted,
+    position: offsets || isLifted(outer) ? 'relative' : 'static',
     top: offsets ? `${offsets.top}px` : 'auto',
     right: 'auto',
     bottom: 'auto',
@@ -107,27 +106,11 @@ export const commitPinOffsets = (outer: HTMLElement, offsets: PinOffsets | null)
   OFFSET_PROPERTIES.forEach((property) => {
     outer.style.setProperty(property, values[property], 'important');
   });
-
-  // The lift's restore leaves outer as this commit would without it.
-  adoptLiftedPosition(outer, { value: unlifted, priority: 'important' });
 };
 
-export interface OuterPosition {
-  values: InlineValue[];
-  lifted: LiftedPosition;
-}
-
-// outer's offset, and the lift's record of its position that commitPinOffsets hands over.
-export const captureOuterPosition = (outer: HTMLElement): OuterPosition => ({
-  values: OFFSET_PROPERTIES.map((property) => captureInline(outer, property)),
-  lifted: captureLiftedPosition(outer),
-});
-
-// Rolls outer's offset back after a pass that throws, so a lift coming off later leaves it as the
-// last successful refresh() would.
-export const commitOuterPosition = (outer: HTMLElement, saved: OuterPosition): void => {
-  OFFSET_PROPERTIES.forEach((property, i) => restoreInline(outer, property, saved.values[i]));
-  restoreLiftedPosition(outer, saved.lifted);
+// Puts outer's offsets back as captureInlinePosition saved them, after a pass that throws.
+export const commitOuterPosition = (outer: HTMLElement, saved: InlinePosition): void => {
+  OFFSET_PROPERTIES.forEach((property) => restoreInline(outer, property, saved[property]));
 };
 
 // Holds a trigger with no relative offset static for the reads, where it pins (a relative one goes

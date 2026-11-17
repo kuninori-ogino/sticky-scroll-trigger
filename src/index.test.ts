@@ -4249,6 +4249,21 @@ describe('\'max\' end keyword', () => {
       .toEqual(['sticky', '', '30px', '']);
   });
 
+  // The hold's undo keeps an inline value set on trigger since the wrap.
+  it('keeps a left set on a relative trigger since it wrapped through the next refresh()', () => {
+    const { query, controller } = setup();
+    const good = query('.inside');
+
+    good.style.cssText = 'position: relative; top: 40px';
+    offsetBy(good, 40);
+    controller.createStickyPin({ trigger: good, endTrigger: query('.scene') });
+    controller.refresh();
+    good.style.left = '20px';
+    controller.refresh();
+
+    expect([good.style.position, good.style.left]).toEqual(['sticky', '20px']);
+  });
+
   // A page rule's position: relative !important keeps trigger relative, with its offset, through
   // the reads and after: it can't go sticky, so no sticky top shifts it, in the next refresh()
   // either.

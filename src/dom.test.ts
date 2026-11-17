@@ -8,13 +8,10 @@ import {
   fitPinBoxes,
   insertSpacers,
   isMovingDom,
-  adoptLiftedPosition,
-  captureLiftedPosition,
   clearWrapperStyle,
   isLifted,
   leaveScenePlace,
   liftAboveStickyWrapper,
-  restoreLiftedPosition,
   measureDocumentHeightWithoutPinRanges,
   measureDocumentMaxScroll,
   measureUsedHeight,
@@ -1327,41 +1324,6 @@ describe('liftAboveStickyWrapper', () => {
     restore();
 
     expect(byId('cover').style.cssText).toBe('position: static !important;');
-  });
-
-  // An element the lift found relative has no position record until one is adopted.
-  it('puts back an adopted position on the last restore, and adopts nothing unlifted', () => {
-    document.body.innerHTML
-      = '<div id="host"><div id="cover"></div><div id="outer" style="position: relative"></div></div>';
-
-    adoptLiftedPosition(byId('outer'), { value: 'static', priority: '' });
-    expect(byId('outer').style.position).toBe('relative');
-
-    const restore = liftAboveStickyWrapper(byId('cover'));
-
-    adoptLiftedPosition(byId('outer'), { value: 'static', priority: 'important' });
-    restore();
-
-    expect(byId('outer').style.cssText).toBe('position: static !important;');
-  });
-
-  // A capture with no record restores to none, so the lift's restore leaves position alone.
-  it('puts the position record captured before an adoption back, none included', () => {
-    document.body.innerHTML
-      = '<div id="host"><div id="cover"></div><div id="outer" style="position: relative"></div></div>';
-
-    expect(captureLiftedPosition(byId('outer'))).toBeNull();
-
-    const restore = liftAboveStickyWrapper(byId('cover'));
-    const saved = captureLiftedPosition(byId('outer'));
-
-    expect(saved).toBeUndefined();
-
-    adoptLiftedPosition(byId('outer'), { value: 'static', priority: '' });
-    restoreLiftedPosition(byId('outer'), saved);
-    restore();
-
-    expect(byId('outer').style.position).toBe('relative');
   });
 
   it('marks what it raised as lifted until the last restore', () => {

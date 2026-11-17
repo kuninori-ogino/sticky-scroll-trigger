@@ -31,7 +31,7 @@ import {
   wrapPin,
   type SpacerPlans,
 } from './dom';
-import type { FittedPins, PinOffsets } from './dom';
+import type { FittedPins, InlinePosition, PinOffsets } from './dom';
 import {
   clearDormancy,
   isWebKit,
@@ -55,7 +55,6 @@ import {
 } from './gsap';
 import type { ScrollTriggerClass } from './gsap';
 import {
-  captureOuterPosition,
   clearHeightForRead,
   clearRangeForRead,
   clearStickyForRead,
@@ -1064,9 +1063,6 @@ export default class StickyScrollTrigger {
   #unwrapPinLayer(layer: PinLayer): boolean {
     if (!layer.outer) return false;
 
-    if (layer.heldPosition) commitPosition(layer.trigger, layer.heldPosition);
-
-    layer.heldPosition = null;
     unwrapPin(layer.outer, layer.trigger, layer.savedPosition);
     layer.outer = null;
     layer.inner = null;
@@ -1091,12 +1087,12 @@ export default class StickyScrollTrigger {
 
   // Snapshots and resets every wrapped pin's own sticky state, returning a function that puts it
   // back. A stuck pin shifts documentTop for its trigger and everything inside it, as a stuck
-  // wrapper does (see #resetSceneCoverStickyState). A pin that isn't sticky (see PinLayer's sticky)
-  // is skipped: it can't be stuck, and a reset would undo a page rule's !important position or a
-  // refresh()'s hold.
+  // wrapper does (see #resetSceneCoverStickyState). Only one with an inline sticky can be stuck;
+  // skipping the rest keeps a page rule's !important position, and a refresh()'s hold for a start
+  // or end function's read.
   #resetPinStickyState(): () => void {
     const restores = this.#pinLayers
-      .filter(({ inner, sticky }) => inner && sticky)
+      .filter(({ inner, trigger }) => inner && trigger.style.position === 'sticky')
       .map((layer) => stripStickyPositions([layer.trigger]));
 
     return () => restores.forEach((restore) => restore());
@@ -1201,17 +1197,18 @@ export default class StickyScrollTrigger {
     const savedWrappers = wrappers.map(captureInlinePosition);
     const pins = this.#pinLayers.map((layer) => ({
       layer,
-      sticky: layer.sticky,
       position: captureInlinePosition(layer.trigger),
-      outerPosition: layer.outer ? captureOuterPosition(layer.outer) : null,
+      outerPosition: layer.outer ? captureInlinePosition(layer.outer) : null,
       range: layer.inner ? layer.inner.style.height : '',
     }));
 
     // Every one cleared here is written again below, or rolled back on a throw.
     wrappers.forEach(clearStickyForRead);
 
-    StickyScrollTrigger.#carryPinOffsets(pins.map(({ layer }) => layer), pinOffsets);
-
+    const holds = StickyScrollTrigger.#carryPinOffsets(
+      pins.map(({ layer }) => layer),
+      pinOffsets,
+    );
     let stickyTops: Map<HTMLElement, number>;
     let marginTops: Map<HTMLElement, number>;
 
@@ -1232,11 +1229,9 @@ export default class StickyScrollTrigger {
       // replace, and restoring them would undo the lot.
       wrappers.forEach((wrapper, i) => commitPosition(wrapper, savedWrappers[i]));
 
-      pins.forEach(({ layer, sticky, position, outerPosition }) => {
+      pins.forEach(({ layer, position, outerPosition }) => {
         if (!layer.inner || !layer.outer || !outerPosition) return;
 
-        layer.sticky = sticky;
-        layer.heldPosition = null;
         commitPosition(layer.trigger, position);
         commitOuterPosition(layer.outer, outerPosition);
       });
@@ -1261,11 +1256,9 @@ export default class StickyScrollTrigger {
       }
     } catch (error) {
       stickyTops.forEach((top, wrapper) => commitSticky(wrapper, top));
-      pins.forEach(({ layer, sticky, position, outerPosition, range }) => {
+      pins.forEach(({ layer, position, outerPosition, range }) => {
         if (!layer.inner || !layer.outer || !outerPosition) return;
 
-        layer.sticky = sticky;
-        layer.heldPosition = null;
         commitPosition(layer.trigger, position);
         commitOuterPosition(layer.outer, outerPosition);
         commitRange(layer.inner, range);
@@ -1275,10 +1268,11 @@ export default class StickyScrollTrigger {
     }
 
     // Read before any write: a trigger a page rule's !important position kept from the static hold
-    // can't go sticky either, so it gets its own position and top back, where sticky's top would
-    // shift it as an offset. GSAP's pin sits there too until it engages.
+    // (Bootstrap's position-relative, say) can't go sticky either, so it keeps its own position and
+    // top, where sticky's top would shift it as an offset. GSAP's pin sits there too until it
+    // engages. One with an offset is relative from the hold, not a rule, and is left out.
     const unstickable = new Set(plannedPins.flatMap(({ layer }) => {
-      if (!layer.inner || layer.heldPosition) return [];
+      if (!layer.inner || pinOffsets.get(layer)) return [];
 
       const { position } = getComputedStyle(layer.trigger);
 
@@ -1291,18 +1285,10 @@ export default class StickyScrollTrigger {
       // #planPinLayers plans wrapped pins only.
       if (!layer.inner) return;
 
-      // The offsets a relative trigger was held at for the reads go.
-      if (layer.heldPosition) commitPosition(layer.trigger, layer.heldPosition);
+      // The hold's offsets go back to the author's, then sticky's top where it can apply.
+      commitPosition(layer.trigger, holds.get(layer) ?? layer.savedPosition);
 
-      layer.heldPosition = null;
-
-      layer.sticky = !unstickable.has(layer);
-
-      if (layer.sticky) {
-        commitSticky(layer.trigger, topPx);
-      } else {
-        commitPosition(layer.trigger, layer.savedPosition);
-      }
+      if (!unstickable.has(layer)) commitSticky(layer.trigger, topPx);
 
       commitRange(layer.inner, `${range}px`);
     });
@@ -1314,11 +1300,14 @@ export default class StickyScrollTrigger {
   // moves a pin's onto its spacer, read by fitPinBoxes with trigger in its own containing block.
   // One it couldn't read (no box: a hidden tab's, say) keeps what outer carries. trigger is held
   // static, so the reads see it where it pins, and a relative one relative, unshifted
-  // (holdRelativeForRead), its inline position from before the hold kept on the layer.
+  // (holdRelativeForRead). Returns trigger's inline position before each hold, for the commit to
+  // put back, a left, right or bottom set since the wrap included.
   static #carryPinOffsets(
     layers: readonly PinLayer[],
     offsets: ReadonlyMap<PinLayer, PinOffsets | null>,
-  ): void {
+  ): Map<PinLayer, InlinePosition> {
+    const holds = new Map<PinLayer, InlinePosition>();
+
     layers.forEach((layer) => {
       const { outer, trigger } = layer;
 
@@ -1331,20 +1320,18 @@ export default class StickyScrollTrigger {
         commitPinOffsets(outer, offset && (offset.top || offset.left) ? offset : null);
       }
 
-      // trigger's own position back first, so the last commit's sticky top doesn't shift one a
-      // page rule's position: relative !important keeps relative through the hold.
-      layer.sticky = false;
+      // trigger's own position back first, so the hold keeps the author's top, not sticky's.
       commitPosition(trigger, layer.savedPosition);
+      holds.set(layer, captureInlinePosition(trigger));
 
-      if (!offset) {
+      if (offset) {
+        holdRelativeForRead(trigger);
+      } else {
         holdPinForRead(trigger);
-
-        return;
       }
-
-      layer.heldPosition = captureInlinePosition(trigger);
-      holdRelativeForRead(trigger);
     });
+
+    return holds;
   }
 
   // Works out pin layers' sticky top and spacer height. Pinning here is plain position:sticky, so
@@ -2466,8 +2453,6 @@ export default class StickyScrollTrigger {
       savedPosition: captureInlinePosition(trigger),
       outer: null,
       inner: null,
-      sticky: false,
-      heldPosition: null,
       start: asStartEndFunction(top === undefined ? start ?? 'top top' : topToStartClause(top)),
       endTrigger,
       end: asStartEndFunction(end),
@@ -2619,8 +2604,8 @@ export default class StickyScrollTrigger {
         () => documentTop(element),
       );
     } finally {
-      // Last in, first out: an instance listed twice strips its pins again, saving the first
-      // strip's values.
+      // Last in, first out. An instance listed twice skips its pins the second time: stripped,
+      // they aren't sticky.
       restores.reverse().forEach((restore) => restore());
     }
   }

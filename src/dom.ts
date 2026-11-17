@@ -1474,45 +1474,6 @@ const liftStates = new WeakMap<HTMLElement, LiftState>();
 // Raised by a cover's lift (a pin's outer after the cover, say).
 export const isLifted = (el: HTMLElement): boolean => liftStates.has(el);
 
-// Makes the lift's record of el's position match the value on it now, with `unlifted` as what the
-// last restore puts back. commitPinOffsets writes over the lift on a pin's outer, so a lift coming
-// off leaves outer as the commit would without one.
-export const adoptLiftedPosition = (el: HTMLElement, unlifted: InlineValue): void => {
-  const state = liftStates.get(el);
-
-  if (!state) return;
-
-  const adopted: LiftedProperty = {
-    property: 'position',
-    authored: unlifted,
-    written: el.style.getPropertyValue('position'),
-    priority: el.style.getPropertyPriority('position'),
-  };
-
-  state.applied = [...state.applied.filter(({ property }) => property !== 'position'), adopted];
-};
-
-// The lift's record of a lifted element's position, for a rollback to put back with the position
-// itself: undefined with none, null for an element not lifted.
-export type LiftedPosition = LiftedProperty | undefined | null;
-
-export const captureLiftedPosition = (el: HTMLElement): LiftedPosition => {
-  const state = liftStates.get(el);
-
-  return state ? state.applied.find(({ property }) => property === 'position') : null;
-};
-
-export const restoreLiftedPosition = (el: HTMLElement, saved: LiftedPosition): void => {
-  const state = liftStates.get(el);
-
-  if (!state || saved === null) return;
-
-  state.applied = [
-    ...state.applied.filter(({ property }) => property !== 'position'),
-    ...(saved ? [saved] : []),
-  ];
-};
-
 // Raises the covering side above the sticky wrapper (position:sticky creates a stacking context).
 // Only sets a property whose computed value is static/auto, so other values are respected. Both go
 // in through CSSOM rather than a stylesheet of the module's own, which is what keeps a strict

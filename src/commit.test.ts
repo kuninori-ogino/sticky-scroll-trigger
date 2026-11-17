@@ -10,7 +10,6 @@ import {
   commitHeldMargin,
   commitInert,
   commitMarginProbe,
-  captureOuterPosition,
   commitOuterPosition,
   commitPinOffsets,
   commitPosition,
@@ -298,24 +297,6 @@ describe('commitPinOffsets', () => {
     restore();
     expect(offsets(outer)[0]).toBe('static important');
   });
-
-  // The lift's restore gives outer what the last commit would without the lift, whichever of the
-  // two wrote position first.
-  it.each([
-    ['an offset carried since the lift', 'position: static !important', { top: 40, left: 0 }, 'relative'],
-    ['none, over a lift made before outer had a position', '', null, 'static'],
-  ])('leaves outer as unlifted on the lift\'s restore: %s', (_, style, carried, position) => {
-    document.body.innerHTML = `<div id="cover"></div><div id="outer" style="${style}"></div>`;
-
-    const outer = document.getElementById('outer')!;
-    const restore = liftAboveStickyWrapper(document.getElementById('cover')!);
-
-    commitPinOffsets(outer, carried);
-    restore();
-
-    expect(offsets(outer).slice(0, 2))
-      .toEqual([`${position} important`, carried ? '40px important' : 'auto important']);
-  });
 });
 
 describe('holdRelativeForRead', () => {
@@ -330,22 +311,24 @@ describe('holdRelativeForRead', () => {
 });
 
 describe('commitOuterPosition', () => {
-  // A rollback puts the lift's record back with outer's offset, so a lift coming off later leaves
-  // outer as the last successful refresh() did.
-  it('rolls back outer\'s offset and the position handed to the lift', () => {
+  // A lifted outer with no offset is relative, and keeps its !important through the rollback.
+  it('rolls back outer\'s offset with its priority', () => {
     document.body.innerHTML = '<div id="cover"></div><div id="outer"></div>';
 
     const outer = document.getElementById('outer')!;
     const restore = liftAboveStickyWrapper(document.getElementById('cover')!);
 
-    commitPinOffsets(outer, { top: 40, left: 0 });
-
-    const saved = captureOuterPosition(outer);
-
     commitPinOffsets(outer, null);
-    commitOuterPosition(outer, saved);
-    restore();
 
-    expect([outer.style.position, outer.style.top]).toEqual(['relative', '40px']);
+    const saved = captureInlinePosition(outer);
+
+    commitPinOffsets(outer, { top: 40, left: 0 });
+    commitOuterPosition(outer, saved);
+
+    const position = [outer.style.position, outer.style.getPropertyPriority('position'),
+      outer.style.top];
+
+    restore();
+    expect(position).toEqual(['relative', 'important', 'auto']);
   });
 });
