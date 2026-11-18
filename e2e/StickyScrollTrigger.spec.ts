@@ -495,12 +495,7 @@ for (const layout of [
   'collapseAfterContainerMargin',
   'collapseAfterPageMargin',
   'collapseAfterEm',
-  'collapseAfterMixed',
-  'collapseAfterMixedNear',
-  'collapseAfterMixedNegative',
-  'collapseAfterMixedNextNegative',
-  'collapseAfterMixedEm',
-  'collapseAfterMixedLarge',
+  'collapseAfterMixedNoDwell',
 ]) {
   test(`what follows the shared container sits where it does unwrapped, past the dwell (${layout})`, async ({
     page,
@@ -523,6 +518,24 @@ for (const layout of ['flexParent', 'gridParent', 'wrapperPadding']) {
 
     expect(stillRuns).toEqual(windows.filter(([start, end]) => end > start));
     expect(tailTop).toBe(unwrappedTailTop + dwellOf(windows));
+  });
+}
+
+// Margins of both signs ending the container are held in too: their sum adds to the top margin of
+// what follows instead of collapsing with it, and the freezes end on their windows.
+for (const [layout, offset] of [
+  ['collapseAfterMixed', 30],
+  ['collapseAfterMixedNegative', 10],
+  ['collapseAfterMixedEqual', 30],
+  ['collapseAfterMixedNextNegative', -10],
+] as const) {
+  test(`margins of both signs ending the container stay in without lengthening a freeze (${layout})`, async ({
+    page,
+  }) => {
+    const { windows, stillRuns, unwrappedTailTop, tailTop } = await readSceneMargins(page, layout);
+
+    expect(stillRuns).toEqual(windows.filter(([start, end]) => end > start));
+    expect(tailTop).toBe(unwrappedTailTop + offset + dwellOf(windows));
   });
 }
 
@@ -577,35 +590,10 @@ test('a refresh() that holds the trailing margin in leaves the page and the scro
   expect(after).toEqual(before);
 });
 
-// Holding the margin in takes the part a container carried off too, which would otherwise get out
-// past the sentinel.
-test('a refresh() that holds margins of both signs in carries no part of them', async ({ page }) => {
-  await readSceneMargins(page, 'collapseAfterMixed');
-
-  const { windows, stillRuns, tailTop, footerBottom } = await page.evaluate(() => {
-    const win = window as unknown as {
-      __setParentDisplay: (display: string) => void;
-      __sceneMargins: () => SceneMargins;
-    };
-
-    document.body.style.flexDirection = 'column';
-    win.__setParentDisplay('flex');
-
-    return {
-      ...win.__sceneMargins(),
-      footerBottom: document.getElementById('footer')!.getBoundingClientRect().bottom + window.scrollY,
-    };
-  });
-
-  // In the item, 40 and -10 collapse to 30; the 30 after it adds to that.
-  expect(tailTop).toBe(footerBottom + 60 + dwellOf(windows));
-  expect(stillRuns).toEqual(windows.filter(([start, end]) => end > start));
-});
-
-// A killed scene's level stays in the DOM without its carried parts, so what follows moves with a
-// margin changed after the kill.
+// A killed scene's level stays in the DOM without the margin it carried, so what follows moves
+// with a margin changed after the kill.
 test('a killed scene\'s level carries no margin once the container\'s margin changes', async ({ page }) => {
-  await readSceneMargins(page, 'collapseAfterMixedKill');
+  await readSceneMargins(page, 'collapseAfterCarriedKill');
 
   const { windows, tailTop, footerBottom } = await page.evaluate(() => {
     const win = window as unknown as {
@@ -621,8 +609,26 @@ test('a killed scene\'s level carries no margin once the container\'s margin cha
     };
   });
 
-  // 40 above 30 once the -10 is gone, and the second scene's dwell alone.
+  // 40 above 30 once the 50 is gone, and the second scene's dwell alone.
   expect(tailTop).toBe(footerBottom + 40 + windows[1][1] - windows[1][0]);
+});
+
+// Once the last scene is killed, margins of both signs collapse out as unwrapped, even where a pin
+// keeps the structure.
+test('killing the last scene lets margins of both signs collapse out again', async ({ page }) => {
+  await readSceneMargins(page, 'collapseAfterMixedKillPinned');
+
+  const gap = await page.evaluate(() => {
+    const win = window as unknown as { __killThenRefresh: (index: number) => void };
+    const top = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+
+    win.__killThenRefresh(0);
+
+    return top('.tail').top - top('#footer').bottom;
+  });
+
+  // 40 and -10 collapse with the 30 after them to 30.
+  expect(gap).toBe(30);
 });
 
 // With no margin to carry at refresh(), the sentinel holds the margin in, so one that shows up
@@ -680,23 +686,44 @@ test('a refresh() after the trailing margin changes moves what follows the conta
   }
 });
 
-// An end function reading below the container sees it where it is unwrapped, plus the dwell of the
-// layers before (here the first scene's 300). The second refresh() calls it with the margin the
-// first carried in place.
-test('an end function re-evaluated below the shared container reads it past the earlier dwell only', async ({
-  page,
-}) => {
-  const { unwrappedTailTop } = await readSceneMargins(page, 'collapseAfterLiveEnd');
-  const reads = await page.evaluate(() => {
-    const win = window as unknown as { __refresh: () => void; __liveEndReads: number[] };
+// An instance above lets this one's sentinel go for its end function and holds it again after.
+test('an end function of an instance above leaves a held margin of both signs held', async ({ page }) => {
+  const before = await readSceneMargins(page, 'collapseAfterMixed');
+  const after = await page.evaluate(() => {
+    const win = window as unknown as {
+      __refreshInstanceAbove: () => void;
+      __sceneMargins: () => SceneMargins;
+    };
 
-    win.__refresh();
+    win.__refreshInstanceAbove();
 
-    return win.__liveEndReads;
+    return win.__sceneMargins();
   });
 
-  expect(reads.at(-1)).toBe(unwrappedTailTop + 300);
+  // The instance above adds its 100px block and no dwell.
+  expect(after.tailTop).toBe(before.tailTop + 100);
+  expect(after.stillRuns).toEqual(before.stillRuns.map(([start, end]) => [start + 100, end + 100]));
 });
+
+// An end function reading below the container sees it where it is unwrapped, plus the dwell of the
+// layers before (here the first scene's 300). The second refresh() calls it with the margin the
+// first carried in place, and a sentinel the first held let go.
+for (const layout of ['collapseAfterLiveEnd', 'collapseAfterMixedLiveEnd', 'flexParentLiveEnd']) {
+  test(`an end function re-evaluated below the shared container reads it past the earlier dwell only (${layout})`, async ({
+    page,
+  }) => {
+    const { unwrappedTailTop } = await readSceneMargins(page, layout);
+    const reads = await page.evaluate(() => {
+      const win = window as unknown as { __refresh: () => void; __liveEndReads: number[] };
+
+      win.__refresh();
+
+      return win.__liveEndReads;
+    });
+
+    expect(reads.at(-1)).toBe(unwrappedTailTop + 300);
+  });
+}
 
 // A cover layer's window counts a Scene layer's dwell only when the scene freezes first. Counted by
 // DOM order, insideTallScene ran 500px late and midRise ended 500px early.

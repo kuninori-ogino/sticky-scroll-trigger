@@ -4,17 +4,16 @@ import {
   clearHeightForRead,
   clearStickyForRead,
   commitCarriedMargin,
-  commitContainerMargin,
   commitCssText,
   commitHeight,
   commitHeldMargin,
   commitInert,
-  commitMarginProbe,
   commitOuterPosition,
   commitPinOffsets,
   commitPosition,
   commitSticky,
   holdRelativeForRead,
+  isMarginHeld,
 } from './commit';
 import { captureInlinePosition, liftAboveStickyWrapper, wrapScene } from './dom';
 
@@ -90,25 +89,21 @@ describe('clears on a Scene level', () => {
     expect(inline(wrapper, ['position', 'top'])).toEqual(['static important', 'auto important']);
   });
 
-  it('commitCarriedMargin(null) and commitContainerMargin(null) leave no margin', () => {
-    const { container, padding } = level();
+  it('commitCarriedMargin(null) leaves no margin', () => {
+    const { padding } = level();
 
     commitCarriedMargin(padding, 16);
-    commitContainerMargin(container, -10);
     commitCarriedMargin(padding, null);
-    commitContainerMargin(container, null);
 
     expect(inline(padding, ['margin-top', 'margin-bottom']))
       .toEqual(['0px important', '0px important']);
-    // container holds the shared container's place: a rule's margin there is the page's.
-    expect(container.style.marginBottom).toBe('');
   });
 
   it('commitInert leaves the wrapper static', () => {
-    const { container, wrapper, padding } = level();
+    const { wrapper, padding } = level();
 
     commitSticky(wrapper, 10);
-    commitInert(wrapper, padding, container);
+    commitInert(wrapper, padding);
 
     expect(inline(wrapper, ['position', 'top'])).toEqual(['static important', 'auto important']);
   });
@@ -160,56 +155,41 @@ describe('commitHeldMargin', () => {
 
     expect(sentinel.style.cssText).toBe('display: none;');
   });
-});
 
-describe('commitContainerMargin', () => {
-  it('sets the container\'s bottom margin, and clears it with null', () => {
-    const container = element('height: 300px');
+  it('is what isMarginHeld reads back', () => {
+    const sentinel = element('display: none');
 
-    commitContainerMargin(container, -10);
+    expect(isMarginHeld(sentinel)).toBe(false);
 
-    expect(container.style.cssText).toBe('height: 300px; margin-bottom: -10px;');
+    commitHeldMargin(sentinel, true);
 
-    commitContainerMargin(container, null);
+    expect(isMarginHeld(sentinel)).toBe(true);
 
-    expect(container.style.cssText).toBe('height: 300px;');
-  });
-});
+    commitHeldMargin(sentinel, false);
 
-describe('commitMarginProbe', () => {
-  it('sets only the padding\'s top margin', () => {
-    const padding = element('height: 200px; margin-top: -30px; margin-bottom: 30px');
-
-    commitMarginProbe(padding, 1e6);
-
-    expect([padding.style.height, padding.style.marginTop, padding.style.marginBottom])
-      .toEqual(['200px', '1000000px', '30px']);
+    expect(isMarginHeld(sentinel)).toBe(false);
   });
 });
 
 describe('commitInert', () => {
   it('takes sticky off the wrapper, the dwell and carried margins off the level, and nothing else', () => {
     document.body.innerHTML = `
-      <div id="container" style="width: 2px; margin-bottom: -10px">
-        <div id="wrapper" style="position: sticky; top: 10px; z-index: 0; height: 5px"></div>
-        <div id="padding" style="height: 200px; width: 1px; margin-top: -16px; margin-bottom: 16px"></div>
-      </div>`;
+      <div id="wrapper" style="position: sticky; top: 10px; z-index: 0; height: 5px"></div>
+      <div id="padding" style="height: 200px; width: 1px; margin-top: -16px; margin-bottom: 16px"></div>`;
 
-    const container = document.getElementById('container')!;
     const wrapper = document.getElementById('wrapper')!;
     const padding = document.getElementById('padding')!;
 
-    commitInert(wrapper, padding, container);
+    commitInert(wrapper, padding);
 
     expect(wrapper.style.cssText).toBe('z-index: 0; height: 5px;');
     expect(padding.style.cssText).toBe('height: 0px; width: 1px;');
-    expect(container.style.cssText).toBe('width: 2px;');
   });
 
-  it('leaves the padding and container out when there are none', () => {
+  it('leaves the padding out when there is none', () => {
     const wrapper = element('position: sticky; top: 10px');
 
-    commitInert(wrapper, null, null);
+    commitInert(wrapper, null);
 
     expect(wrapper.style.cssText).toBe('');
   });

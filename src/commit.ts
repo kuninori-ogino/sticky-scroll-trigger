@@ -50,32 +50,16 @@ export const commitCarriedMargin = (padding: HTMLElement, margin: number | null)
   }
 };
 
-// Margins of both signs collapse to the largest plus the most negative, so only minus the larger
-// part cancels them: the padding carries that one, and its container's margin-bottom the other, so
-// both leave the container as they reached the padding.
-export const commitContainerMargin = (container: HTMLElement, margin: number | null): void => {
-  if (margin === null) clearWrapperStyle(container, 'margin-bottom');
-  else container.style.marginBottom = `${margin}px`;
-};
-
-// A margin-top larger than the positive part of the margins above the padding collapses with them
-// to itself plus their negative part, which refresh() reads off.
-export const commitMarginProbe = (padding: HTMLElement, probe: number): void => {
-  padding.style.marginTop = `${probe}px`;
-};
-
-// Holds the margin ending the shared container in the innermost wrapper (flow-root) where carrying
-// it out would leave it inside a container, lengthening the freeze, or lets it out (none).
+// Holds the margin ending the shared container in the innermost wrapper (flow-root) where a carry
+// doesn't fit, or lets it out (none).
 export const commitHeldMargin = (sentinel: HTMLElement, held: boolean): void => {
   sentinel.style.display = held ? 'flow-root' : 'none';
 };
 
+export const isMarginHeld = (sentinel: HTMLElement): boolean => sentinel.style.display === 'flow-root';
+
 // A Scene level a kill leaves in the DOM: no longer sticky, no dwell, and no carried margin.
-export const commitInert = (
-  wrapper: HTMLElement,
-  padding: HTMLElement | null,
-  container: HTMLElement | null,
-): void => {
+export const commitInert = (wrapper: HTMLElement, padding: HTMLElement | null): void => {
   clearWrapperStyle(wrapper, 'position');
   clearWrapperStyle(wrapper, 'top');
 
@@ -83,8 +67,6 @@ export const commitInert = (
     padding.style.height = '0px';
     commitCarriedMargin(padding, null);
   }
-
-  if (container) commitContainerMargin(container, null);
 };
 
 const OFFSET_PROPERTIES = ['position', 'top', 'right', 'bottom', 'left'] as const;

@@ -59,12 +59,10 @@ import {
   clearRangeForRead,
   clearStickyForRead,
   commitCarriedMargin,
-  commitContainerMargin,
   commitCssText,
   commitHeight,
   commitHeldMargin,
   commitInert,
-  commitMarginProbe,
   commitOuterPosition,
   commitPinOffsets,
   commitPosition,
@@ -72,6 +70,7 @@ import {
   commitSticky,
   holdPinForRead,
   holdRelativeForRead,
+  isMarginHeld,
 } from './commit';
 import {
   asLayerHandler,
@@ -647,11 +646,18 @@ export default class StickyScrollTrigger {
     for (const layer of removed) {
       if (!layer.wrapper) continue;
 
-      commitInert(layer.wrapper, layer.padding, layer.container);
+      commitInert(layer.wrapper, layer.padding);
       layer.wrapper = null;
       layer.container = null;
       layer.padding = null;
     }
+
+    // With no Scene level left, the margin collapses out through the empty paddings as unwrapped.
+    const sentinel = removed.length && !this.#layers.some((layer) => layer.kind === 'scene')
+      ? sceneSentinel(this.#rootElement)
+      : null;
+
+    if (sentinel) commitHeldMargin(sentinel, false);
 
     this.#builtLayers = [...this.#layers];
     structureChanges += 1;
@@ -1541,21 +1547,15 @@ export default class StickyScrollTrigger {
   // Carries the bottom margin ending the shared container past every dwell (see
   // commitCarriedMargin), so what follows sits where it does unwrapped. The margin is read at the
   // innermost level with dwell, between its wrapper and padding. A sticky wrapper travels its
-  // container's height less its own, so every level must come out at its dwell. Where one doesn't,
-  // the margin may mix signs (see commitContainerMargin): a probe reads the negative part and the
-  // carry goes again in two parts. Where one still doesn't (a flex or grid parent, or a page rule
-  // padding the outermost wrapper), the sentinel holds the margin in, as unwrapped there. It also
-  // holds when there is no margin to carry, so one added before the next refresh() can't lengthen a
-  // freeze.
+  // container's height less its own, so every level must come out at its dwell. Where one doesn't
+  // (a flex or grid parent, a page rule padding the outermost wrapper, or margins of both signs),
+  // the sentinel holds the margin in: as unwrapped for the first two, while margins of both signs
+  // then add to the next top margin (a documented limit). It also holds when there is no margin to
+  // carry, so one added before the next refresh() can't lengthen a freeze.
   #carryTrailingMargin() {
     // Far above what computed heights round away (Chromium's are a few hundredths off); a margin
     // below it lengthens a freeze by less than a quarter pixel.
     const tolerance = 0.25;
-    // Kept small: computed heights keep six significant digits, so a taller container reads
-    // coarser. The page is that much taller only until the carry is written, with no frame between.
-    const firstProbe = 1000;
-    // Past this, the sentinel holds.
-    const maxProbe = 1e6;
     const levels = this.#layers.flatMap((layer) =>
       (layer.kind === 'scene' && layer.container && layer.wrapper && layer.padding
         ? [{ container: layer.container, wrapper: layer.wrapper, padding: layer.padding }]
@@ -1564,10 +1564,7 @@ export default class StickyScrollTrigger {
 
     if (!levels.length) return;
 
-    const clear = () => levels.forEach(({ container, padding }) => {
-      commitCarriedMargin(padding, null);
-      commitContainerMargin(container, null);
-    });
+    const clear = () => levels.forEach(({ padding }) => commitCarriedMargin(padding, null));
 
     const hold = () => {
       clear();
@@ -1584,16 +1581,6 @@ export default class StickyScrollTrigger {
     const extra = (index: number) => measureUsedHeight(levels[index].container)
       - measureUsedHeight(levels[index].wrapper) - dwells[index];
     const fits = () => levels.every((_, index) => Math.abs(extra(index)) < tolerance);
-
-    // other is the part the container carries, 0 for a margin of one sign.
-    const carry = (margin: number, other: number) => {
-      levels.forEach(({ container, padding }, index) => {
-        if (dwells[index] <= 0) return;
-
-        commitCarriedMargin(padding, margin);
-        commitContainerMargin(container, other === 0 ? null : other);
-      });
-    };
 
     // Nothing laid out (a hidden ancestor, or jsdom) has no margin to read.
     if (measureUsedHeight(levels[levels.length - 1].container) === 0) {
@@ -1620,39 +1607,9 @@ export default class StickyScrollTrigger {
       return;
     }
 
-    carry(margin, 0);
-
-    if (fits()) return;
-
-    let probe = firstProbe;
-    let probed = margin;
-
-    // A probe no larger than the positive part changes nothing: read again with one twice as large.
-    for (; probe <= maxProbe; probe *= 2) {
-      commitMarginProbe(levels[first].padding, probe);
-      probed = extra(first);
-
-      if (Math.abs(probed - margin) >= tolerance) break;
-    }
-
-    if (probe > maxProbe) {
-      hold();
-
-      return;
-    }
-
-    const negative = Math.min(0, probed - probe);
-    const positive = margin - negative;
-
-    // No negative part: the margin is of one sign and still doesn't fit, so it can't get out.
-    if (-negative < tolerance) {
-      hold();
-
-      return;
-    }
-
-    if (positive >= -negative) carry(positive, negative);
-    else carry(negative, positive);
+    levels.forEach(({ padding }, index) => {
+      if (dwells[index] > 0) commitCarriedMargin(padding, margin);
+    });
 
     if (!fits()) hold();
   }
@@ -1717,15 +1674,22 @@ export default class StickyScrollTrigger {
       : []));
     const later = [...armedInstances].filter((other) => other !== this
       && compareDocumentOrder(this.#rootElement, other.#rootElement) < 0);
-    const held = [this, ...later].flatMap((instance) => instance.#layers.flatMap((layer) =>
+    const takenDown = [this, ...later];
+    const held = takenDown.flatMap((instance) => instance.#layers.flatMap((layer) =>
       (layer.kind === 'scene' && layer.padding ? [layer.padding] : [])));
     const heights = held.map((padding) => padding.style.height);
     // On an empty padding the carried margins would collapse with the margin passing through and
-    // cancel it too, so they come off with the dwell. A container's carried part stays: the margin
-    // passing through has that part already.
+    // cancel it too, so they come off with the dwell.
     const margins = held.map((padding) => (isNeutralWrapperStyle(padding, 'margin-bottom')
       ? null
       : parseFloat(padding.style.marginBottom)));
+    // With the paddings empty, the margin collapses out as unwrapped, so held sentinels let go
+    // (held, margins of both signs would add to what follows).
+    const sentinels = takenDown.flatMap((instance) => {
+      const sentinel = sceneSentinel(instance.#rootElement);
+
+      return sentinel && isMarginHeld(sentinel) ? [sentinel] : [];
+    });
 
     // Returns the function that takes this layout down again.
     const setUp = () => {
@@ -1733,6 +1697,7 @@ export default class StickyScrollTrigger {
         commitHeight(padding, '0px');
         commitCarriedMargin(padding, null);
       });
+      sentinels.forEach((sentinel) => commitHeldMargin(sentinel, false));
 
       const removeSpacers = insertSpacers(spacers, spacerPlans);
 
@@ -1742,6 +1707,7 @@ export default class StickyScrollTrigger {
           commitHeight(padding, heights[k]);
           commitCarriedMargin(padding, margins[k]);
         });
+        sentinels.forEach((sentinel) => commitHeldMargin(sentinel, true));
       };
     };
 
