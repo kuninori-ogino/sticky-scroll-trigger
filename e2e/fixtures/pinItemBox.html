@@ -61,10 +61,16 @@
         blockClear: ['', 'clear: both; height: 300px', 'height: 1200px'],
         hidden: ['display: flex', 'display: none; flex: 0 0 200px; margin: auto', 'flex: 1; height: 100px'],
         inlineBlock: ['', 'display: inline-block; width: 200px; height: 300px', 'display: inline-block; width: 300px; height: 100px'],
+        // A fourth entry is a stylesheet rule placing the row's children, which #pin no longer
+        // matches once wrapped.
+        ruleGrid: ['display: grid; grid-template-columns: 200px 1fr 200px; height: 1200px', '', '', '#row > :first-child { grid-column: 2 }'],
+        ruleFlex: ['display: flex; height: 1200px', '', 'flex: 1', '#row > * { flex: 0 0 200px }'],
       };
       const params = new URLSearchParams(location.search);
       const name = params.get('layout');
-      const [rowStyle, pinStyle, mainStyle] = layouts[name];
+      const [rowStyle, pinStyle, mainStyle, rule = ''] = layouts[name];
+
+      document.head.append(Object.assign(document.createElement('style'), { textContent: rule }));
       const content = {
         childMargin: '<p id="child" style="margin: 40px 0; height: 50px"></p>',
         text: 'lorem ipsum dolor sit amet '.repeat(60),

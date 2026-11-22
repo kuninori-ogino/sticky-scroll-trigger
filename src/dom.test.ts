@@ -504,6 +504,20 @@ describe('fitPinBoxes', () => {
     return { trigger, savedPosition: captureInlinePosition(trigger), ...wrapPin(trigger) };
   };
 
+  // Runs fn with a stylesheet rule on the page, removed after.
+  const withRule = (css: string, fn: () => void) => {
+    const rule = document.createElement('style');
+
+    rule.textContent = css;
+    document.head.append(rule);
+
+    try {
+      fn();
+    } finally {
+      rule.remove();
+    }
+  };
+
   it('gives outer trigger\'s place among a flex item\'s siblings', () => {
     const pin = wrapIn('display: flex', 'order: 2; flex: 1 0 30px; align-self: end; clear: both');
 
@@ -512,6 +526,54 @@ describe('fitPinBoxes', () => {
     expect(pin.outer.style.order).toBe('2');
     expect(pin.outer.style.alignSelf).toBe('end');
     expect(pin.outer.style.clear).toBe('both');
+  });
+
+  it('gives outer a rule\'s value where trigger\'s own is the initial one', () => {
+    const pin = wrapIn('display: flex', 'align-self: end');
+    // trigger's order while its width is read.
+    let read = '';
+
+    Object.defineProperty(pin.trigger, 'offsetWidth', {
+      get: () => {
+        read = pin.trigger.style.getPropertyValue('order');
+
+        return 0;
+      },
+    });
+
+    withRule('#host > * { order: 3; align-self: start }', () => {
+      fitPinBoxes([pin]);
+
+      expect(read).toBe('3');
+      expect(pin.outer.style.order).toBe('3');
+      expect(pin.outer.style.alignSelf).toBe('end');
+      expect(declarations(pin.trigger).some((declaration) => declaration.startsWith('order'))).toBe(false);
+    });
+  });
+
+  // jsdom doesn't expand grid-column, so its longhands stand for it.
+  it('takes a shorthand\'s longhands from trigger together, initial ones included', () => {
+    const pin = wrapIn('display: grid', 'grid-column-start: 2; grid-column-end: auto');
+
+    withRule('#host > * { grid-column-end: span 2; grid-row-start: 2 }', () => {
+      fitPinBoxes([pin]);
+
+      expect(pin.outer.style.gridColumnStart).toBe('2');
+      expect(pin.outer.style.gridColumnEnd).toBe('auto');
+      expect(pin.outer.style.gridRowStart).toBe('2');
+    });
+  });
+
+  it('keeps trigger\'s inline initial value over a rule in its place', () => {
+    const pin = wrapIn('display: flex', 'order: 0');
+
+    withRule('#host > * { order: 3 }', () => {
+      fitPinBoxes([pin]);
+
+      expect(pin.outer.style.order).toBe('0');
+      expect(declarations(pin.trigger).filter((declaration) => declaration.startsWith('order')))
+        .toEqual(['order: 0 ']);
+    });
   });
 
   it('copies only clear in block flow, and unsets what an item copied before', () => {

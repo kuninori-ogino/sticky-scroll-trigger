@@ -825,22 +825,22 @@ export const wrapPin = (trigger: HTMLElement) => {
 // longhands) but not flexGrow or clear, without which a grown flex item or a cleared float moves.
 // The margins and z-index it also copies stay on trigger, and its offsets go onto outer measured
 // (commitPinOffsets), not copied. The flex longhands are what outer goes by until a refresh() can
-// measure trigger (one in a hidden tab, say), flex: 0 0 auto after.
-const PIN_ITEM_PROPERTIES = [
-  'flexGrow',
-  'flexShrink',
-  'flexBasis',
-  'alignSelf',
-  'justifySelf',
-  'order',
-  'gridColumnStart',
-  'gridColumnEnd',
-  'gridRowStart',
-  'gridRowEnd',
-  'cssFloat',
-  'clear',
-  'verticalAlign',
-] as const;
+// measure trigger (one in a hidden tab, say), flex: 0 0 auto after. Wrapped, trigger no longer
+// matches a rule that steps from the parent (.row > * { flex: 1 }), and outer in its place does,
+// so trigger's values count only for a group where one isn't initial: a shorthand
+// (grid-column: 2) sets the whole group.
+const PIN_ITEM_GROUPS = [
+  { 'flex-grow': '0', 'flex-shrink': '1', 'flex-basis': 'auto' },
+  { 'align-self': 'auto' },
+  { 'justify-self': 'auto' },
+  { order: '0' },
+  { 'grid-column-start': 'auto', 'grid-column-end': 'auto' },
+  { 'grid-row-start': 'auto', 'grid-row-end': 'auto' },
+  { float: 'none' },
+  { clear: 'none' },
+  { 'vertical-align': 'baseline' },
+].map((group) => Object.entries(group));
+const PIN_ITEM_PROPERTIES = PIN_ITEM_GROUPS.flat().map(([property]) => property);
 
 // The box outer is laid out in: its parent, or past a display: contents parent, the nearest
 // ancestor that has a box.
@@ -1053,16 +1053,30 @@ const fitReleasedPins = (
   pins: readonly WrappedPin[],
   around: readonly WrappedPin[],
 ): FittedPins => {
+  // Taken off before anything is read, so a rule in trigger's place shows on outer.
+  pins.forEach(({ outer }) => {
+    outer.style.width = '';
+    PIN_ITEM_PROPERTIES.forEach((property) => outer.style.removeProperty(property));
+  });
+
   // Live, so the reads below see the layout as it stands by then.
   const styles = pins.map(({ trigger }) => getComputedStyle(trigger));
   const layouts = pins.map(({ outer }, i) => itemLayout(outer, styles[i]));
   // A trigger with no box under a hidden ancestor (a hidden tab's), or off the document, has none
   // to hold yet, so outer goes by the properties alone until a refresh() can measure one.
   const rendered = pins.map(({ trigger }) => trigger.getClientRects().length > 0);
+  const owned = styles.map((style) => PIN_ITEM_GROUPS.map((group) =>
+    group.map(([property]) => style.getPropertyValue(property))));
+  // An inline value on trigger is its own even at the initial one (style="order: 0").
+  const placed = pins.map(({ trigger, outer }, i) => PIN_ITEM_GROUPS.flatMap((group, g) =>
+    (group.every(([property, initial], k) =>
+      owned[i][g][k] === initial && !trigger.style.getPropertyValue(property))
+      ? group.map(([property]) => outerStyle(outer).getPropertyValue(property))
+      : owned[i][g])));
   // In block flow only a block-level trigger's clear moves outer (an inline one's, or one with no
   // box, applies to nothing); the rest go back to unset.
-  const copied = styles.map((style, i) => PIN_ITEM_PROPERTIES.map((property) =>
-    (layouts[i] || (property === 'clear' && isBlockLevel(style)) ? style[property] : '')));
+  const copied = styles.map((style, i) => PIN_ITEM_PROPERTIES.map((property, j) =>
+    (layouts[i] || (property === 'clear' && isBlockLevel(style)) ? placed[i][j] : '')));
   const measured = pins.flatMap((pin, index) =>
     (rendered[index] ? [{ ...pin, index, layout: layouts[index] }] : []));
   const aroundDisplays = around.map(({ outer, inner }) =>
@@ -1075,10 +1089,7 @@ const fitReleasedPins = (
   });
 
   pins.forEach(({ outer }, i) => {
-    outer.style.width = '';
-    PIN_ITEM_PROPERTIES.forEach((property, j) => {
-      outer.style[property] = copied[i][j];
-    });
+    PIN_ITEM_PROPERTIES.forEach((property, j) => outer.style.setProperty(property, copied[i][j]));
 
     if (rendered[i]) outer.style.display = 'contents';
     else setOuterLayout(outer, layouts[i]);
@@ -1088,8 +1099,30 @@ const fitReleasedPins = (
     setRangeDisplay(inner, 'contents');
   });
 
+  // A trigger read as the item takes what a rule in its place gave outer, so it lays out as it
+  // would there. Returns a function that puts trigger's inline values back.
+  const lend = () => {
+    const restores = measured.filter(({ layout }) => layout).flatMap(({ trigger, index }) => {
+      const own = owned[index].flat();
+
+      return PIN_ITEM_PROPERTIES.flatMap((property, j) => {
+        const value = placed[index][j];
+
+        if (value === own[j]) return [];
+
+        const inline = captureInline(trigger, property);
+
+        trigger.style.setProperty(property, value, 'important');
+
+        return [() => restoreInline(trigger, property, inline)];
+      });
+    });
+
+    return () => restores.forEach((restore) => restore());
+  };
+
   try {
-    return fitInsideAround(measured, styles, pins);
+    return fitInsideAround(measured, styles, pins, lend);
   } finally {
     restoreAround();
   }
@@ -1102,6 +1135,7 @@ const fitInsideAround = (
   measured: readonly MeasuredPin[],
   styles: readonly CSSStyleDeclaration[],
   pins: readonly WrappedPin[],
+  lend: () => () => void,
 ): FittedPins => {
   let boxes: MeasuredBox[];
   // A display: contents trigger has no box, but no offset either.
@@ -1110,8 +1144,11 @@ const fitInsideAround = (
   // Taken off for the reads below, so outer's own margin reads as the page's rules give it, in the
   // layout those reads flush anyway.
   const restoreCarried = takeCarriedMargins(measured.map(({ outer }) => outer));
+  // The lent values go back once trigger is read, before anything is measured inside outer.
+  let restoreLent = () => {};
 
   try {
+    restoreLent = lend();
     boxes = measured.map(({ outer, trigger, index, layout }) => {
       const style = styles[index];
 
@@ -1137,6 +1174,7 @@ const fitInsideAround = (
       offsets[measured[j].index] = offset;
     });
   } finally {
+    restoreLent();
     restoreCarried();
     measured.forEach(({ outer, inner, layout }) => {
       setOuterLayout(outer, layout);

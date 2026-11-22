@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Calling `destroy()` in `onUnmounted()` now leaves nothing on the page when a Vue component's root element is the shared container. `destroy()` put back the root Vue had already removed, so the content stayed and showed twice after the next mount. Added a [React / Vue](README.md#react--vue) section on setting up an instance in a component and on the DOM changes to avoid around the wrappers.
+- Flex and grid items made with `createStickyPin` now sit where a rule on their parent's children places them, and flex as it says (`.row > * { flex: 0 0 50% }` or `.grid > * { grid-column: 2 }`, say), as without the library and under GSAP's pin. The pin's wrapper put back the defaults such a rule overrode, so a pin shrank to its content's width or moved to the first free grid cell. Where `trigger`'s own rule sets a default back (`order: 0`, say), the parent's rule still wins, and a rule on `div`s now also places a pin whose `trigger` isn't a `div`, as `.grid div { grid-column: 1 / -1 }` does (see [Constraints and caveats](README.md#constraints-and-caveats)).
 
 ## [0.18.0] - 2026-11-19
 

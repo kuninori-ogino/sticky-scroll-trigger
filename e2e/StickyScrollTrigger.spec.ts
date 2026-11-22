@@ -2075,6 +2075,8 @@ for (const [layout, description, query] of [
   ['gridArea', 'grid item placed by area', ''],
   ['gridLines', 'grid item on explicit grid lines', ''],
   ['gridPercent', 'grid item with a percentage width', ''],
+  ['ruleGrid', 'grid item placed by a rule on the row\'s children', ''],
+  ['ruleFlex', 'flex item sized by a rule on the row\'s children', ''],
   ['childMargin', 'flex item whose child has margins', 'content=childMargin'],
   ['percent', 'flex item inside a display: contents element', 'contents=1'],
   ['percentAuto', 'flex item with a percentage width wrapping text', 'content=text'],
