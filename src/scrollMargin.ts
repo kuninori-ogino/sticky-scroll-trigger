@@ -205,6 +205,7 @@ export const createScrollMarginSync = (
   // selector (its id removed, say) gets handed back rather than left with a stale correction.
   let written = new Set<HTMLElement>();
   let sheet: CSSStyleSheet | null = null;
+  let sheetText: string | null = null;
   let animationHost: HTMLElement | null = null;
   // Read by applyJsRamp below; kept current by every sync() call. Only meaningful when usesCssRamp
   // is false, since that's the one case nothing else keeps these custom properties current (see
@@ -274,10 +275,17 @@ export const createScrollMarginSync = (
 
     if (!sheet) {
       sheet = new CSSStyleSheet();
+      sheetText = null;
       document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
     }
 
-    sheet.replaceSync(buildStylesheet(instanceId, ramps));
+    // Replacing the text restyles the whole page, so skip it when no freeze window moved.
+    const text = buildStylesheet(instanceId, ramps);
+
+    if (text !== sheetText) {
+      sheet.replaceSync(text);
+      sheetText = text;
+    }
   };
 
   const release = () => {

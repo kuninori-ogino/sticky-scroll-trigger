@@ -3236,6 +3236,84 @@ test('the adopted stylesheet ramps one custom property across each layer\'s own 
   expect(css).toMatch(new RegExp(`--sst0-c0:\\s*${scene1.end - scene1.start}px`));
 });
 
+test('refresh() rewrites the adopted stylesheet only when a freeze window moved', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/scrollMargin.html');
+
+  const usesCssRamp = await page.evaluate(() =>
+    (window as never as { __scrollDrivenAnimationsSupported: () => boolean })
+      .__scrollDrivenAnimationsSupported());
+
+  test.skip(!usesCssRamp, 'only meaningful where the ramps are driven by CSS');
+
+  const replaces = () => page.evaluate(() => {
+    const { replaceSync } = CSSStyleSheet.prototype;
+    let count = 0;
+
+    CSSStyleSheet.prototype.replaceSync = function counted(this: CSSStyleSheet, text: string) {
+      count += 1;
+      replaceSync.call(this, text);
+    };
+
+    try {
+      (window as never as { __refresh: () => void }).__refresh();
+    } finally {
+      CSSStyleSheet.prototype.replaceSync = replaceSync;
+    }
+
+    return count;
+  });
+  const sheetText = () => page.evaluate(() =>
+    (window as never as { __moduleSheetText: () => string }).__moduleSheetText());
+  const before = await sheetText();
+
+  expect(await replaces()).toBe(0);
+
+  await page.evaluate(() => {
+    document.querySelector<HTMLElement>('.lead')!.style.height = '500px';
+  });
+
+  expect(await replaces()).toBe(1);
+
+  const scene1 = await page.evaluate(() =>
+    (window as never as { __scene1FreezeWindow: () => { start: number; end: number } })
+      .__scene1FreezeWindow());
+  const after = await sheetText();
+
+  expect(after).toContain(`${scene1.start}px ${scene1.end}px`);
+  expect(after).not.toBe(before);
+});
+
+// Windows at zero remove the sheet, and the one built when they return starts empty.
+test('the adopted stylesheet comes back in full when the freeze windows return', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/scrollMargin.html?dwell=live');
+
+  const usesCssRamp = await page.evaluate(() =>
+    (window as never as { __scrollDrivenAnimationsSupported: () => boolean })
+      .__scrollDrivenAnimationsSupported());
+
+  test.skip(!usesCssRamp, 'only meaningful where the ramps are driven by CSS');
+
+  const sheetText = () => page.evaluate(() =>
+    (window as never as { __moduleSheetText: () => string }).__moduleSheetText());
+  const refreshWithDwell = (dwell: number) => page.evaluate((px) =>
+    (window as never as { __setDwellAndRefresh: (px: number) => void })
+      .__setDwellAndRefresh(px), dwell);
+  const before = await sheetText();
+
+  expect(before).toContain('@property --sst0-c0');
+
+  await refreshWithDwell(0);
+  expect(await page.evaluate(() =>
+    (window as never as { __moduleSheetCount: () => number }).__moduleSheetCount())).toBe(0);
+
+  await refreshWithDwell(800);
+  expect(await sheetText()).toBe(before);
+});
+
 test('destroy() hands scroll-margin-top back and removes the injected stylesheet', async ({
   page,
 }) => {

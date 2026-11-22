@@ -76,8 +76,11 @@
       const scrollMarginTargets = params.get('scrollMarginTargets') === 'none' ? null : undefined;
       const sticky = new StickyScrollTrigger('.container__inner', { scrollMarginTargets });
 
-      const scene1Vars = sticky.createStickyTrigger({ trigger: '#scene1', start: 'top top', end: '+=800' });
-      sticky.createStickyTrigger({ trigger: '#scene2', start: 'top top', end: '+=800' });
+      // ?dwell=live lets __setDwellAndRefresh change both dwells (0 removes every freeze window).
+      let dwell = 800;
+      const end = params.get('dwell') === 'live' ? () => `+=${dwell}` : '+=800';
+      const scene1Vars = sticky.createStickyTrigger({ trigger: '#scene1', start: 'top top', end });
+      sticky.createStickyTrigger({ trigger: '#scene2', start: 'top top', end });
 
       sticky.refresh();
 
@@ -103,6 +106,11 @@
           .flatMap((sheet) => Array.from(sheet.cssRules).map((rule) => rule.cssText))
           .join('');
       window.__destroy = () => sticky.destroy();
+      window.__refresh = () => sticky.refresh();
+      window.__setDwellAndRefresh = (px) => {
+        dwell = px;
+        sticky.refresh();
+      };
       // Simulates a responsive header height change (or JS updating the same variable), then
       // re-syncs. sticky.refresh() (not just a re-read) is what's under test: the correction has
       // to notice the author's value changed, not just report whatever it saw once.
