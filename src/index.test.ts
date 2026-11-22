@@ -4569,8 +4569,7 @@ describe('absolute end (a bare number)', () => {
 // (since indexByTrigger's implementation only remembered the first registration).
 // This now throws immediately at registration time so it's caught right away.
 describe('rejecting duplicate registration', () => {
-  // Both reach the same #assertTriggerAvailable(#layers, ...) inside #registerLayer, which either
-  // registration method can arrive at.
+  // Both methods reach the same #assertTriggerFree check through #registerLayer.
   it('throws when an element is already another layer\'s trigger, from either method', () => {
     const { query, controller } = setup();
 

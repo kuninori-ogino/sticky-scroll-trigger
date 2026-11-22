@@ -304,8 +304,9 @@ const listen = (on: boolean): void => {
   else window.removeEventListener('scroll', onScroll);
 };
 
-// Gives every demoted record back and empties the table, a detached one too.
-const clearTable = (): void => {
+// Gives every demoted record back, a detached one too, and empties the table; index.ts calls it
+// when a refresh() can't rebuild the table.
+export const clearDormancy = (): void => {
   records.forEach((record) => promote(record));
   records = [];
   listen(false);
@@ -335,7 +336,7 @@ const rebuildSafely = (): void => {
   try {
     rebuildDormancy(null);
   } catch (error) {
-    clearTable();
+    clearDormancy();
     queueMicrotask(() => {
       throw error;
     });
@@ -579,7 +580,7 @@ const measureStatic = (
 
 // Nothing on the page uses the table any more: empty it and leave GSAP alone.
 const teardown = (): void => {
-  clearTable();
+  clearDormancy();
   endGsapRefresh();
   dropGsapClassesLater();
 };
@@ -604,7 +605,7 @@ export const rebuildDormancy = (scrollTriggerClass: ScrollTriggerClassLike | nul
 
   // Pins only: nothing to switch, so no scan.
   if (!gsapClasses.size || bodyScrolls() || !live.some(({ demotable }) => demotable.length)) {
-    clearTable();
+    clearDormancy();
 
     return;
   }
@@ -619,7 +620,7 @@ export const rebuildDormancy = (scrollTriggerClass: ScrollTriggerClassLike | nul
   const demoted = new Set(records.filter((r) => r.state !== 'in').map((r) => r.el));
 
   if (autoOnly && ownedDepth(owned.keys(), demoted) < AUTO_MIN_DEPTH) {
-    clearTable();
+    clearDormancy();
 
     return;
   }
@@ -631,7 +632,7 @@ export const rebuildDormancy = (scrollTriggerClass: ScrollTriggerClassLike | nul
   const stickySet = new Set(sticky);
   const leftover = records.filter((r) => r.state !== 'in' && !stickySet.has(r.el));
 
-  // A detached one leaves the table whole, as clearTable has it.
+  // A detached one leaves the table whole, as clearDormancy has it.
   leftover.filter((r) => !r.el.isConnected).forEach((r) => promote(r));
 
   const kept = leftover.filter((r) => r.el.isConnected);
@@ -725,11 +726,11 @@ export const rebuildDormancy = (scrollTriggerClass: ScrollTriggerClassLike | nul
     record.demotable = client !== undefined && active.has(client) && wrappers.has(record.el);
   });
 
-  // Before clearTable below, so records an earlier build demoted go back too.
+  // Before clearDormancy below, so records an earlier build demoted go back too.
   records = all;
 
   if (!all.some((r) => r.demotable)) {
-    clearTable();
+    clearDormancy();
 
     return;
   }
@@ -816,9 +817,6 @@ export const takeGsapRefreshRestore = (): (() => void) | null => {
 
   return restoreAfterGsapMeasure;
 };
-
-// Promotes every demoted element and empties the table, for a refresh() that couldn't rebuild it.
-export const clearDormancy = clearTable;
 
 // For a measurement that scrolls to 0 as GSAP's refresh does: what sits past its freeze goes to
 // where it sits there, and nothing goes sticky.

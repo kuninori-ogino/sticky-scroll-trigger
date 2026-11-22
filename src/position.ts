@@ -109,10 +109,6 @@ export const isAbsoluteFormat = (resolved: PositionValue): boolean => {
   return resolved.trim() !== '' && !Number.isNaN(Number(resolved));
 };
 
-// Converts an already-resolved absolute-format value into its absolute scroll position (px).
-export const resolveAbsolute = (resolved: PositionValue): number =>
-  (typeof resolved === 'number' ? resolved : Number(resolved));
-
 // GSAP's clamp() wrapper, matched the same way GSAP's own _parseClamp does (a 'clamp(' prefix).
 // Caught on the whole value rather than per token, since the split below would otherwise report
 // the meaningless fragment 'clamp(top'.
@@ -316,7 +312,7 @@ export const classifyPosition = (resolved: PositionValue): ClassifiedPosition =>
 
   if (isMaxFormat(resolved)) return { kind: 'max', value: resolved };
 
-  if (isAbsoluteFormat(resolved)) return { kind: 'absolute', value: resolveAbsolute(resolved) };
+  if (isAbsoluteFormat(resolved)) return { kind: 'absolute', value: Number(resolved) };
 
   return { kind: 'clause', value: resolved };
 };

@@ -220,11 +220,6 @@ const liveEndValue = (spec: EndSpec): number => {
 const LIVE_END_ROUNDS = 6;
 // Sub-pixel layout noise isn't a move.
 const LIVE_END_TOLERANCE_PX = 0.5;
-// Shared by the layer and pin registration paths, which both reject an already-registered trigger.
-const hasDuplicateTrigger = (
-  list: readonly { trigger: HTMLElement }[],
-  trigger: HTMLElement,
-): boolean => list.some((existing) => existing.trigger === trigger);
 // Instances whose last kill came mid-scroll and still hold their structure.
 const pendingDisarms = new Set<StickyScrollTrigger>();
 
@@ -2087,15 +2082,46 @@ export default class StickyScrollTrigger {
     );
   }
 
-  // Throws `message` if any entry in `list` already uses `trigger`. #registerLayer and
-  // createStickyPin each check both #layers and #pinLayers, with a message specific to the call
-  // site.
-  #assertTriggerAvailable(
-    list: readonly { trigger: HTMLElement }[],
-    trigger: HTMLElement,
-    message: string,
-  ): void {
-    if (hasDuplicateTrigger(list, trigger)) throw new Error(message);
+  // Rejects a trigger a layer or pin of this instance already uses. Two layers on one element would
+  // make an endTrigger naming it ambiguous; two pins, or a layer and a pin, would wrap it twice
+  // with conflicting sticky behavior.
+  #assertTriggerFree(trigger: HTMLElement, asPin: boolean): void {
+    const name = describeElement(trigger);
+    const uses = (list: readonly { trigger: HTMLElement }[]) =>
+      list.some((existing) => existing.trigger === trigger);
+
+    if (asPin) {
+      if (uses(this.#pinLayers)) {
+        throw new Error(`StickyScrollTrigger: ${name} is already registered as a pin trigger.`);
+      }
+
+      if (uses(this.#layers)) {
+        throw new Error(
+          `StickyScrollTrigger: ${name} is already registered as a trigger for another layer `
+          + '(createStickyTrigger/createOverlapScroll). Using the same element as both a '
+          + 'Scene/Cover trigger and a pin trigger wraps it twice and produces conflicting '
+          + 'position:sticky behavior.',
+        );
+      }
+
+      return;
+    }
+
+    if (uses(this.#layers)) {
+      throw new Error(
+        `StickyScrollTrigger: ${name} is already registered as a trigger for another layer. Each `
+        + 'element can be used once per controller instance, across createStickyTrigger and '
+        + 'createOverlapScroll: reusing one makes endTrigger resolution ambiguous.',
+      );
+    }
+
+    if (uses(this.#pinLayers)) {
+      throw new Error(
+        `StickyScrollTrigger: ${name} is already registered as a pin trigger (createStickyPin). `
+        + 'Using the same element as both a Scene/Cover trigger and a pin trigger wraps it twice '
+        + 'and produces conflicting position:sticky behavior.',
+      );
+    }
   }
 
   // A cover layer moves and styles trigger's siblings, and a Scene layer measures trigger against
@@ -2150,27 +2176,7 @@ export default class StickyScrollTrigger {
       );
     }
 
-    // Using the same element as the trigger of two layers would make it ambiguous which one
-    // another layer's endTrigger points at, so this is rejected at registration time.
-    this.#assertTriggerAvailable(
-      this.#layers,
-      layer.trigger,
-      `StickyScrollTrigger: ${describeElement(layer.trigger)} is already registered as a `
-      + 'trigger for another layer. Each element can be used once per controller instance, '
-      + 'across createStickyTrigger and createOverlapScroll: reusing one makes endTrigger '
-      + 'resolution ambiguous.',
-    );
-
-    // A pin wraps trigger itself via wrapPin(), so reusing the element here would wrap it a
-    // second time via wrapScene/wrapCover, leaving two conflicting sticky behaviors.
-    this.#assertTriggerAvailable(
-      this.#pinLayers,
-      layer.trigger,
-      `StickyScrollTrigger: ${describeElement(layer.trigger)} is already registered as a `
-      + 'pin trigger (createStickyPin). Using the same element as both a Scene/Cover trigger and '
-      + 'a pin trigger wraps it twice and produces conflicting position:sticky behavior.',
-    );
-
+    this.#assertTriggerFree(layer.trigger, false);
     this.#arm();
     this.#layers.push(layer);
     this.#dirty = true;
@@ -2398,22 +2404,7 @@ export default class StickyScrollTrigger {
     const endTrigger = resolveEndTrigger(trigger, endTriggerInput, 'createStickyPin');
 
     this.#assertTriggerNotEnclosingRoot(trigger, 'createStickyPin');
-
-    this.#assertTriggerAvailable(
-      this.#pinLayers,
-      trigger,
-      `StickyScrollTrigger: ${describeElement(trigger)} is already registered as a pin trigger.`,
-    );
-
-    // The reverse direction of the same-kind check on #registerLayer's side (see its comment).
-    this.#assertTriggerAvailable(
-      this.#layers,
-      trigger,
-      `StickyScrollTrigger: ${describeElement(trigger)} is already registered as a trigger for `
-      + 'another layer (createStickyTrigger/createOverlapScroll). Using the same element as both '
-      + 'a Scene/Cover trigger and a pin trigger wraps it twice and produces conflicting '
-      + 'position:sticky behavior.',
-    );
+    this.#assertTriggerFree(trigger, true);
 
     const layer: PinLayer = {
       trigger,
