@@ -79,7 +79,11 @@ export const unbuildStructure = (
   if (outermostContainer) {
     const parent = outermostContainer.parentNode;
 
-    if (parent) moveInto(parent, rootElement, outermostContainer);
+    // A root the page took out of the nesting (a framework unmounting it before destroy(), say)
+    // stays out.
+    if (parent && outermostContainer.contains(rootElement)) {
+      moveInto(parent, rootElement, outermostContainer);
+    }
 
     outermostContainer.remove();
   }

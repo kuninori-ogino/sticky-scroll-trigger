@@ -137,6 +137,52 @@ ScrollTrigger.addEventListener("refreshInit", () => sticky.refresh());
 
 Avoid debounce logic that assumes it runs before GSAP's 200ms delay. Use `refreshInit` binding.
 
+## React / Vue
+
+Create the instance once the component's elements are in the document, and tear it down with the component. With React, do both in `useGSAP()`, which reverts the layers and pins registered in its callback:
+
+```ts
+const root = useRef<HTMLDivElement>(null);
+
+useGSAP(
+  () => {
+    const sticky = new StickyScrollTrigger(root.current!);
+    // createStickyTrigger(), createOverlapScroll(), createStickyPin() ...
+    sticky.refresh();
+    return () => sticky.destroy();
+  },
+  { scope: root },
+);
+```
+
+With Vue, create it in `onMounted()` inside a `gsap.context()`, and call the context's `revert()` and then `destroy()` in `onUnmounted()` or `onBeforeUnmount()`:
+
+```ts
+const root = ref<HTMLDivElement | null>(null);
+let ctx: gsap.Context;
+let sticky: StickyScrollTrigger;
+
+onMounted(() => {
+  ctx = gsap.context(() => {
+    sticky = new StickyScrollTrigger(root.value!);
+    // createStickyTrigger(), createOverlapScroll(), createStickyPin() ...
+    sticky.refresh();
+  });
+});
+onUnmounted(() => {
+  ctx.revert();
+  sticky.destroy();
+});
+```
+
+Unmounting works at rest and mid-scroll, under React's `StrictMode` too. Call `destroy()` there, even though the revert kills every layer and pin and a `gsap.matchMedia()` setup can leave it out (see [`destroy()`](#destroy)). Without it, the scroll jumps when an instance with `createStickyTrigger` layers unmounts above the viewport, and React can throw where the shared container is the component's top element. Like GSAP's `pin: true`, the library moves elements into wrappers the framework doesn't know about, so the framework must not change the DOM next to them while the instance is built:
+
+- Don't insert an element directly before one the library wraps: a pin's `trigger`, a cover's `trigger` and the siblings before it, or the shared container in its parent once the instance has a `createStickyTrigger` layer. The framework looks for these where they no longer are, and throws: React unmounts the app, and Vue leaves the page half updated
+- Don't remove a wrapped element (by rendering it conditionally, say) unless the component that creates the instance unmounts with it. React throws, and Vue leaves the wrapper behind, empty. Other elements inside the shared container can change (call `ScrollTrigger.refresh()` after, see [Calling refresh](#calling-refresh)), but a layer whose `trigger` is removed stays registered, and a `createStickyTrigger` one keeps its dwell as empty scroll, until it's killed
+- Don't reorder a keyed list of pin triggers. React moves the elements out of their wrappers and leaves the wrappers empty, and Vue throws, as both do with GSAP's pin-spacers
+
+To change those parts of the page, give the component that creates the instance a new `key` in the same update, so that it unmounts and mounts again. `useGSAP()`'s `revertOnUpdate` doesn't help here, since React changes the DOM before it reverts.
+
 ## API
 
 ### `new StickyScrollTrigger(root, options?)`

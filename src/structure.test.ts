@@ -253,6 +253,18 @@ describe('unbuildStructure', () => {
     });
   });
 
+  it('leaves out a root the page removed from the nesting, and takes the nesting down', () => {
+    const { root, byId } = setup('<div id="host"><div id="root"><div id="s1"></div></div></div>');
+    const layers = [sceneLayer(byId('s1'))];
+    const outermost = buildStructure(root, layers);
+
+    root.remove();
+    unbuildStructure(root, layers, outermost);
+
+    expect(byId('host').children).toHaveLength(0);
+    expect(root.parentNode).toBeNull();
+  });
+
   it('resets every reference a layer holds back to null', () => {
     const { root, byId } = setup(
       '<div id="host"><div id="root"><div id="s1"></div><div id="base"></div><div id="cover"></div></div></div>',

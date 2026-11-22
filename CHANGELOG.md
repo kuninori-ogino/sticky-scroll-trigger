@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Calling `destroy()` in `onUnmounted()` now leaves nothing on the page when a Vue component's root element is the shared container. `destroy()` put back the root Vue had already removed, so the content stayed and showed twice after the next mount. Added a [React / Vue](README.md#react--vue) section on setting up an instance in a component and on the DOM changes to avoid around the wrappers.
+
 ## [0.18.0] - 2026-11-19
 
 - Breaking: a `refresh()` from a `createStickyTrigger`, `createOverlapScroll` or `createStickyPin` `start`/`end` function, of any instance, is now ignored, as GSAP ignores a ScrollTrigger's `refresh()` during its refresh, where it made the outermost `refresh()` measure once more. `destroy()` and the `create*` methods called from there now throw, without doing anything, and a `ScrollTrigger.refresh()` or a `kill()` of a layer or pin from there, once a layer or pin is handed to `ScrollTrigger.create()`, makes the `refresh()` calling the function throw once it returns, where they used to run inside the measurement. Change the layout or the triggers outside these functions, then call `ScrollTrigger.refresh()` (see [Constraints and caveats](README.md#constraints-and-caveats)).
