@@ -4659,18 +4659,22 @@ interface InstanceOrderWindow {
   __ready?: boolean;
   __windows: () => [number, number][];
   __refreshes: () => number;
+  __betweenEnd: () => number;
   __ScrollTrigger: { refresh: () => void };
 }
 
 // GSAP's refresh runs each instance's refreshInit in the order its triggers were created, so in
 // these layouts the lower instance measures before the upper one moves what it read: its container,
-// or (layout=max) the page's end the upper cover's 'max' reads.
+// or (layout=max) the page's end the upper cover's 'max' reads. In layout=endTrigger and
+// layout=ancestor, it resizes what the upper cover ends at without moving its top.
 const instanceOrderLayouts = [
   'layout=dwell&order=after',
   'layout=dwell&order=after&cover',
   'layout=dwell&order=remount',
   'layout=dwell&order=remount&cover',
   'layout=max',
+  'layout=endTrigger',
+  'layout=ancestor',
 ];
 
 const loadInstanceOrder = async (page: Page, query: string, height: number) => {
@@ -4708,6 +4712,36 @@ for (const query of instanceOrderLayouts) {
     });
   }
 }
+
+// Checks the cover's end against the element itself, where the matrix above checks a fresh load.
+test('a cover ends where its endTrigger ends after a later instance\'s onRefreshInit resizes it', async ({ page }) => {
+  const read = () => page.evaluate(() => {
+    const hooks = window as never as InstanceOrderWindow;
+
+    return { coverEnd: hooks.__windows()[0][1], endTriggerEnd: hooks.__betweenEnd() };
+  });
+
+  await loadInstanceOrder(page, 'layout=endTrigger', 600);
+
+  const before = await read();
+  const refreshes = () =>
+    page.evaluate(() => (window as never as InstanceOrderWindow).__refreshes());
+  const count = await refreshes();
+
+  await page.setViewportSize({ width: 1000, height: 900 });
+  await expect.poll(refreshes).toBeGreaterThan(count);
+  // Anything the refresh left to a frame has run by the second one.
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+
+  const after = await read();
+
+  expect(before.coverEnd).toBe(before.endTriggerEnd);
+  // 200px tall below an 800px viewport, 500px from there on.
+  expect(after.endTriggerEnd).toBe(before.endTriggerEnd + 300);
+  expect(after.coverEnd).toBe(after.endTriggerEnd);
+});
 
 // An iframe's height is its viewport, so setting it resizes synchronously and the refreshes below
 // all run in one task, as a resize handler's would. second: a refresh before the resize, which

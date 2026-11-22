@@ -919,10 +919,10 @@ export default class StickyScrollTrigger {
   }
 
   // GSAP runs the handlers in creation order, not page order, so an instance that refreshed earlier
-  // in this GSAP refresh may have read what this one just moved: its container (this one sits
-  // above it), or the page's end or an endTrigger (this one sits below). Each such instance
-  // measures again, once per handler: one whose measurement moves another's reads leaves that one
-  // to the next refresh, so reads that keep moving each other can't multiply the cost.
+  // in this GSAP refresh may have read what this one just moved or resized: its container (this
+  // one sits above it), the page's end, or an endTrigger. Each such instance measures again, once
+  // per handler: one whose measurement moves another's reads leaves that one to the next refresh,
+  // so reads that keep moving each other can't multiply the cost.
   #remeasureEarlierInGsapRefresh(): void {
     const refreshed = refreshedInGsapRefresh ?? new Map<StickyScrollTrigger, string>();
 
@@ -953,14 +953,16 @@ export default class StickyScrollTrigger {
   }
 
   // What refresh() reads outside this instance's own structure: where its container starts, the
-  // page's height when it read that, and every endTrigger outside the root.
+  // page's height when it read that, and the top and height of every endTrigger outside the root.
   #outsideReads(): string {
     const reads = [documentTop(this.#rootElement)];
 
     if (this.#readsPageHeight) reads.push(measureDocumentHeightWithoutPinRanges());
 
     [...this.#layers, ...this.#pinLayers].forEach(({ endTrigger }) => {
-      if (!this.#rootElement.contains(endTrigger)) reads.push(documentTop(endTrigger));
+      if (!this.#rootElement.contains(endTrigger)) {
+        reads.push(documentTop(endTrigger), measureUsedHeight(endTrigger));
+      }
     });
 
     return reads.join(',');

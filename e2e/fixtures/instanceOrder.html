@@ -18,8 +18,11 @@
   </head>
   <body>
     <div style="height: 200px"></div>
-    <div class="top"></div>
-    <div class="bottom"></div>
+    <main>
+      <div class="top"></div>
+      <div class="between"></div>
+      <div class="bottom"></div>
+    </main>
     <div class="tail"></div>
     <script type="module">
       import gsap from 'gsap';
@@ -33,13 +36,17 @@
       // the viewport, so it moves the lower instance's container; created after the lower one
       // (order=after) or unmounted and mounted again (order=remount). layout=max: the upper
       // instance's cover ends at 'max', which the lower instance's viewport-relative dwell moves,
-      // and the upper one is created first.
+      // and the upper one is created first. layout=endTrigger: the upper cover ends at the element
+      // between the two instances, which the lower instance's first onRefreshInit sizes from the
+      // viewport. layout=ancestor: the upper cover ends at the bottom of the <main> holding both
+      // containers, which the lower instance's dwell makes taller.
       const params = new URLSearchParams(location.search);
       const layout = params.get('layout');
       const top = document.querySelector('.top');
       const bottom = document.querySelector('.bottom');
+      const between = document.querySelector('.between');
       // The lower instance's Scene layers: their dwell is fixed under layout=dwell and follows the
-      // viewport under layout=max.
+      // viewport under the other layouts.
       const lowerEnd = layout === 'dwell' ? '+=200' : '+=50%';
 
       bottom.innerHTML = (layout === 'dwell' ? ['B1', 'B2', 'B3'] : ['B1', 'B2'])
@@ -54,8 +61,16 @@
           return [ScrollTrigger.create(sticky.createOverlapScroll({ trigger: sections[0] }))];
         }
 
-        return sections.map((trigger) =>
-          ScrollTrigger.create(sticky.createStickyTrigger({ trigger, end: lowerEnd })),
+        return sections.map((trigger, index) =>
+          ScrollTrigger.create(sticky.createStickyTrigger({
+            trigger,
+            end: lowerEnd,
+            onRefreshInit: layout === 'endTrigger' && index === 0
+              ? () => {
+                between.style.height = window.innerHeight >= 800 ? '500px' : '200px';
+              }
+              : undefined,
+          })),
         );
       };
       let watched;
@@ -92,7 +107,11 @@
 
         const sticky = new StickyScrollTrigger(top);
         const cover = ScrollTrigger.create(
-          sticky.createOverlapScroll({ trigger: '.c1', end: 'max' }),
+          sticky.createOverlapScroll({
+            max: { trigger: '.c1', end: 'max' },
+            endTrigger: { trigger: '.c1', endTrigger: between, end: 'bottom top' },
+            ancestor: { trigger: '.c1', endTrigger: 'main', end: 'bottom bottom' },
+          }[layout]),
         );
 
         watched = [cover, ...lowerTriggers()];
@@ -112,6 +131,8 @@
 
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
+      window.__betweenEnd = () =>
+        Math.round(between.getBoundingClientRect().bottom + window.scrollY);
       window.__windows = () => watched.map((t) => [Math.round(t.start), Math.round(t.end)]);
       window.__refreshes = () => refreshes;
       window.__ScrollTrigger = ScrollTrigger;
