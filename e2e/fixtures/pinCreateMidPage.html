@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pinCreateMidPage fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      section {
+        height: 400px;
+      }
+      .lead {
+        height: 300px;
+      }
+      .gap {
+        height: 500px;
+      }
+      #pin {
+        height: 200px;
+      }
+      .tail {
+        height: 600vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="lead"></div>
+    <div class="root">
+      <section class="s1"></section>
+      <section class="s2"></section>
+      <div class="gap"></div>
+      <div id="pin"></div>
+    </div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      gsap.registerPlugin(ScrollTrigger);
+
+      const sticky = new StickyScrollTrigger('.root');
+
+      // Two Scene layers before the pin: stuck where it is created, they move it down by their
+      // dwell before GSAP measures it.
+      ScrollTrigger.create(sticky.createStickyTrigger({ trigger: '.s1', end: '+=200' }));
+      ScrollTrigger.create(sticky.createStickyTrigger({ trigger: '.s2', end: '+=200' }));
+      ScrollTrigger.refresh();
+
+      let refreshes = 0;
+
+      ScrollTrigger.addEventListener('refresh', () => {
+        refreshes += 1;
+      });
+
+      let pin = null;
+      const frame = () => new Promise(requestAnimationFrame);
+
+      window.__refreshes = () => refreshes;
+      window.__isScrolling = () => ScrollTrigger.isScrolling();
+      window.__createPin = () => {
+        pin = ScrollTrigger.create(sticky.createStickyPin({ trigger: '#pin', end: '+=300' }));
+
+        return [Math.round(pin.start), Math.round(pin.end)];
+      };
+      window.__window = () => [Math.round(pin.start), Math.round(pin.end)];
+      window.__killPin = () => pin.kill();
+      window.__refreshAll = () => ScrollTrigger.refresh();
+      // A trigger of the page's own, created after the pin: counts its onRefreshInit calls.
+      window.__createWatcher = () => {
+        let calls = 0;
+
+        ScrollTrigger.create({
+          trigger: '.tail',
+          onRefreshInit: () => {
+            calls += 1;
+          },
+        });
+
+        return () => calls;
+      };
+      window.__frames = async (n) => {
+        for (let i = 0; i < n; i += 1) await frame();
+      };
+      window.__ready = true;
+    </script>
+  </body>
+</html>

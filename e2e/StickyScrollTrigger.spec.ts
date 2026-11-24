@@ -2913,6 +2913,131 @@ test('killing a pin grown since the last refresh() moves the Scene layer below i
   expect(result.after).toEqual({ module: 500, gsap: 500 });
 });
 
+// GSAP measures a new trigger at the current scroll, where stuck Scene layers have moved the pin.
+// createStickyPin's onRefreshInit queues the refresh GSAP's own pin gets after creation.
+interface PinCreateMidPageWindow {
+  __ready: boolean;
+  __refreshes: () => number;
+  __isScrolling: () => boolean;
+  __createPin: () => number[];
+  __window: () => number[];
+  __killPin: () => void;
+  __refreshAll: () => void;
+  __createWatcher: () => () => number;
+  __frames: (n: number) => Promise<void>;
+}
+
+const openPinCreateMidPage = async (page: Page, top: number) => {
+  await page.goto('/fixtures/pinCreateMidPage.html');
+  await page.waitForFunction(() => (window as never as PinCreateMidPageWindow).__ready);
+  // The scroll event, which GSAP counts a scroll from, can come a frame after scrollTo().
+  await page.evaluate(async (y) => {
+    window.scrollTo(0, y);
+    await (window as never as PinCreateMidPageWindow).__frames(2);
+  }, top);
+  await page.waitForFunction(() => !(window as never as PinCreateMidPageWindow).__isScrolling());
+};
+
+const createPinAt = async (page: Page, top: number) => {
+  await openPinCreateMidPage(page, top);
+
+  return page.evaluate(async () => {
+    const w = window as never as PinCreateMidPageWindow;
+    const before = w.__refreshes();
+    const created = w.__createPin();
+
+    await w.__frames(2);
+
+    return { created, settled: w.__window(), refreshes: w.__refreshes() - before };
+  });
+};
+
+test('a pin created while scrolled down gets the window it gets at the top, from the next frame', async ({
+  page,
+}) => {
+  const atTop = await createPinAt(page, 0);
+  const down = await createPinAt(page, 1500);
+
+  // As GSAP first measures it there.
+  expect(down.created).not.toEqual(atTop.created);
+  expect(down.settled).toEqual(atTop.settled);
+  expect([atTop.refreshes, down.refreshes]).toEqual([1, 1]);
+});
+
+// The kill's own GSAP refresh doesn't reach the killed pin, yet cancels the queued one.
+test('a pin killed in the task that created it refreshes GSAP once', async ({ page }) => {
+  await openPinCreateMidPage(page, 1500);
+
+  const refreshes = await page.evaluate(async () => {
+    const w = window as never as PinCreateMidPageWindow;
+    const before = w.__refreshes();
+
+    w.__createPin();
+    w.__killPin();
+    await w.__frames(3);
+
+    return w.__refreshes() - before;
+  });
+
+  expect(refreshes).toBe(1);
+});
+
+// GSAP dispatches refreshInit over its live listener array.
+test('a GSAP refresh that cancels a new pin\'s queued one still calls the triggers created after it', async ({
+  page,
+}) => {
+  await openPinCreateMidPage(page, 0);
+
+  const result = await page.evaluate(async () => {
+    const w = window as never as PinCreateMidPageWindow;
+
+    w.__createPin();
+
+    const calls = w.__createWatcher();
+    const before = w.__refreshes();
+
+    w.__refreshAll();
+    await w.__frames(3);
+
+    return { refreshes: w.__refreshes() - before, calls: calls() };
+  });
+
+  // Its creation, then that refresh, and no queued one after it.
+  expect(result).toEqual({ refreshes: 1, calls: 2 });
+});
+
+// A refresh mid-scroll scrolls to 0 and back, which stops a fling.
+test('a pin created mid-scroll leaves GSAP\'s refresh until the scroll stops', async ({ page }) => {
+  const { settled: atTop } = await createPinAt(page, 0);
+
+  await openPinCreateMidPage(page, 900);
+
+  const during = await page.evaluate(async () => {
+    const w = window as never as PinCreateMidPageWindow;
+    const before = w.__refreshes();
+
+    for (let i = 0; i < 30; i += 1) {
+      window.scrollBy(0, 20);
+
+      if (i === 5) w.__createPin();
+
+      await w.__frames(1);
+    }
+
+    return { refreshes: w.__refreshes() - before, scrollY: window.scrollY, before };
+  });
+
+  expect(during).toMatchObject({ refreshes: 0, scrollY: 1500 });
+
+  await page.waitForFunction(
+    (before) => (window as never as PinCreateMidPageWindow).__refreshes() > before,
+    during.before,
+  );
+
+  expect(await page.evaluate(() => (window as never as PinCreateMidPageWindow).__window()))
+    .toEqual(atTop);
+});
+
 // scenario.html no longer manually binds refreshInit (see the earlier commit removing it), relying
 // solely on this module's own onRefreshInit auto-binding (createAutoRefreshHandler). That binding
 // has to run before GSAP recomputes each trigger's start/end during a resize-triggered refresh;

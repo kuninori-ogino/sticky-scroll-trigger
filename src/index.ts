@@ -547,8 +547,25 @@ export default class StickyScrollTrigger {
       || other.#rootElement.contains(this.#rootElement);
   }
 
-  // Runs what a kill held for the end of the scroll once GSAP no longer reports one: the last
-  // kill's teardown first, so the batch's GSAP refresh measures without it.
+  // Runs run now, or once GSAP no longer reports a scroll, after any run already waiting (a kill
+  // batch with its listener to drop, say).
+  #runWhenAtRest(cls: ScrollTriggerClass | null, run: () => void): void {
+    // #tearDown has cleared #deferredRun for good: a run set after it would stay there.
+    if (this.#destroyed || !isUserScrolling(cls)) {
+      run();
+
+      return;
+    }
+
+    const earlier = this.#deferredRun;
+
+    this.#deferredRun = earlier ? () => runEach(earlier, run) : run;
+    this.#settleWhenAtRest();
+  }
+
+  // Runs what was held for the end of the scroll (a kill's catch-up, a new pin's refresh) once
+  // GSAP no longer reports one: the last kill's teardown first, so the batch's GSAP refresh
+  // measures without it.
   #settleWhenAtRest(): void {
     if (this.#destroyed || this.#restTimer !== null) return;
 
@@ -752,23 +769,9 @@ export default class StickyScrollTrigger {
       }
     };
 
-    queueMicrotask(() => {
-      // While the page scrolls, the killed layers' padding stays until the scroll stops, as GSAP
-      // holds its own refresh: keeping the content in place then needs no scroll mid-fling.
-      if (pending() && !this.#destroyed && isUserScrolling(cls)) {
-        const earlier = this.#deferredRun;
-
-        // An earlier batch a GSAP refresh ran still has its listener to drop.
-        this.#deferredRun = earlier
-          ? () => runEach(earlier, run)
-          : run;
-        this.#settleWhenAtRest();
-
-        return;
-      }
-
-      run();
-    });
+    // While the page scrolls, the killed layers' padding stays until the scroll stops, as GSAP
+    // holds its own refresh: keeping the content in place then needs no scroll mid-fling.
+    queueMicrotask(() => (pending() ? this.#runWhenAtRest(cls, run) : run()));
   }
 
   // Reads the ScrollTrigger class off the `self` that onKill/onRefreshInit pass in, so gsap is
@@ -2363,7 +2366,8 @@ export default class StickyScrollTrigger {
   // defaults. It exists so the caller can pass it to ScrollTrigger.create() and get the hooks:
   // onKill cleans up after an individual kill (it drops the layer from pinLayers and undoes
   // outer), and onRefreshInit binds refresh() to the refreshInit GSAP fires on resize/load, so
-  // the caller doesn't write ScrollTrigger.addEventListener('refreshInit', refresh) by hand.
+  // the caller doesn't write ScrollTrigger.addEventListener('refreshInit', refresh) by hand, and
+  // queues the refresh GSAP's own pin gets after creation.
   //
   // endTrigger and end default to GSAP's own, as createStickyTrigger's do:
   // endTrigger falls back to trigger (ScrollTrigger.js:1346, `vars.endTrigger || trigger`) and end
@@ -2441,7 +2445,51 @@ export default class StickyScrollTrigger {
         this.#disarmIfEmpty();
         onKill?.(self);
       }),
-      onRefreshInit: this.#createAutoRefreshHandler(rest.onRefreshInit),
+      onRefreshInit: this.#queueRefreshAllOnCreate(
+        this.#createAutoRefreshHandler(rest.onRefreshInit),
+      ),
+    };
+  }
+
+  // GSAP refreshes every trigger after creating a pin (ScrollTrigger.js:1961,
+  // `pin && _queueRefreshAll()`). Ours passes no pin, so a pin created mid-page would keep the
+  // window measured at that scroll until the next GSAP refresh. GSAP's refresh is forced and stops
+  // a fling; this one waits for the scroll to end. A GSAP refresh before then cancels it.
+  #queueRefreshAllOnCreate(
+    handler: ScrollTrigger.Vars['onRefreshInit'],
+  ): ScrollTrigger.Vars['onRefreshInit'] {
+    let created = false;
+    let queued = false;
+
+    return (self: ScrollTrigger) => {
+      const cls = classOf(self);
+
+      if (!created && !isRefreshing(cls) && !inStartEndFunction()) {
+        queued = true;
+
+        // Any GSAP refresh cancels it, a kill's catch-up included, which skips a killed or
+        // disabled pin.
+        const onGsapRefresh = () => {
+          queued = false;
+        };
+
+        const run = () => {
+          // Off the stack: GSAP's dispatch maps over its live listener array.
+          removeGsapListener(cls, 'refreshInit', onGsapRefresh);
+
+          if (queued && !this.#destroyed) {
+            queued = false;
+            refreshAll(cls);
+          }
+        };
+
+        addGsapListener(cls, 'refreshInit', onGsapRefresh);
+        requestAnimationFrame(() => (queued ? this.#runWhenAtRest(cls, run) : run()));
+      }
+
+      created = true;
+
+      return handler?.(self);
     };
   }
 

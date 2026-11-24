@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repeated `refresh()` calls that move no freeze window now run several times faster on a large page in WebKit. Each call rewrote the `scrollMarginTargets` stylesheet, which restyled the whole page.
 - Covers made with `createOverlapScroll` whose `endTrigger` sits outside their shared container now end where that element ends when a refresh resizes it without moving its top: a `<main>` holding another instance whose dwell follows the viewport, say, or an element another instance resizes in an `onRefreshInit`. They kept ending at the old height until the next refresh.
 - Scrolls driven by `getScrollTop` now land on the target after a component remounts on the same shared container while the list still holds the old instance. A destroyed or not yet refreshed instance listed first left out the new instance's dwell (100 instead of 600 for an `end: '+=500'` scene), or put the target late by however far the new instance's stuck pin had advanced.
+- Pins made with `createStickyPin` and passed to `ScrollTrigger.create()` while the page is scrolled down now get the `start` and `end` they get at the top, as GSAP's `pin` does, from the next frame or once a scroll in progress stops. Their window was off by the dwell of the layers stuck at that scroll until the next `ScrollTrigger.refresh()`. The refresh that corrects it waits for a scroll to stop, where GSAP's stops the scroll.
 
 ## [0.18.0] - 2026-11-19
 

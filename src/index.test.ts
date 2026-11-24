@@ -31,6 +31,16 @@ class FakeScrollTrigger {
 
 const makeFakeSelf = () => Object.create(FakeScrollTrigger.prototype) as ScrollTrigger;
 
+// For a pin's first onRefreshInit outside a GSAP refresh: the refresh it queues lands on a class
+// of its own, not on FakeScrollTrigger.refresh in whichever test runs a frame later.
+const makeOwnClassSelf = () => {
+  class OwnScrollTrigger {
+    static refresh = vi.fn();
+  }
+
+  return Object.create(OwnScrollTrigger.prototype) as ScrollTrigger;
+};
+
 // A ScrollTrigger class whose refresh the test runs. getScrollFunc() holds GSAP's scroll record.
 const makeClass = (scroller: { rec?: unknown }) => {
   const listeners: (() => unknown)[] = [];
@@ -857,7 +867,7 @@ describe('a refresh() that throws from GSAP\'s refreshInit dispatch', () => {
     };
 
     await runDispatch(() => {
-      [() => vars.onRefreshInit?.(makeFakeSelf()), laterListener].map((f) => f());
+      [() => vars.onRefreshInit?.(makeOwnClassSelf()), laterListener].map((f) => f());
     });
 
     expect(laterListenerRan).toBe(true);
@@ -866,7 +876,7 @@ describe('a refresh() that throws from GSAP\'s refreshInit dispatch', () => {
   it('rethrows the error off the stack, so a broken setup still reports itself', async () => {
     const vars = setupBreakingPin();
     const uncaught = await runDispatch(() => {
-      vars.onRefreshInit?.(makeFakeSelf());
+      vars.onRefreshInit?.(makeOwnClassSelf());
     });
 
     expect(uncaught).toHaveLength(1);
@@ -3324,7 +3334,7 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
     const trigger = query('.inside');
     const vars = controller.createStickyPin({ trigger, endTrigger: query('.scene') });
 
-    vars.onRefreshInit?.(fakeSelf);
+    vars.onRefreshInit?.(makeOwnClassSelf());
 
     expect(trigger.style.position).toBe('sticky');
   });
@@ -3346,9 +3356,159 @@ describe('createStickyPin\'s onKill/onRefreshInit', () => {
 
     const vars2 = controller.createStickyPin({ trigger: p2, endTrigger: query('.scene') });
 
-    vars2.onRefreshInit?.(fakeSelf);
+    vars2.onRefreshInit?.(makeOwnClassSelf());
 
     expect(p2.style.position).toBe('sticky');
+  });
+});
+
+// See #queueRefreshAllOnCreate.
+describe('createStickyPin\'s refresh after creation', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const setupPin = () => {
+    const { query, controller } = setup();
+    const { Cls, listeners, gsapRefresh } = makeClass({ rec: 0 });
+    const self = Object.create(Cls.prototype) as ScrollTrigger;
+    const vars = controller.createStickyPin({ trigger: query('.inside'), endTrigger: query('.scene') });
+
+    return { query, controller, Cls, self, vars, listeners, gsapRefresh };
+  };
+
+  it('refreshes GSAP once on the frame after the ScrollTrigger is created', () => {
+    const { Cls, self, vars } = setupPin();
+
+    vars.onRefreshInit?.(self);
+    expect(Cls.refresh).not.toHaveBeenCalled();
+
+    vi.advanceTimersToNextFrame();
+    expect(Cls.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  // GSAP queues it from its constructor only.
+  it('queues nothing on a later call outside a GSAP refresh', () => {
+    const { Cls, self, vars } = setupPin();
+
+    vars.onRefreshInit?.(self);
+    vars.onRefreshInit?.(self);
+    vi.advanceTimersToNextFrame();
+    vars.onRefreshInit?.(self);
+    vi.advanceTimersToNextFrame();
+
+    expect(Cls.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  // Even one that skips the pin, as a kill's catch-up skips a killed or disabled one.
+  it('a GSAP refresh before the frame cancels it, and it stops listening', () => {
+    const { Cls, self, vars, listeners, gsapRefresh } = setupPin();
+
+    vars.onRefreshInit?.(self);
+    gsapRefresh(true, true);
+    vi.advanceTimersToNextFrame();
+
+    expect(Cls.refresh).not.toHaveBeenCalled();
+    expect(listeners).toHaveLength(0);
+  });
+
+  // GSAP's dispatch maps over the live listener array.
+  it('keeps GSAP\'s dispatch from skipping the listener after it', () => {
+    const { Cls, self, vars, gsapRefresh } = setupPin();
+    const next = vi.fn();
+
+    vars.onRefreshInit?.(self);
+    Cls.addEventListener('refreshInit', next);
+    gsapRefresh(true, true);
+
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops listening for GSAP refreshes once it has refreshed', () => {
+    const { Cls, self, vars, listeners } = setupPin();
+
+    vars.onRefreshInit?.(self);
+    expect(listeners).toHaveLength(1);
+
+    vi.advanceTimersToNextFrame();
+    expect(Cls.refresh).toHaveBeenCalledTimes(1);
+    expect(listeners).toHaveLength(0);
+  });
+
+  it('pins created in the same task share one refresh', () => {
+    const { query, controller, Cls, self, vars, gsapRefresh } = setupPin();
+    const second = controller.createStickyPin({ trigger: query('.outside') });
+
+    Cls.refresh.mockImplementation(() => gsapRefresh(true, true));
+
+    vars.onRefreshInit?.(self);
+    second.onRefreshInit?.(self);
+    vi.advanceTimersToNextFrame();
+
+    expect(Cls.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('queues nothing when first called inside a GSAP refresh', () => {
+    const { Cls, self, vars } = setupPin();
+
+    // As GSAP's refresh dispatches it.
+    Cls.isRefreshing = true;
+    vars.onRefreshInit?.(self);
+    Cls.isRefreshing = false;
+    vars.onRefreshInit?.(self);
+    vi.advanceTimersToNextFrame();
+
+    expect(Cls.refresh).not.toHaveBeenCalled();
+  });
+
+  it('waits for the end of a scroll GSAP reports', () => {
+    const { Cls, self, vars } = setupPin();
+
+    Cls.scrolling = true;
+    vars.onRefreshInit?.(self);
+    vi.advanceTimersToNextFrame();
+    vi.advanceTimersByTime(5000);
+    expect(Cls.refresh).not.toHaveBeenCalled();
+
+    Cls.scrolling = false;
+    vi.advanceTimersByTime(100);
+    expect(Cls.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('a GSAP refresh during the scroll cancels it', () => {
+    const { Cls, self, vars, gsapRefresh } = setupPin();
+
+    Cls.scrolling = true;
+    vars.onRefreshInit?.(self);
+    vi.advanceTimersToNextFrame();
+    gsapRefresh(true, true);
+    Cls.scrolling = false;
+    vi.advanceTimersByTime(100);
+
+    expect(Cls.refresh).not.toHaveBeenCalled();
+  });
+
+  it('refreshes nothing after destroy(), before the frame or during the scroll', () => {
+    const before = setupPin();
+
+    before.vars.onRefreshInit?.(before.self);
+    before.controller.destroy();
+    vi.advanceTimersToNextFrame();
+    expect(before.Cls.refresh).not.toHaveBeenCalled();
+
+    const during = setupPin();
+
+    during.Cls.scrolling = true;
+    during.vars.onRefreshInit?.(during.self);
+    vi.advanceTimersToNextFrame();
+    during.controller.destroy();
+    during.Cls.scrolling = false;
+    vi.advanceTimersByTime(100);
+    expect(during.Cls.refresh).not.toHaveBeenCalled();
   });
 });
 
