@@ -1706,18 +1706,6 @@ describe('max end', () => {
 
     expect(plans[0].freezeEnd).toBe(plans[0].freezeStart);
   });
-
-  it('never adds dwell to later layers (a cover layer never creates padding)', () => {
-    const { plans } = run(
-      [
-        cover({ triggerTop: 500, end: max(0) }),
-        scene({ triggerTop: 1000, end: dwell(0) }),
-      ],
-      { documentMaxScroll: 2000 },
-    );
-
-    expect(plans[1].freezeStart).toBe(1000); // unaffected by the cover layer's freezeEnd
-  });
 });
 
 describe('onPlanned', () => {

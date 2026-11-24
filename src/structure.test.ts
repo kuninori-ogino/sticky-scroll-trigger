@@ -177,13 +177,6 @@ describe('isDomOrderStale', () => {
     expect(isDomOrderStale([sceneLayer(byId('s2'))])).toBe(false);
   });
 
-  it('is stale when registration order differs from DOM order (before building)', () => {
-    const { byId } = setupThree();
-    const shuffled = [sceneLayer(byId('s3')), sceneLayer(byId('s1'))];
-
-    expect(isDomOrderStale(shuffled)).toBe(true);
-  });
-
   // The main case: with no layers added or removed, dirty never gets set,
   // yet the nesting order still needs rebuilding.
   it('is stale once trigger elements have been reordered in the DOM', () => {

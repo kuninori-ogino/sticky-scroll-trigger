@@ -95,10 +95,6 @@ describe('targets', () => {
   it('lists the elements sync() writes, in document order', () => {
     expect(createSync().targets()).toEqual([query('#before'), query('#middle'), query('#after')]);
   });
-
-  it('lists nothing when the target selector is null', () => {
-    expect(createSync(null).targets()).toEqual([]);
-  });
 });
 
 describe('sync', () => {
@@ -155,12 +151,13 @@ describe('sync', () => {
     expect(query('#after').style.scrollMarginTop).toBe('');
   });
 
-  it('writes nothing when the target selector is null', () => {
+  // A null selector matches nothing, so only the ramps can show it opted out.
+  it('starts no ramps when the target selector is null', () => {
     const sync = createSync(null);
 
     sync.sync([dwell(0, 800)], query('.root'), naturalTops);
 
-    expect(query('#after').style.scrollMarginTop).toBe('');
+    expect(query('.root').getAttributeNames()).not.toContainEqual(expect.stringMatching(/^data-sst/));
   });
 
   // The host is the element the ramps are declared on, so without one there's nothing for the

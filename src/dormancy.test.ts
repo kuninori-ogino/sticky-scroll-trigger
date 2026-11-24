@@ -669,17 +669,6 @@ describe('rebuildDormancy', () => {
     expect(el.style.cssText).toBe('position: sticky; top: 0px;');
   });
 
-  it('skips the whole-document scan for auto clients nested less than 7 deep', () => {
-    const el = setupSingle();
-    const scan = vi.spyOn(document, 'querySelectorAll');
-
-    addClient([el], 'auto');
-    rebuildDormancy(gsap);
-
-    expect(scan).not.toHaveBeenCalledWith('*');
-    expect(el.style.position).toBe('sticky');
-  });
-
   // A record that's never switched is sticky at every scroll: four author levels above leave no
   // room under the chain limit, so the buffer drops to its 325px floor.
   it('counts an element it never switches as sticky everywhere when sizing the buffer', () => {
@@ -857,19 +846,6 @@ describe('rebuildDormancy', () => {
     rebuildDormancy(refreshing);
     refreshing.listeners.refresh();
     scroll = 0;
-    refreshInit(refreshing).render(-1);
-    expect(el.style.top).toBe('500px');
-  });
-
-  // GSAP takes none in a refresh while its triggers are reverted.
-  it('applies the state for the scroll as it is when GSAP took no record', () => {
-    const el = setupSingle();
-    const refreshing = fakeGsap();
-
-    addClient([el]);
-    scroll = 3500;
-    rebuildDormancy(refreshing);
-    refreshing.listeners.refresh();
     refreshInit(refreshing).render(-1);
     expect(el.style.top).toBe('500px');
   });

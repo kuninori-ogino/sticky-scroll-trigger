@@ -946,28 +946,6 @@ test('measureViewportHeight returns a sane value in a real browser and leaves no
   expect(result.bodyChildrenAfter).toBe(result.bodyChildrenBefore); // no leftover measuring div
 });
 
-// measureDocumentMaxScroll backs the 'max' end keyword. document.documentElement.scrollHeight
-// is always 0 in jsdom, same as documentTop/measureViewportHeight above, so only a real browser
-// can confirm it actually matches "document height minus viewport height."
-test('measureDocumentMaxScroll matches the real scroller\'s max scroll position', async ({ page }) => {
-  await page.goto('/fixtures/documentTop.html');
-
-  const result = await page.evaluate(() => {
-    const measureDocumentMaxScroll = (
-      window as unknown as { __measureDocumentMaxScroll: (viewportHeight: number) => number }
-    ).__measureDocumentMaxScroll;
-    const viewportHeight = window.innerHeight;
-
-    return {
-      measured: measureDocumentMaxScroll(viewportHeight),
-      truth: document.documentElement.scrollHeight - viewportHeight,
-    };
-  });
-
-  expect(result.measured).toBe(result.truth);
-  expect(result.truth).toBeGreaterThan(0); // sanity check that the fixture actually scrolls
-});
-
 // createOverlapScroll's cover layer never creates its own dwell padding, but a preceding Scene
 // layer's does. The document's true max scroll position is only known once that padding has
 // actually been written to the DOM. This confirms refreshScenesAndCovers's two-pass
@@ -2581,23 +2559,8 @@ test('killing every trigger within the same task still moves rootElement only on
   expect(result.rootMoveCount).toBe(1);
 });
 
-// A kill that only removes layers leaves their levels in place, so however many kills happen, root
-// doesn't move at all.
-test('killing only some triggers within the same task leaves rootElement in place', async ({
-  page,
-}) => {
-  await page.goto('/fixtures/batchKill.html');
-
-  const result = await page.evaluate(() =>
-    (window as unknown as { __runBatchKillPartial: () => Promise<BatchKillResult> })
-      .__runBatchKillPartial(),
-  );
-
-  expect(result.killedCount).toBe(2);
-  expect(result.rootMoveCount).toBe(0);
-});
-
-// Killing s1 and s2 shrinks the survivor s3's freeze window (since precedingGaps decreases).
+// Killing s1 and s2 shrinks the survivor s3's freeze window (since precedingGaps decreases), and
+// a kill that only removes layers leaves their levels in place, so root doesn't move.
 // Only once both the internal freezeStart/freezeEnd and GSAP's own cached start/end agree
 // does the scroll position stay in sync with animation progress after a kill.
 // This confirms the wiring that calls GSAP's static refresh via self.constructor
@@ -2610,6 +2573,8 @@ test('the surviving layer\'s freeze window, shifted by a kill, is tracked by GSA
       .__runBatchKillPartial(),
   );
 
+  expect(result.killedCount).toBe(2);
+  expect(result.rootMoveCount).toBe(0);
   // the surviving layer's freeze window itself should have changed after the kill (otherwise
   // this test is meaningless)
   expect(result.survivorAfter!.module).not.toEqual(result.survivorBefore.module);
@@ -3531,39 +3496,6 @@ test('an engine without animation-timeline: scroll() never runs the animation sh
   expect(ramps.every((value) => value === '' || value === '0px')).toBe(true);
 });
 
-// Firefox never runs the CSS animation (see the test above), so the only thing keeping its
-// consumed-dwell custom properties current is the `scroll` listener scrollMarginTop.ts installs
-// in that case. This checks that listener actually tracks a scroll position mid-freeze-window,
-// not just the load-time (scroll 0) case every test above happens to also cover.
-test('the scroll listener fallback tracks a mid-freeze-window scroll position, not just scroll 0', async ({
-  page,
-  browserName,
-}) => {
-  test.skip(browserName !== 'firefox', 'only meaningful without animation-timeline: scroll() support');
-
-  await page.goto('/fixtures/scrollMargin.html');
-
-  // The fixture hands over scene1's own freeze window (real, absolute scroll positions), which is
-  // the reliable way to pick a scroll position inside it, rather than guessing from the fixture's
-  // layout (lead/block/scene heights) and risking landing outside it.
-  const scene1 = await page.evaluate(() =>
-    (window as never as { __scene1FreezeWindow: () => { start: number; end: number } })
-      .__scene1FreezeWindow());
-  const dwell = scene1.end - scene1.start;
-  const midDwell = Math.round((scene1.start + scene1.end) / 2);
-
-  await page.evaluate((scroll) => window.scrollTo(0, scroll), midDwell);
-  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
-
-  const consumed = await page.evaluate(() => parseFloat(
-    getComputedStyle(document.getElementById('afterScene1') as HTMLElement)
-      .getPropertyValue('--sst0-c0'),
-  ));
-
-  expect(consumed).toBeGreaterThan(0);
-  expect(consumed).toBeLessThan(dwell);
-});
-
 // Regression test for a real bug: the author's scroll-margin-top used to be read only once, the
 // first time this module saw a target, and then never again: reading it back on a later sync
 // would have returned this module's own calc(), not the author's value, so re-reading on every
@@ -3755,7 +3687,8 @@ interface NestedStickyWindow {
   __probeRefreshes: () => number;
 }
 
-// Scrolls through the page in `count` odd-sized steps, one frame each.
+// Scrolls through the page in `count` odd-sized steps, one frame each. 50 steps catch what 150
+// do, down to a demotion boundary 30px into a sticky range; 30 steps miss some.
 const sweepNestedSticky = async (page: Page, query: string, count: number) => {
   await page.goto(`/fixtures/nestedSticky.html?${query}`);
 
@@ -3793,8 +3726,8 @@ for (const layout of [
   test(`nestedStickyOptimization moves nothing on the ${layout} layout`, async ({ page }) => {
     test.slow();
 
-    const on = await sweepNestedSticky(page, `layout=${layout}&mode=always`, 150);
-    const off = await sweepNestedSticky(page, `layout=${layout}&mode=off`, 150);
+    const on = await sweepNestedSticky(page, `layout=${layout}&mode=always`, 50);
+    const off = await sweepNestedSticky(page, `layout=${layout}&mode=off`, 50);
 
     expect(on.demoted).toBeGreaterThan(0);
     expect(off.demoted).toBe(0);

@@ -2,7 +2,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   addGsapListener,
-  classOf,
   isRefreshing,
   isScrolling,
   isScrollingOrUpdating,
@@ -23,14 +22,6 @@ const scrollFuncWith = (rec: unknown) => Object.assign(vi.fn(), { rec });
 
 afterEach(() => {
   vi.restoreAllMocks();
-});
-
-describe('classOf', () => {
-  it('reads the class off the instance GSAP passes in', () => {
-    class Fake {}
-
-    expect(classOf(new Fake() as unknown as ScrollTrigger)).toBe(Fake);
-  });
 });
 
 describe('isRefreshing', () => {

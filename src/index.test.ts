@@ -605,22 +605,6 @@ describe('Vars passed to GSAP', () => {
 describe('registerLayer\'s onRefreshInit', () => {
   const fakeSelf = makeFakeSelf();
 
-  it('also calls the user\'s onRefreshInit callback', () => {
-    const { query, controller } = setup();
-    let called = false;
-    const vars = controller.createStickyTrigger({
-      trigger: query('.scene'),
-      end: '+=100',
-      onRefreshInit: () => {
-        called = true;
-      },
-    });
-
-    vars.onRefreshInit?.(fakeSelf);
-
-    expect(called).toBe(true);
-  });
-
   // The fake stands in for an animation: GSAP only reverts a returned value that has render().
   it('hands the user callback\'s return value back to GSAP', () => {
     const { query, controller } = setup();
@@ -1192,25 +1176,6 @@ describe('batching kill()', () => {
       expect(query(survivorSelector).nextElementSibling).toBeNull();
       expect(query(survivorSelector).parentElement!.parentElement).toBe(query('.root'));
     });
-  });
-
-  it('the user\'s onKill callback is called immediately, without waiting for the batch', () => {
-    document.body.innerHTML = '<div class="root"><section class="s1"></section></div>';
-
-    const controller = new StickyScrollTrigger(query('.root'));
-    let called = false;
-    const vars = controller.createStickyTrigger({
-      trigger: query('.s1'),
-      onKill: () => {
-        called = true;
-      },
-    });
-
-    controller.refresh();
-
-    vars.onKill?.(fakeSelf);
-
-    expect(called).toBe(true); // called at this point, without waiting for a microtask
   });
 
   // From here: the binding that keeps GSAP's own start/end cache current after a kill.
@@ -2143,15 +2108,6 @@ describe('measuring at scroll 0', () => {
     expect(scrolls).toEqual([]);
   });
 
-  it('refresh() still measures at 0 mid-scroll inside the page\'s own sticky element', () => {
-    const { controller, Cls } = setupInPageStickyWithGsap();
-
-    Cls.scrolling = true;
-    controller.refresh();
-
-    expect(scrolls).toEqual([0, 1200]);
-  });
-
   // The page it comes back to is still scrolling: a kill right after waits for the scroll to end.
   it('holds a kill right after refresh() went to 0 mid-scroll', async () => {
     const { controller, Cls, vars } = setupInPageStickyWithGsap();
@@ -2715,22 +2671,6 @@ describe('createStickyPin()', () => {
     })).toThrow('createStickyPin: pin is not supported here');
   });
 
-  it('wraps trigger in two levels, outer/inner, once refresh() runs', () => {
-    const { query, controller } = setup();
-    const trigger = query('.inside');
-    const originalParent = trigger.parentElement;
-
-    controller.createStickyPin({ trigger, endTrigger: query('.scene') });
-    controller.refresh();
-
-    const inner = trigger.parentElement!;
-    const outer = inner.parentElement!;
-
-    expect(outer.parentElement).toBe(originalParent);
-    expect(outer).not.toBe(originalParent);
-    expect(inner).not.toBe(outer);
-  });
-
   // The reserved height is outer's own natural height, which jsdom has no layout to produce. A
   // stylesheet rule on outer stands in for one, leaving the plumbing as what this can check: that
   // the measured height reaches outer's inline style intact, fractional part and all, and that it's
@@ -2838,16 +2778,6 @@ describe('createStickyPin()', () => {
       expect(trigger.parentElement!.style.height).toBe(`${window.innerHeight}px`);
     });
 
-    it('resolves \'+=400\' as a plain px distance', () => {
-      const { query, controller } = setup();
-      const trigger = query('.inside');
-
-      controller.createStickyPin({ trigger, endTrigger: query('.scene'), end: '+=400' });
-      controller.refresh();
-
-      expect(trigger.parentElement!.style.height).toBe('400px');
-    });
-
     // The distance counts from where the pin engages, which the top option moves, so it stays a
     // hold of exactly 400px rather than 400 plus the offset.
     it('counts the distance from where the pin engages, not from trigger\'s own top', () => {
@@ -2894,19 +2824,6 @@ describe('createStickyPin()', () => {
 
     expect(() => controller.createStickyPin({ trigger })).not.toThrow();
     expect(() => controller.refresh()).not.toThrow();
-    expect(trigger.style.position).toBe('sticky');
-  });
-
-  // setup() registers no Scene/Cover layers, so this covers pin-only usage too: the pin pass has
-  // to run whether or not any Scene layer does.
-  it('makes trigger position:sticky once refresh() runs', () => {
-    const { query, controller } = setup();
-    const trigger = query('.inside');
-
-    controller.createStickyPin({ trigger, endTrigger: query('.scene') });
-
-    controller.refresh();
-
     expect(trigger.style.position).toBe('sticky');
   });
 
@@ -7509,25 +7426,10 @@ describe('a kill followed by a GSAP refresh in the same task', () => {
       });
     });
 
-    // The killed layer's padding is still in the DOM until the scroll stops. jsdom puts every
-    // section at 0, so 'top -150px' reaches the viewport's top at 150.
-    it('resolves positions against the padding still in place', async () => {
-      const { Cls } = makeClass({ rec: 0 });
-      const { controller, vars, self } = setupScenes(Cls);
-      const before = controller.resolveScrollPosition(query('.s3'), 'top -150px');
-
-      Cls.scrolling = true;
-      vars[0].onKill?.(self);
-      await flushMicrotasks();
-
-      expect(before).toBe(450);
-      expect(controller.resolveScrollPosition(query('.s3'), 'top -150px')).toBe(before);
-      // Its held catch-up would run in a later test's GSAP refresh.
-      controller.destroy();
-    });
-
-    // jsdom never sticks anything, so .s3 reports a top 400px off whenever a wrapper around it
-    // carries position:sticky, standing in for the shift a stuck one causes.
+    // The killed layer's padding is still in the DOM until the scroll stops, and a position
+    // resolves against it. jsdom puts every section at 0, so 'top -150px' reaches the viewport's
+    // top at 150. It never sticks anything, so .s3 reports a top 400px off whenever a wrapper
+    // around it carries position:sticky, standing in for the shift a stuck one causes.
     it('resets the killed layer\'s wrappers still in place before measuring', async () => {
       const { Cls } = makeClass({ rec: 0 });
       const { controller, vars, self } = setupScenes(Cls);

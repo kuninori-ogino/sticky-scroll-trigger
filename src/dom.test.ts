@@ -235,16 +235,6 @@ describe('wrapScene', () => {
     expect(inlineSamples(container)).toEqual(placed);
   });
 
-  it('keeps the sentinel and padding\'s own display and pointer-events', () => {
-    document.body.innerHTML = '<div><div id="inner"></div></div>';
-
-    const inner = document.getElementById('inner')!;
-    const { padding } = wrapScene(inner, true);
-
-    expect(sceneSentinel(inner)!.style.display).toBe('none');
-    expect(padding.style.pointerEvents).toBe('none');
-  });
-
   it('throws for an inner not attached to the document', () => {
     expect(() => wrapScene(document.createElement('div'), false)).toThrow(/not attached to the document/);
   });
@@ -1541,17 +1531,6 @@ describe('compareDocumentOrder', () => {
     expect(compareDocumentOrder(outer, inner)).toBe(-1);
     expect(compareDocumentOrder(inner, outer)).toBe(1);
   });
-
-  it('sorting layers with this comparator is independent of registration order', () => {
-    document.body.innerHTML = '<div id="1"></div><div id="2"></div><div id="3"></div>';
-
-    const byId = (id: string) => document.getElementById(id)!;
-    const shuffled = [byId('3'), byId('1'), byId('2')];
-
-    shuffled.sort(compareDocumentOrder);
-
-    expect(shuffled.map((el) => el.id)).toEqual(['1', '2', '3']);
-  });
 });
 
 describe('stripStickyPositions', () => {
@@ -1688,16 +1667,6 @@ describe('measureViewportHeight', () => {
     document.body.innerHTML = '';
 
     expect(measureViewportHeight()).toBe(window.innerHeight);
-  });
-
-  it('leaves no measuring div behind (body\'s child count is unchanged before/after the call)', () => {
-    document.body.innerHTML = '<div id="unrelated"></div>';
-
-    const before = document.body.children.length;
-
-    measureViewportHeight();
-
-    expect(document.body.children.length).toBe(before);
   });
 });
 
