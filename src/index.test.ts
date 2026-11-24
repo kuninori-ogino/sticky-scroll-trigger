@@ -1616,6 +1616,39 @@ describe('static getScrollTop()', () => {
     },
   );
 
+  it.each(['destroyed', 'has no layers'])(
+    'uses the instance re-created on the same root when the old one %s, in either order',
+    (oldState) => {
+      document.body.innerHTML = `
+        <div class="root">
+          <section class="scene"></section>
+          <section class="target"></section>
+        </div>
+      `;
+
+      const target = query('.target');
+      const old = new StickyScrollTrigger(query('.root'));
+
+      placeAt(target, 100);
+
+      if (oldState === 'destroyed') {
+        old.createStickyTrigger({ trigger: query('.scene'), end: '+=300' });
+        old.refresh();
+        old.destroy();
+      }
+
+      const current = new StickyScrollTrigger(query('.root'));
+
+      current.createStickyTrigger({ trigger: query('.scene'), end: '+=500' });
+      current.refresh();
+
+      const viaOwner = current.resolveScrollPosition(target, 'top top');
+
+      expect(StickyScrollTrigger.getScrollTop(target, [old, current])).toBe(viaOwner);
+      expect(StickyScrollTrigger.getScrollTop(target, [current, old])).toBe(viaOwner);
+    },
+  );
+
   it(
     'measures an element outside every given instance\'s container directly, applying none of '
     + 'their dwell',
@@ -1709,6 +1742,41 @@ describe('measuring while a pin is stuck', () => {
 
     expect(StickyScrollTrigger.getScrollTop(pin, [controller])).toBe(100);
     expect(pin.style.position).toBe('sticky');
+  });
+
+  it('getScrollTop resets the pin of a pin-only instance re-created on the same root', () => {
+    const old = setupPinned();
+
+    old.createStickyPin({ trigger: query('.pin') });
+    old.refresh();
+    old.destroy();
+
+    const current = new StickyScrollTrigger(query('.root'));
+    const pin = query('.pin');
+
+    current.createStickyPin({ trigger: pin });
+    current.refresh();
+    shiftWhileSticky(pin, pin, 100);
+
+    expect(StickyScrollTrigger.getScrollTop(pin, [old, current])).toBe(100);
+    expect(StickyScrollTrigger.getScrollTop(pin, [current, old])).toBe(100);
+    expect(pin.style.position).toBe('sticky');
+  });
+
+  it('getScrollTop prefers built layers over a pin no refresh() has wrapped yet', () => {
+    const unwrapped = setupPinned();
+    const built = new StickyScrollTrigger(query('.root'));
+    const child = query('#child');
+
+    placeAt(child, 100);
+    built.createStickyTrigger({ trigger: query('.scene'), end: '+=500' });
+    built.refresh();
+    unwrapped.createStickyPin({ trigger: query('.pin') });
+
+    const viaOwner = built.resolveScrollPosition(child, 'top top');
+
+    expect(StickyScrollTrigger.getScrollTop(child, [unwrapped, built])).toBe(viaOwner);
+    expect(StickyScrollTrigger.getScrollTop(child, [built, unwrapped])).toBe(viaOwner);
   });
 
   // Until refresh() wraps it, a pin's trigger is still only the author's element, so a measurement

@@ -2549,7 +2549,11 @@ export default class StickyScrollTrigger {
     instances: readonly StickyScrollTrigger[],
   ): number {
     const element = resolveElement(elementInput, 'StickyScrollTrigger.getScrollTop');
-    const owner = instances.find((instance) => instance.#rootElement.contains(element));
+    const containing = instances.filter((instance) => instance.#rootElement.contains(element));
+    // A destroyed or unbuilt instance left on the root by a remount adds no dwell, resets no pin.
+    const owner = containing.find((instance) => (
+      instance.#builtLayers.length || instance.#wrappedPinTriggers().length
+    )) ?? containing[0];
 
     if (owner) return owner.resolveScrollPosition(element, 'top top');
 

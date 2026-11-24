@@ -423,7 +423,7 @@ When the target might belong to some other instance than the one at hand, use th
 
 ### `StickyScrollTrigger.getScrollTop(element, instances)`
 
-A static method, call it on the class itself (`StickyScrollTrigger.getScrollTop(...)`), not on an instance. Returns the absolute scroll position (px) at which `element`'s own top edge reaches the viewport's top edge (`'top top'`), picking whichever of the given `instances` actually has `element` inside its shared container. Applying the wrong instance's dwell to a target it never delayed would corrupt the result, the same way plain [`resolveScrollPosition`](#resolvescrollpositionelement-position) warns against.
+A static method, call it on the class itself (`StickyScrollTrigger.getScrollTop(...)`), not on an instance. Returns the absolute scroll position (px) at which `element`'s own top edge reaches the viewport's top edge (`'top top'`), picking whichever of the given `instances` actually has `element` inside its shared container. When more than one does, as after a component remounts on the same shared container, the first with layers or pins built by a `refresh()` wins, so the destroyed old instance can stay in the list. Applying the wrong instance's dwell to a target it never delayed would corrupt the result, the same way plain [`resolveScrollPosition`](#resolvescrollpositionelement-position) warns against.
 
 Same-page links don't need this: [`scrollMarginTargets`](#same-page-links) already makes them land correctly on their own. Reach for it when you want to drive the scroll yourself (custom easing, a scroll library, a target that isn't a fragment link). If you do, pass `scrollMarginTargets: null` so the correction isn't applied twice.
 
