@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Same-page links to an element a `createOverlapScroll` cover pins with its `trigger` (`trigger` or one before it in their parent) now land where they do from the top of the page when followed from below the cover's start too. They landed late by how far the cover had carried the element, 1720px instead of 0 from 2500, say. An instance with covers alone now writes `scroll-margin-top` on those elements and, while the cover pins them, restyles what it pins on every frame, at about 1 to 2ms for every 1,000 elements on a desktop (see [Same-page links](README.md#same-page-links)). Where the browser runs scroll-driven animations, that per-frame part is a CSS animation on the cover's wrapper, and a page `animation` rule reaching the wrapper competes with it (see [Constraints and caveats](README.md#constraints-and-caveats)). `scrollMarginTargets: null` turns all of this off.
+
 ## [0.19.0] - 2026-11-25
 
 - Calling `destroy()` in `onUnmounted()` now leaves nothing on the page when a Vue component's root element is the shared container. `destroy()` put back the root Vue had already removed, so the content stayed and showed twice after the next mount. Added a [React / Vue](README.md#react--vue) section on setting up an instance in a component and on the DOM changes to avoid around the wrappers.

@@ -14,7 +14,8 @@ export type PassThroughVars = Omit<ScrollTrigger.Vars, typeof EXCLUDED_VAR_KEYS[
 
 export interface StickyScrollTriggerOptions {
   // Which elements inside the shared container get their scroll-margin-top kept in sync, so the
-  // browser's own scroll-into-view accounts for Scene layer dwell (see scrollMargin.ts).
+  // browser's own scroll-into-view accounts for Scene layer dwell and for what a cover pins with
+  // its trigger (see scrollMargin.ts).
   // Defaults to '[id]', the set that same-page fragment links and ':target' can actually reach.
   // Pass null to leave scroll-margin-top alone entirely.
   scrollMarginTargets?: string | null;

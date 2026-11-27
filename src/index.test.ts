@@ -4861,6 +4861,36 @@ describe('scroll-margin-top synchronization', () => {
     expect(query('#after').style.scrollMarginTop).toBe('');
   });
 
+  // A cover's carry is read off its wrapper and the wrapper's parent, for its targets alone.
+  it('reads a cover\'s box only when its wrapper holds a target', () => {
+    const reads = (scrollMarginTargets: string | null) => {
+      document.body.innerHTML = `
+        <div class="root">
+          <div class="group"><div id="intro"></div><section class="t"></section><section class="c"></section></div>
+        </div>`;
+
+      const controller = new StickyScrollTrigger(query('.root'), { scrollMarginTargets });
+      const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect');
+
+      try {
+        // jsdom lays out nothing, so the parent is given the box it would have.
+        query('.group').getClientRects = () => [new DOMRect()] as unknown as DOMRectList;
+
+        controller.createOverlapScroll({ trigger: query('.t'), cover: query('.c') });
+        controller.refresh();
+
+        const wrapper = query('#intro').parentElement;
+
+        return rect.mock.contexts.filter((el) => el === wrapper).length;
+      } finally {
+        controller.destroy();
+        rect.mockRestore();
+      }
+    };
+
+    expect([reads(null), reads('.c'), reads('[id]')]).toEqual([0, 0, 1]);
+  });
+
   it('honors a custom scrollMarginTargets selector', () => {
     const { query, controller } = setupAnchors({ scrollMarginTargets: '#after' });
 

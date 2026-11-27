@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>coverScrollMargin fixture</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .scene {
+        height: 50vh;
+        background: #cde;
+      }
+      .block {
+        height: 400px;
+      }
+      #heading {
+        height: 100px;
+        margin: 0;
+      }
+      /* Taller than the viewport, so the cover's wrapper stays stuck well past the rise and a
+         jump can start from below it. */
+      .cover {
+        height: 1600px;
+        background: #fdc;
+      }
+      .tail {
+        height: 1200px;
+      }
+      /* ?shape=padded: the room the cover's wrapper has ends at its parent's content box, less its
+         own bottom margin. */
+      .padded .group {
+        padding-bottom: 40px;
+        border-bottom: 6px solid #888;
+      }
+      .padded .group > :first-child {
+        margin-bottom: 20px;
+      }
+      /* ?shape=contents: the parent has no box, so the room ends at the next one up. */
+      .contents .group {
+        display: contents;
+      }
+      /* ?shape=inline: the wrapper sticks in the nearest block container, past the inline box. */
+      .inline .group {
+        display: inline;
+        padding-bottom: 40px;
+      }
+      nav {
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: 9;
+      }
+    </style>
+  </head>
+  <body>
+    <nav>
+      <a id="link-intro" href="#intro">0</a>
+      <a id="link-heading" href="#heading">1</a>
+      <a id="link-trigger" href="#trigger">2</a>
+      <a id="link-cover" href="#cover">4</a>
+      <a id="link-afterGroup" href="#afterGroup">3</a>
+    </nav>
+    <div id="lead" class="block"></div>
+    <div class="container__inner">
+      <section id="scene" class="scene"></section>
+      <div class="group">
+        <div id="intro" class="block"></div>
+        <h2 id="heading">Heading</h2>
+        <div id="trigger" class="block"></div>
+        <div id="cover" class="cover"></div>
+        <div id="cover2" class="cover"></div>
+      </div>
+      <section id="sceneAfter" class="scene"></section>
+      <div id="afterGroup" class="block"></div>
+    </div>
+    <div class="tail"></div>
+
+    <script type="module">
+      import gsap from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      import StickyScrollTrigger from '../../src/index.ts';
+
+      // ?scene=before|after adds a Scene layer before or after the cover's parent; without it the
+      // cover is the instance's only layer. ?start=default leaves the cover's start at 'bottom
+      // bottom', and ?gsap=1 hands every layer to ScrollTrigger.
+      const params = new URLSearchParams(location.search);
+      const shape = params.get('shape');
+      const withGsap = params.get('gsap') === '1';
+
+      if (withGsap) gsap.registerPlugin(ScrollTrigger);
+
+      // ?shape=early: the cover's wrapper is stuck from scroll 0, the page starting with a short
+      // trigger, at the default start.
+      if (shape === 'early') {
+        document.getElementById('lead').remove();
+        document.getElementById('intro').remove();
+        document.getElementById('trigger').style.height = '200px';
+      }
+
+      if (shape) document.body.classList.add(shape);
+
+      const sticky = new StickyScrollTrigger('.container__inner');
+      const add = (vars) => (withGsap ? ScrollTrigger.create(vars) : null);
+
+      // ?sceneStart=center: the Scene's window opens before scroll 0 when it's at the top.
+      const sceneStart = params.get('sceneStart') === 'center' ? 'top center' : 'top top';
+
+      for (const [place, id] of [['before', 'scene'], ['after', 'sceneAfter']]) {
+        if (params.get('scene') === place) {
+          add(sticky.createStickyTrigger({ trigger: `#${id}`, start: sceneStart, end: '+=800' }));
+        } else {
+          document.getElementById(id).remove();
+        }
+      }
+
+      // 'top top' unless asked otherwise, so #intro and #heading reach the viewport top before the
+      // wrapper sticks.
+      const start = params.get('start') === 'default' || shape === 'early' ? {} : { start: 'top top' };
+      const cover = sticky.createOverlapScroll({ trigger: '#trigger', cover: '#cover', ...start });
+      const coverTrigger = add(cover);
+
+      // ?shape=row: #cover is the next cover's trigger, so its wrapper holds the first one's.
+      if (shape === 'row') {
+        add(sticky.createOverlapScroll({ trigger: '#cover', cover: '#cover2', start: 'top top' }));
+      } else {
+        document.getElementById('cover2').remove();
+      }
+
+      if (withGsap) ScrollTrigger.refresh();
+      else sticky.refresh();
+
+      window.__coverWindow = () => ({ start: cover.start(), end: cover.end() });
+      // A refresh() while GSAP reports the scroll, which measures in place rather than at 0.
+      window.__refreshWhileScrolling = async (y) => {
+        window.scrollTo(0, y);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+
+        const scrolling = ScrollTrigger.isScrolling();
+
+        sticky.refresh();
+
+        return scrolling;
+      };
+      window.__isScrolling = () => ScrollTrigger.isScrolling();
+      // Each cover carry the element's scroll-margin-top reads, as computed at the current scroll.
+      window.__carries = (id) => {
+        const element = document.getElementById(id);
+
+        return [...element.style.scrollMarginTop.matchAll(/--sst\d+-w\d+/g)]
+          .map(([name]) => getComputedStyle(element).getPropertyValue(name).trim());
+      };
+      // The kill unwraps the cover at once, and with another layer left its refresh waits for a
+      // microtask: the jump reads what that refresh is still to rewrite.
+      window.__killCoverAndJump = (id) => {
+        coverTrigger.kill();
+        document.getElementById(id).scrollIntoView();
+
+        return Math.round(window.scrollY);
+      };
+    </script>
+  </body>
+</html>

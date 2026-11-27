@@ -3208,6 +3208,111 @@ test('a native same-page anchor lands exactly on target, from any starting scrol
   }
 });
 
+// A cover's wrapper holds everything before trigger stuck until the cover's parent ends, carrying
+// it down the page. A jump from below the cover's start landed late by that carry (at 1720 from
+// 2500 for an element arriving at 0); now one from anywhere lands where a jump from the top does
+// unwritten. A Scene layer after the cover's parent once took the carry back off as its dwell was
+// consumed, so a jump from past it landed late by the room. The room ends at the parent's content
+// box less the wrapper's bottom margin, or at the next box up past a display: contents or inline
+// parent, and a wrapper inside another carries less what the outer one has.
+for (const [label, query] of [
+  ['cover only', ''],
+  ['Scene layer before', 'scene=before'],
+  ['Scene layer after', 'scene=after'],
+  ['padded parent', 'shape=padded'],
+  ['parent with no box', 'shape=contents'],
+  ['inline parent', 'shape=inline'],
+  ['row of covers', 'shape=row'],
+  ['default start', 'start=default'],
+  ['stuck from the top', 'shape=early'],
+  ['refreshed while scrolling', 'gsap=1'],
+] as const) {
+  test(`a same-page link into a cover's leading range lands as from the top, from any start (${
+    label
+  })`, async ({ page }) => {
+    await page.goto(`/fixtures/coverScrollMargin.html?${query}`);
+
+    const { start, end, max, ids } = await page.evaluate(() => ({
+      ...(window as never as { __coverWindow: () => { start: number; end: number } })
+        .__coverWindow(),
+      max: document.documentElement.scrollHeight - window.innerHeight,
+      ids: ['intro', 'heading', 'trigger', 'cover', 'afterGroup']
+        .filter((id) => document.getElementById(id)),
+    }));
+
+    if (query === 'gsap=1') {
+      expect(await page.evaluate((scroll) =>
+        (window as never as { __refreshWhileScrolling: (y: number) => Promise<boolean> })
+          .__refreshWhileScrolling(scroll), Math.round(end) + 300)).toBe(true);
+      await page.waitForFunction(() =>
+        !(window as never as { __isScrolling: () => boolean }).__isScrolling());
+    }
+
+    for (const id of ids) {
+      // Where a jump from the top lands with no correction: where the element sits at scroll 0.
+      // With a Scene layer, every element here reaches the top before the pin, so on its arrival.
+      const unwritten = query.startsWith('scene')
+        ? await findArrivalScroll(page, id)
+        : await page.evaluate(
+            ({ elementId, last }) => {
+              window.scrollTo(0, 0);
+
+              return Math.min(last, Math.round(
+                document.getElementById(elementId)!.getBoundingClientRect().top,
+              ));
+            },
+            { elementId: id, last: max },
+          );
+
+      for (const how of ['anchorClick', 'scrollIntoView'] as const) {
+        const fromTop = await jumpTo(page, id, 0, how);
+
+        expect(fromTop.scroll, `#${id} via ${how} from the top`).toBe(unwritten);
+
+        // Mid-rise, below the rise while the wrapper still carries, and past the cover's parent.
+        for (const from of [Math.round((start + end) / 2), Math.round(end) + 600, max]) {
+          expect(await jumpTo(page, id, from, how), `#${id} via ${how} from ${from}`).toEqual(fromTop);
+        }
+      }
+    }
+  });
+}
+
+// A wrapper stuck from the top of the page already carries at scroll 0, which the correction leaves
+// out. That used to be a constant in each target's value, so a jump made after the kill but before
+// its refresh landed late by that carry.
+test('a same-page link followed right after a cover stuck from the top is killed lands as unwritten', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/coverScrollMargin.html?shape=early&scene=after&gsap=1');
+
+  const landed = await page.evaluate(() =>
+    (window as never as { __killCoverAndJump: (id: string) => number }).__killCoverAndJump('heading'));
+
+  expect(landed).toBe((await jumpTo(page, 'heading', 0, 'scrollIntoView')).scroll);
+});
+
+// A Scene window opening before scroll 0 ('top center' on a Scene at the top of the page) has
+// consumed part of its dwell there, so the cover's wrapper after it isn't stuck there yet, though
+// it would be without that Scene. Counted as stuck, its carry read -60px at the top, landing a
+// jump 60px off.
+test('a cover\'s carry reads 0 at the top of the page under a Scene window opening before it', async ({
+  page,
+}) => {
+  await page.goto('/fixtures/coverScrollMargin.html?scene=before&sceneStart=center&shape=early');
+
+  const carries = () => page.evaluate(() =>
+    (window as never as { __carries: (id: string) => string[] }).__carries('heading'));
+
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  expect(await carries()).toEqual(['0px']);
+
+  const fromTop = await jumpTo(page, 'heading', 0, 'scrollIntoView');
+  const max = await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight);
+
+  expect(await jumpTo(page, 'heading', max, 'scrollIntoView')).toEqual(fromTop);
+});
+
 // #second's absolute start falls inside #first's window. GSAP gets the written start and length,
 // but the page can't freeze twice at once: it stands still once, through both windows, and a
 // position counts only the part of #second's window #first hadn't frozen. Counting the whole

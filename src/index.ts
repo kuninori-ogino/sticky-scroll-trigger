@@ -83,6 +83,7 @@ import {
   resolveOutsideEvaluation,
 } from './liveEvaluation';
 import { createScrollMarginSync } from './scrollMargin';
+import type { CoverCarry } from './scrollMargin';
 import {
   enterScrollZero,
   gsapScrollToZero,
@@ -326,8 +327,8 @@ export default class StickyScrollTrigger {
   #scrollTriggerClass: ScrollTriggerClass | null = null;
   // Independent of Scene/Cover layers, implemented with plain position:sticky alone.
   #pinLayers: PinLayer[] = [];
-  // Keeps scroll-margin-top on same-page-link targets in step with the current freeze windows,
-  // so the browser's own scroll-into-view accounts for Scene layer dwell (see scrollMargin.ts).
+  // Keeps scroll-margin-top on same-page-link targets in step with Scene dwell and cover carries,
+  // so the browser's own scroll-into-view lands right (see scrollMargin.ts).
   // Null while the instance is disarmed.
   #scrollMarginSync: ReturnType<typeof createScrollMarginSync> | null = null;
   #scrollMarginTargets: string | null;
@@ -1217,6 +1218,7 @@ export default class StickyScrollTrigger {
     );
     let stickyTops: Map<HTMLElement, number>;
     let marginTops: Map<HTMLElement, number>;
+    let coverBoxes: Map<HTMLElement, { top: number; room: number }>;
 
     try {
       // Its scroll read and its trip to 0 lay out none of them sticky.
@@ -1225,6 +1227,7 @@ export default class StickyScrollTrigger {
       const measured = active.length ? this.#measureLayers(viewportHeight, active) : null;
 
       marginTops = this.#measureScrollMarginTargets(active);
+      coverBoxes = this.#measureCoverCarries(active, [...marginTops.keys()]);
       stickyTops = measured
         ? this.#planLayerPositions(viewportHeight, active, measured)
         : new Map<HTMLElement, number>();
@@ -1298,8 +1301,16 @@ export default class StickyScrollTrigger {
 
       commitRange(layer.inner, `${range}px`);
     });
+
     // Last, because these values derive from the freeze windows settled above.
-    this.#syncScrollMargins(marginTops);
+    const carries: CoverCarry[] = [];
+
+    coverBoxes.forEach(({ top, room }, wrapper) => {
+      const stickyTop = stickyTops.get(wrapper);
+
+      if (stickyTop !== undefined) carries.push({ wrapper, start: top - stickyTop, room });
+    });
+    this.#syncScrollMargins(marginTops, carries);
   }
 
   // trigger's relative offset, inline or from a page rule, goes onto outer, as GSAP's _swapPinIn
@@ -2040,8 +2051,9 @@ export default class StickyScrollTrigger {
   // Hands the current Scene layer freeze windows to the scroll-margin bookkeeping, along with the
   // outermost container as the host for the scroll-driven ramps. That container is built by this
   // module and is an ancestor of every target, which is what lets the ramps reach them by
-  // inheritance without ever styling an element the caller owns. tops comes from phase 1.
-  #syncScrollMargins(tops: Map<HTMLElement, number>): void {
+  // inheritance without ever styling an element the caller owns. tops comes from phase 1, and so
+  // does each cover wrapper's carry in carries.
+  #syncScrollMargins(tops: Map<HTMLElement, number>, carries: readonly CoverCarry[]): void {
     this.#scrollMarginSync?.sync(
       this.#engagedWindows(),
       this.#outermostContainer,
@@ -2059,16 +2071,63 @@ export default class StickyScrollTrigger {
 
         return targets.map((target) => tops.get(target)!);
       },
+      carries,
     );
   }
 
-  // Phase 1's read of the targets, skipped when no Scene layer can give the sync a window to ramp.
+  // Phase 1's read of the targets: every one where a Scene layer can ramp, else those a cover
+  // wrapper holds.
   #measureScrollMarginTargets(active: readonly Layer[]): Map<HTMLElement, number> {
-    const targets = this.#scrollMarginSync && active.some(({ kind }) => kind === 'scene')
-      ? this.#scrollMarginSync.targets()
+    const wrappers = active.flatMap((layer) => (layer.kind === 'cover' && layer.wrapper
+      ? [layer.wrapper]
+      : []));
+    const within = active.some(({ kind }) => kind === 'scene') ? undefined : wrappers;
+    const targets = this.#scrollMarginSync && active.length
+      ? this.#scrollMarginSync.targets(within)
       : [];
 
     return new Map(targets.map((target) => [target, documentTop(target)]));
+  }
+
+  // Each cover wrapper's natural top and how far its containing block lets it carry what it holds
+  // (its content box's bottom less the wrapper's margin box), read with no wrapper stuck. That
+  // block is past a display: contents parent, which has no box, and past an inline one, whose
+  // block children lay out in the nearest block container. Only a wrapper holding one of targets
+  // gets a carry, so the others aren't read.
+  #measureCoverCarries(
+    active: readonly Layer[],
+    targets: readonly HTMLElement[],
+  ): Map<HTMLElement, { top: number; room: number }> {
+    const boxes = new Map<HTMLElement, { top: number; room: number }>();
+
+    active.forEach((layer) => {
+      const wrapper = layer.kind === 'cover' ? layer.wrapper : null;
+
+      if (!wrapper || !targets.some((target) => wrapper.contains(target))) return;
+
+      let parent = wrapper.parentElement;
+
+      while (parent && ['contents', 'inline'].includes(getComputedStyle(parent).display)) {
+        parent = parent.parentElement;
+      }
+
+      if (!parent || parent.getClientRects().length === 0) return;
+
+      const own = wrapper.getBoundingClientRect();
+      const box = parent.getBoundingClientRect();
+      const ownStyle = getComputedStyle(wrapper);
+      const parentStyle = getComputedStyle(parent);
+      const contentBottom = box.bottom - parseFloat(parentStyle.borderBottomWidth)
+        - parseFloat(parentStyle.paddingBottom);
+      const marginBottom = own.bottom + (parseFloat(ownStyle.marginBottom) || 0);
+
+      boxes.set(wrapper, {
+        top: documentTop(wrapper),
+        room: Math.max(0, contentBottom - marginBottom),
+      });
+    });
+
+    return boxes;
   }
 
   // PassThroughVars (types.ts) excludes these only at the TypeScript level; a plain JS/JSON

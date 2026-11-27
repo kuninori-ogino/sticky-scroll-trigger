@@ -1,8 +1,9 @@
 /**
- * Declares each Scene layer's dwell to the browser through `scroll-margin-top`, so the platform's
- * own "scroll an element into view" lands where the element really reaches the viewport top. That
- * covers same-page `<a href="#...">` links, `scrollIntoView`, `:target` and anything else routed
- * through that algorithm, with no code on the caller's side.
+ * Declares each Scene layer's dwell, and how far a cover's wrapper has carried what it holds, to
+ * the browser through `scroll-margin-top`, so the platform's own "scroll an element into view"
+ * lands where the element really reaches the viewport top. That covers same-page `<a href="#...">`
+ * links, `scrollIntoView`, `:target` and anything else routed through that algorithm, with no code
+ * on the caller's side.
  *
  * ## Why a correction is needed at all
  *
@@ -36,6 +37,15 @@
  * number: with `−lag` alone, a jump from the top of the page is exact but one started mid-page
  * overshoots by the dwell already consumed.
  *
+ * A cover's wrapper stays stuck until its parent's content box ends, carrying what it holds down
+ * the page by `c_k(s) = clamp(s − Σ h_i(s) − u_k − Σ c_j(s), 0, room_k)`, where `u_k` is where the
+ * content stands when the wrapper sticks and the `c_j` are the wrappers around it. A target inside
+ * has `paintedTop(s) = N − s + Σ h_i(s) + Σ c_k(s)`, so the same substitution adds
+ * `Σ (c_k(currentScroll) − c_k(0))` to the value. Leaving out the carry at scroll 0 (which a
+ * wrapper stuck from the top of the page has) keeps a jump from the top where it lands unwritten.
+ * Each wrapper's property holds its own term, so a target that leaves the wrapper reads 0 there.
+ * With no Scene layer dwell, only those targets are written.
+ *
  * `lag` depends on `m`, which moves the point the element has to reach, and the offset property
  * in `m` can change without a `refresh()`. So each layer's all-or-nothing decision is written as
  * CSS too: `clamp(0px, x * 1000000, dwell)` is 0 for any `x` at or below 0 and the full dwell for
@@ -60,9 +70,13 @@
  * every engine that lacks scroll timelines was verified to tolerate a `scroll-margin-top` that
  * keeps changing through an in-flight smooth scroll.
  *
- * The animation, and the `scroll` listener's writes, target the outermost container this module
- * builds, never an element the caller owns, and the custom properties reach the targets by
- * inheritance from there.
+ * Each `c_k` rides a ramp on its own wrapper, across the scroll window where it can change (see
+ * planCarryRamps), and only for a wrapper holding a target: a changing inherited property restyles
+ * everything below it on every frame.
+ *
+ * The animations, and the `scroll` listener's writes, target the outermost container and the
+ * cover wrappers this module builds, never an element the caller owns, and the custom properties
+ * reach the targets by inheritance from there.
  *
  * ## Known limitation: Chromium + native smooth scrolling
  *
@@ -79,18 +93,18 @@
  * ## Nudging the landing spot on purpose
  *
  * `--sst-scroll-margin-top-offset` is folded into the same calc() as an extra term:
- * `calc(authorPx + --sst-scroll-margin-top-offset + Σh_i − lag)`. A positive value lands short,
- * settling below the viewport's top edge instead of flush with it; negative overshoots. Being an
- * ordinary (unregistered) custom property, it's read live on every scroll-into-view with no
- * refresh() needed, and inherits normally, so it can be set once on the shared container for every
- * target or per-target to override that. It stays separate from the author's own
- * scroll-margin-top (still supported, see above) because the two answer different questions: how
- * far off the caller wants to land, and what the element's own CSS already says.
+ * `calc(authorPx + --sst-scroll-margin-top-offset + Σh_i + Σ(c_k − c_k(0)) − lag)`. A positive
+ * value lands short, settling below the viewport's top edge instead of flush with it; negative
+ * overshoots. Being an ordinary (unregistered) custom property, it's read live on every
+ * scroll-into-view with no refresh() needed, and inherits normally, so it can be set once on the
+ * shared container for every target or per-target to override that. It stays separate from the
+ * author's own scroll-margin-top (still supported, see above) because the two answer different
+ * questions: how far off the caller wants to land, and what the element's own CSS already says.
  */
 
-import { captureInline, restoreIfWritten, writeInline } from './dom';
+import { captureInline, compareDocumentOrder, restoreIfWritten, writeInline } from './dom';
 import type { InlineValue } from './dom';
-import { TIE_TOLERANCE_PX } from './freezeWindow';
+import { dwellConsumedAt, TIE_TOLERANCE_PX } from './freezeWindow';
 
 // Reserved custom property for nudging where a target lands, independent of both the dwell
 // correction and the author's own scroll-margin-top. Fixed rather than per-instance because it's
@@ -106,6 +120,36 @@ export interface SceneDwell {
   freezeStart: number;
   freezeEnd: number;
 }
+
+// One cover layer's wrapper. Once it sticks, it carries what it holds down the page by how far the
+// content has moved since (scroll less the Scene dwell consumed), up to room. start is where the
+// content stands when it sticks.
+export interface CoverCarry {
+  wrapper: HTMLElement;
+  start: number;
+  room: number;
+}
+
+// A cover wrapper's carry as CSS: value is its expression over the scroll, which only changes
+// between from and to.
+export interface CarryRamp {
+  value: string;
+  from: number;
+  to: number;
+}
+
+// A cover carry in sync()'s order (outermost first), with the indices of the ones around it and
+// how much it carries at scroll 0 (a wrapper stuck from the top of the page).
+export interface PlannedCarry {
+  carry: CoverCarry;
+  outer: number[];
+  atTop: number;
+}
+
+// c_k(s) in the module doc: what a cover's wrapper carries at scroll s, given the Scene dwell
+// consumed by then and what the wrappers around it carry.
+const carriedAt = (scroll: number, consumed: number, held: number, { start, room }: CoverCarry) =>
+  Math.min(Math.max(scroll - consumed - held - start, 0), room);
 
 // A target's own inline scroll-margin-top from before the library's last write over it, that write
 // as the browser keeps it, and the instance that made it. Shared by every instance, so a target
@@ -134,12 +178,17 @@ const supportsConstructedStyleSheets = typeof CSSStyleSheet === 'function'
 const usesCssRamp = supportsScrollDrivenAnimations && supportsConstructedStyleSheets;
 
 // Builds the stylesheet that ramps one registered custom property per Scene layer across that
-// layer's own freeze window. Written as text (rather than through the Web Animations API) so the
-// custom-property animation runs through the same CSS path that was verified in both engines.
+// layer's own freeze window, and one per cover wrapper in carries across its own window. Written
+// as text (rather than through the Web Animations API) so the custom-property animation runs
+// through the same CSS path that was verified in both engines.
 //
 // Exported for scrollMargin.test.ts alone: jsdom has no adoptedStyleSheets, so a sync() there never
 // reaches this, leaving the text it produces checkable only by calling it directly.
-export const buildStylesheet = (instanceId: string, scenes: readonly SceneDwell[]): string => {
+export const buildStylesheet = (
+  instanceId: string,
+  scenes: readonly SceneDwell[],
+  carries: readonly CarryRamp[] = [],
+): string => {
   const declarations: string[] = [];
   const animations: string[] = [];
   const timelines: string[] = [];
@@ -162,6 +211,37 @@ export const buildStylesheet = (instanceId: string, scenes: readonly SceneDwell[
     ranges.push(`${scene.freezeStart}px ${scene.freezeEnd}px`);
   });
 
+  const rules: string[] = [];
+
+  if (animations.length) {
+    rules.push(
+      `[data-${instanceId}]{`
+      + `animation:${animations.join(',')};`
+      + `animation-timeline:${timelines.join(',')};`
+      + `animation-range:${ranges.join(',')}}`,
+    );
+  }
+
+  // Each cover wrapper reads the scroll across its own window alone, into a property it keeps to
+  // itself, so a frame outside every window restyles nothing and one inside restyles only what
+  // that wrapper holds.
+  carries.forEach(({ value, from, to }, index) => {
+    const scroll = `--${instanceId}-s${index}`;
+    const carried = `--${instanceId}-w${index}`;
+    const keyframes = `${instanceId}-ks${index}`;
+
+    declarations.push(
+      `@property ${scroll}{syntax:"<length>";inherits:false;initial-value:0px}`,
+      `@property ${carried}{syntax:"<length>";inherits:true;initial-value:0px}`,
+      `@keyframes ${keyframes}{from{${scroll}:${from}px}to{${scroll}:${to}px}}`,
+    );
+    rules.push(
+      `[data-${instanceId}-w="${index}"]{`
+      + `animation:${keyframes} linear both;animation-timeline:scroll(root block);`
+      + `animation-range:${from}px ${to}px;${carried}:${value}}`,
+    );
+  });
+
   // The @supports gate is load-bearing rather than a precaution. A browser that can't parse
   // `animation-timeline: scroll(...)` drops that declaration and leaves animation-timeline at its
   // initial `auto`, which turns the `animation` shorthand above into an ordinary time-based
@@ -173,16 +253,51 @@ export const buildStylesheet = (instanceId: string, scenes: readonly SceneDwell[
   //
   // animation-timeline and animation-range have to follow the `animation` shorthand, which resets
   // both to their initial values.
-  declarations.push(
-    `@supports (animation-timeline: scroll()) {`
-    + `[data-${instanceId}]{`
-    + `animation:${animations.join(',')};`
-    + `animation-timeline:${timelines.join(',')};`
-    + `animation-range:${ranges.join(',')}}}`,
-  );
+  declarations.push(`@supports (animation-timeline: scroll()) {${rules.join('')}}`);
 
   return declarations.join('');
 };
+
+// Each carry as the CSS path writes it: the scroll less where the wrapper sticks, the Scene dwell
+// consumed and the carries around it, clamped to its room. The ramp starts at start: one starting
+// later would read a scroll above the real one before it, and carry while a dwell before it is
+// still to be consumed. It ends where the carry is full for certain: the
+// content moved room past start with every carry around it full and every dwell begun by then
+// consumed. Past that end the ramp holds still, so a dwell that begins later isn't subtracted: it
+// would take the carry back down.
+//
+// Exported for scrollMargin.test.ts alone, for the reason buildStylesheet is.
+export const planCarryRamps = (
+  instanceId: string,
+  ramps: readonly SceneDwell[],
+  carries: readonly PlannedCarry[],
+): CarryRamp[] => carries.map(({ carry, outer, atTop }, index) => {
+  // A wrapper stuck from the top of the page carries from scroll 0, where the range starts.
+  const from = Math.max(carry.start, 0);
+  let to = carry.start + carry.room + outer.reduce((sum, k) => sum + carries[k].carry.room, 0);
+  const begun: string[] = [];
+
+  ramps.forEach(({ freezeStart, freezeEnd }, i) => {
+    if (freezeStart >= to) return;
+
+    to += freezeEnd - freezeStart;
+    begun.push(`var(--${instanceId}-c${i}, 0px)`);
+  });
+
+  // Each property around it leaves out that wrapper's carry at scroll 0, which goes back in here.
+  const offset = outer.reduce((sum, k) => sum + carries[k].atTop, carry.start);
+  const held = [...begun, ...outer.map((k) => `var(--${instanceId}-w${k}, 0px)`)];
+  const full = `clamp(0px, var(--${instanceId}-s${index}) - ${offset}px`
+    + `${held.map((v) => ` - ${v}`).join('')}, ${carry.room}px)`;
+
+  // Less its own carry at scroll 0, on the wrapper rather than in each target's value: a killed
+  // cover unwraps at once, and what it held then reads 0 until the kill's refresh rewrites it.
+  return {
+    value: atTop ? `calc(${full} - ${atTop}px)` : full,
+    from,
+    to: Math.max(to, from + 1),
+  };
+});
 
 /**
  * Creates the per-controller state for keeping `scroll-margin-top` in sync. `sync` is called at
@@ -212,9 +327,12 @@ export const createScrollMarginSync = (
   // the module doc comment's "scroll-dependent half" section).
   let jsRamps: readonly SceneDwell[] = [];
   let jsHost: HTMLElement | null = null;
+  // Cover wrappers carrying a ramp of their own, outermost first, and which earlier ones hold each.
+  let carryHosts: HTMLElement[] = [];
+  let jsCarries: readonly PlannedCarry[] = [];
 
   const applyJsRamp = (scroll = window.scrollY) => {
-    if (!jsHost) return;
+    let consumedAll = 0;
 
     jsRamps.forEach((scene, index) => {
       const consumed = Math.min(
@@ -222,7 +340,17 @@ export const createScrollMarginSync = (
         scene.freezeEnd - scene.freezeStart,
       );
 
-      jsHost!.style.setProperty(`--${instanceId}-c${index}`, `${consumed}px`);
+      consumedAll += consumed;
+      jsHost?.style.setProperty(`--${instanceId}-c${index}`, `${consumed}px`);
+    });
+
+    const carried: number[] = [];
+
+    jsCarries.forEach(({ carry, outer, atTop }, index) => {
+      const held = outer.reduce((sum, k) => sum + carried[k], 0);
+
+      carried[index] = carriedAt(scroll, consumedAll, held, carry);
+      carry.wrapper.style.setProperty(`--${instanceId}-w${index}`, `${carried[index] - atTop}px`);
     });
   };
 
@@ -244,6 +372,11 @@ export const createScrollMarginSync = (
     }
   };
 
+  const dropCarry = (wrapper: HTMLElement, index: number) => {
+    wrapper.removeAttribute(`data-${instanceId}-w`);
+    wrapper.style.removeProperty(`--${instanceId}-w${index}`);
+  };
+
   const stopRamps = () => {
     if (sheet) {
       document.adoptedStyleSheets = document.adoptedStyleSheets.filter((one) => one !== sheet);
@@ -252,23 +385,44 @@ export const createScrollMarginSync = (
 
     animationHost?.removeAttribute(`data-${instanceId}`);
     animationHost = null;
+    carryHosts.forEach(dropCarry);
+    carryHosts = [];
     jsRamps = [];
     jsHost = null;
+    jsCarries = [];
   };
 
-  // Points the ramps at host and starts them: the CSS animation where it runs, else the scroll
-  // listener's values, which applyRamps() writes once the caller is done with layout. Where the
-  // animation runs, those writes would only lose to it in the cascade, so they're skipped.
-  const startRamps = (ramps: readonly SceneDwell[], host: HTMLElement) => {
+  // Points the Scene ramps at host and each carry at its wrapper, and starts them: the CSS
+  // animation where it runs, else the scroll listener's values, which applyRamps() writes once
+  // the caller is done with layout. Where the animation runs, those writes would only lose to it
+  // in the cascade, so they're skipped.
+  const startRamps = (
+    ramps: readonly SceneDwell[],
+    host: HTMLElement | null,
+    carries: readonly PlannedCarry[],
+  ) => {
     if (animationHost !== host) {
       animationHost?.removeAttribute(`data-${instanceId}`);
       animationHost = host;
-      animationHost.setAttribute(`data-${instanceId}`, '');
+      animationHost?.setAttribute(`data-${instanceId}`, '');
     }
+
+    const wrappers = carries.map(({ carry }) => carry.wrapper);
+
+    carryHosts.forEach((wrapper, index) => {
+      if (wrappers[index] !== wrapper) dropCarry(wrapper, index);
+    });
+    wrappers.forEach((wrapper, index) => {
+      if (wrapper.getAttribute(`data-${instanceId}-w`) !== `${index}`) {
+        wrapper.setAttribute(`data-${instanceId}-w`, `${index}`);
+      }
+    });
+    carryHosts = wrappers;
 
     if (usesJsRamp) {
       jsRamps = ramps;
       jsHost = host;
+      jsCarries = carries;
 
       return;
     }
@@ -279,13 +433,22 @@ export const createScrollMarginSync = (
       document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
     }
 
-    // Replacing the text restyles the whole page, so skip it when no freeze window moved.
-    const text = buildStylesheet(instanceId, ramps);
+    // Replacing the text restyles the whole page, so skip it when no freeze window or carry
+    // (where a wrapper sticks, its room) moved.
+    const text = buildStylesheet(instanceId, ramps, planCarryRamps(instanceId, ramps, carries));
 
     if (text !== sheetText) {
       sheet.replaceSync(text);
       sheetText = text;
     }
+  };
+
+  const matching = (within?: readonly HTMLElement[]) => {
+    const all = Array.from(rootElement.querySelectorAll<HTMLElement>(targetSelector!));
+
+    return within
+      ? all.filter((target) => within.some((wrapper) => wrapper.contains(target)))
+      : all;
   };
 
   const release = () => {
@@ -295,10 +458,11 @@ export const createScrollMarginSync = (
   };
 
   return {
-    // The elements sync() would write now, so the caller can measure them first.
-    targets: (): HTMLElement[] => (targetSelector === null
+    // The elements sync() would write now, so the caller can measure them first: all of them, or
+    // with no Scene layer dwell, those inside one of the cover wrappers in `within`.
+    targets: (within?: readonly HTMLElement[]): HTMLElement[] => (targetSelector === null
       ? []
-      : Array.from(rootElement.querySelectorAll<HTMLElement>(targetSelector))),
+      : matching(within)),
 
     // measureNaturalTops returns each target's documentTop with no wrapper stuck, which only the
     // caller can arrange.
@@ -306,6 +470,7 @@ export const createScrollMarginSync = (
       scenes: readonly SceneDwell[],
       host: HTMLElement | null,
       measureNaturalTops: (targets: readonly HTMLElement[]) => number[],
+      covers: readonly CoverCarry[] = [],
     ): void {
       // A zero-length freeze window contributes nothing, and an animation-range whose start
       // equals its end has no meaningful ramp, so those layers are dropped rather than emitted.
@@ -314,15 +479,47 @@ export const createScrollMarginSync = (
         .filter((scene) => scene.freezeEnd > scene.freezeStart)
         .sort((a, b) => a.freezeStart - b.freezeStart);
 
-      if (targetSelector === null || !ramps.length || !host) {
+      if (targetSelector === null) {
         release();
 
         return;
       }
 
-      startRamps(ramps, host);
+      const sceneHost = ramps.length ? host : null;
+      const sceneRamps = sceneHost ? ramps : [];
+      const matched = matching();
+      // Only a wrapper holding a target needs its carry, which restyles everything it holds on
+      // every frame it changes. In document order, so a wrapper comes before the ones inside it,
+      // which it carries in its own frame.
+      const holds = (wrapper: HTMLElement) => matched.some((target) => wrapper.contains(target));
+      const sorted = covers
+        .filter(({ wrapper, room }) => room > 0 && holds(wrapper))
+        .sort((a, b) => compareDocumentOrder(a.wrapper, b.wrapper));
+      const carries: PlannedCarry[] = [];
+      // The dwell a Scene window opening before scroll 0 has consumed there, which every carry
+      // subtracts from the scroll.
+      const consumedAtTop = dwellConsumedAt(0, sceneRamps);
 
-      const targets = Array.from(rootElement.querySelectorAll<HTMLElement>(targetSelector));
+      sorted.forEach((carry, index) => {
+        const outer = sorted.flatMap((other, k) => (
+          k < index && other.wrapper.contains(carry.wrapper) ? [k] : []));
+        const held = outer.reduce((sum, k) => sum + carries[k].atTop, 0);
+        const atTop = carriedAt(0, consumedAtTop, held, carry);
+
+        carries.push({ carry, outer, atTop });
+      });
+
+      if (!sceneHost && !carries.length) {
+        release();
+
+        return;
+      }
+
+      startRamps(sceneRamps, sceneHost, carries);
+
+      const targets = sceneHost
+        ? matched
+        : matched.filter((target) => carries.some(({ carry }) => carry.wrapper.contains(target)));
       // Measured before anything here writes to a target. Nothing below changes layout, so this
       // only keeps the caller's sticky resets ahead of every write of this module's own.
       const naturalTops = measureNaturalTops(targets);
@@ -352,9 +549,7 @@ export const createScrollMarginSync = (
         });
       });
 
-      const consumed = ramps
-        .map((_, index) => `var(--${instanceId}-c${index}, 0px)`)
-        .join(' + ');
+      const consumedTerms = sceneRamps.map((_, index) => `var(--${instanceId}-c${index}, 0px)`);
 
       // Pass 2: read each target's author value now that it's back to that state, then write the
       // corrected one. Interleaving the two passes would be just as correct, but resetting
@@ -363,7 +558,7 @@ export const createScrollMarginSync = (
         const authorPx = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
         let earlierDwell = 0;
         // dwellBeforeReach's test, with everything but the offset folded into one number.
-        const lag = ramps.map(({ freezeStart, freezeEnd }) => {
+        const lag = sceneRamps.map(({ freezeStart, freezeEnd }) => {
           const margin = naturalTops[targetIndex] - authorPx + earlierDwell - freezeStart
             - TIE_TOLERANCE_PX;
 
@@ -373,11 +568,16 @@ export const createScrollMarginSync = (
             + ` ${freezeEnd - freezeStart}px)`;
         }).join(' + ');
         const snapshot = snapshots.get(target)!;
+        // Each cover wrapper around target adds what it has carried since scroll 0.
+        const carried = carries.flatMap(({ carry }, index) => (carry.wrapper.contains(target)
+          ? [`var(--${instanceId}-w${index}, 0px)`]
+          : []));
+        const added = [...consumedTerms, ...carried].map((v) => ` + ${v}`).join('');
 
         snapshot.written = writeInline(
           target,
           'scroll-margin-top',
-          `calc(${authorPx}px + var(${OFFSET_PROPERTY}, 0px) + ${consumed} - (${lag}))`,
+          `calc(${authorPx}px + var(${OFFSET_PROPERTY}, 0px)${added}${lag ? ` - (${lag})` : ''})`,
           PRIORITY,
         );
         snapshot.owner = instanceId;
